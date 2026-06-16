@@ -192,6 +192,23 @@ func _populate_troops() -> void:
 	for child in troop_list.get_children():
 		child.queue_free()
 
+	PlayerInventory.ensure_hero_exists()
+	var hero_label = Label.new()
+	hero_label.text = "⚔ DUNGEON HERO  (used in dungeon runs only)"
+	hero_label.add_theme_font_size_override("font_size", 12)
+	hero_label.add_theme_color_override("font_color", Color(0.6, 0.9, 1.0))
+	troop_list.add_child(hero_label)
+	troop_list.add_child(_make_troop_card(PlayerInventory.hero))
+
+	var sep = HSeparator.new()
+	troop_list.add_child(sep)
+
+	var map_label = Label.new()
+	map_label.text = "🗺 MAP TROOPS  (stationed on the world map)"
+	map_label.add_theme_font_size_override("font_size", 12)
+	map_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	troop_list.add_child(map_label)
+
 	for troop in PlayerInventory.troop_roster:
 		troop_list.add_child(_make_troop_card(troop))
 

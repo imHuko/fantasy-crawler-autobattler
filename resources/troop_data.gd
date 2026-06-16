@@ -5,6 +5,11 @@ enum TroopType { KNIGHT, ARCHER, MAGE, HEALER, ROGUE }
 
 @export var troop_name: String = ""
 @export var troop_type: TroopType = TroopType.KNIGHT
+@export var troop_id: String = ""   # unique identifier, independent of display name
+
+func _init() -> void:
+	if troop_id == "":
+		troop_id = str(Time.get_ticks_usec()) + "_" + str(randi())
 @export var base_stats: Dictionary = {}
 # e.g. { "hp": 100, "attack": 10, "defense": 5, "speed": 3 }
 

@@ -47,6 +47,7 @@ const DIFFICULTIES = {
 var selected_difficulty: String = "Normal"
 var player_name_field: LineEdit
 var seed_field: LineEdit
+var tutorial_checkbox: CheckBox
 var desc_label: Label
 var diff_buttons: Dictionary = {}
 
@@ -59,12 +60,26 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
+	var scroll = ScrollContainer.new()
+	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(scroll)
+
+	var margin = MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_theme_constant_override("margin_top", 24)
+	margin.add_theme_constant_override("margin_bottom", 24)
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 24)
+	scroll.add_child(margin)
+
+	var center_wrap = CenterContainer.new()
+	center_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(center_wrap)
+
 	var center = VBoxContainer.new()
-	center.set_anchors_preset(Control.PRESET_CENTER)
 	center.add_theme_constant_override("separation", 18)
-	center.position -= Vector2(220, 260)
-	center.custom_minimum_size = Vector2(440, 520)
-	add_child(center)
+	center.custom_minimum_size = Vector2(440, 0)
+	center_wrap.add_child(center)
 
 	# Title
 	var title = Label.new()
@@ -144,6 +159,24 @@ func _build_ui() -> void:
 	seed_field.add_theme_font_size_override("font_size", 14)
 	center.add_child(seed_field)
 
+	var sep_tut = HSeparator.new()
+	center.add_child(sep_tut)
+
+	# Tutorial toggle
+	var tut_hbox = HBoxContainer.new()
+	tut_hbox.add_theme_constant_override("separation", 8)
+	center.add_child(tut_hbox)
+
+	tutorial_checkbox = CheckBox.new()
+	tutorial_checkbox.button_pressed = true
+	tut_hbox.add_child(tutorial_checkbox)
+
+	var tut_label = Label.new()
+	tut_label.text = "Play Tutorial  (recommended for first playthrough)"
+	tut_label.add_theme_font_size_override("font_size", 13)
+	tut_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	tut_hbox.add_child(tut_label)
+
 	var sep4 = HSeparator.new()
 	center.add_child(sep4)
 
@@ -214,6 +247,11 @@ func _on_start() -> void:
 	PlayerInventory.map_seed = map_seed
 	PlayerInventory.difficulty = selected_difficulty
 	PlayerInventory.difficulty_settings = DIFFICULTIES[selected_difficulty]
+	PlayerInventory.play_tutorial = tutorial_checkbox.button_pressed
 
 	SaveManager.new_game()
-	get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")
+
+	if PlayerInventory.play_tutorial:
+		get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/recruit_choice_screen.tscn")

@@ -28,6 +28,23 @@ var current_battle_zone: int = -1
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false
 
+# Resources — banked for future spending (talent trees, etc)
+var resources: Dictionary = {
+	"food": 0,
+	"gold": 0,
+}
+
+# Per-zone building slot limit. Talents can raise this later.
+var max_buildings_per_zone: int = 2
+
+# Persistent world map state. Generated once by world_map.gd on first visit,
+# then read/written directly so zone ownership, buildings, and stationed
+# troops survive scene changes and saves.
+var map_zones: Array = []
+var map_connections: Array = []
+var map_turn: int = 1
+var map_generated: bool = false
+
 # Battle result reporting (read by world_map on _ready)
 var last_battle_result: String = ""      # "won", "lost", "retreat", ""
 var last_battle_zone: int = -1
@@ -35,14 +52,36 @@ var last_battle_was_conquest: bool = false
 
 # Tutorial state
 var tutorial_complete: bool = false
+var play_tutorial: bool = true   # set from new game screen checkbox
+var map_tutorial_seen: Dictionary = {
+	"intro": false, "conquer": false, "build": false,
+	"move_troops": false, "end_turn": false,
+}
+
+# Dungeon hero — a dedicated character separate from the troop roster,
+# with its own gear slots used only in dungeon runs.
+var hero: TroopData = null
+
+func ensure_hero_exists() -> void:
+	if hero == null:
+		hero = TroopData.new()
+		hero.troop_name = "Hero"
+		hero.troop_type = TroopData.TroopType.KNIGHT
+		hero.base_stats = { "hp": 120, "attack": 16, "defense": 8, "speed": 4 }
 
 # Snapshot of troop names eligible for the current/next battle.
 # Set by world_map right before launching defense_scene so the battle
 # only offers troops actually stationed at (or staged near) that zone.
 var current_battle_zone_troop_names: Array = []
+var current_battle_forge_level: int = 0
+var current_battle_shrine_level: int = 0
 
 func set_battle_roster_from_zone_troops(troop_names: Array) -> void:
 	current_battle_zone_troop_names = troop_names.duplicate()
+
+func set_battle_zone_buffs(forge_level: int, shrine_level: int) -> void:
+	current_battle_forge_level = forge_level
+	current_battle_shrine_level = shrine_level
 
 func get_zone_troop_names(zone_id: int) -> Array:
 	# zone_id is unused here since world_map already resolved the

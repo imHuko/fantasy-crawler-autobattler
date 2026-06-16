@@ -30,20 +30,19 @@ const TROOP_COLORS = {
 	"ROGUE":  C_TROOP_R,
 }
 
-const WAVE_INTERVAL   = 8.0    # seconds between waves
 const PLACE_COOLDOWN  = 0.5    # prevent double-placing
 const KNIGHT_AGGRO_BONUS = 60.0
 
-var total_waves: int = 5
-var current_wave: int = 0
-var wave_timer: float = 3.0    # countdown to first wave
-var wave_active: bool = false
+var battle_active: bool = false
+var _all_enemies_spawned: bool = true
 var game_over: bool = false
 var base_hp: int = 20
 var base_max_hp: int = 20
 
 # Zone context — set by world map before launching this scene
 var battle_zone_id: int = -1
+var battle_started: bool = false   # true once player presses Begin Battle
+var begin_battle_btn: Button = null
 var is_conquering: bool = false
 var attack_force_mult: float = 1.0
 var battle_title: String = "Defend the Base"
@@ -81,14 +80,9 @@ func _load_battle_context() -> void:
 	is_conquering = PlayerInventory.conquering_zone
 	attack_force_mult = PlayerInventory.current_attack_force
 
-	if is_conquering:
-		battle_title = "Conquer Zone"
-		total_waves = 3   # conquering is shorter than full defense
-	else:
-		battle_title = "Defend the Base"
-		total_waves = 5
+	battle_title = "Conquer Zone" if is_conquering else "Defend the Base"
 
-	# Scale base HP and wave difficulty by force multiplier
+	# Scale base HP by force multiplier
 	base_max_hp = int(20 * max(0.5, attack_force_mult))
 	base_hp = base_max_hp
 
@@ -129,11 +123,30 @@ func _build_ui() -> void:
 	hud_base_hp.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
 	top_hbox.add_child(hud_base_hp)
 
+	if PlayerInventory.current_battle_forge_level > 0 or PlayerInventory.current_battle_shrine_level > 0:
+		var buff_lbl = Label.new()
+		var parts = []
+		if PlayerInventory.current_battle_forge_level > 0:
+			parts.append("Forge +%d%% ATK" % (PlayerInventory.current_battle_forge_level * 5))
+		if PlayerInventory.current_battle_shrine_level > 0:
+			parts.append("Shrine +%d%% HP" % (PlayerInventory.current_battle_shrine_level * 5))
+		buff_lbl.text = "  ".join(parts)
+		buff_lbl.add_theme_font_size_override("font_size", 12)
+		buff_lbl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+		top_hbox.add_child(buff_lbl)
+
 	hud_status = Label.new()
 	hud_status.add_theme_font_size_override("font_size", 13)
 	hud_status.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	hud_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_hbox.add_child(hud_status)
+
+	begin_battle_btn = Button.new()
+	begin_battle_btn.text = "⚔ Begin Battle"
+	begin_battle_btn.custom_minimum_size = Vector2(140, 32)
+	begin_battle_btn.add_theme_color_override("font_color", Color(1, 0.6, 0.3))
+	begin_battle_btn.pressed.connect(_on_begin_battle_pressed)
+	top_hbox.add_child(begin_battle_btn)
 
 	var back_btn = Button.new()
 	back_btn.text = "Retreat"
@@ -193,13 +206,13 @@ func _get_battle_roster() -> Array:
 	if battle_zone_id < 0:
 		return PlayerInventory.troop_roster.duplicate()
 
-	var zone_troop_names = PlayerInventory.get_zone_troop_names(battle_zone_id)
-	if zone_troop_names.is_empty():
+	var zone_troop_ids = PlayerInventory.get_zone_troop_names(battle_zone_id)
+	if zone_troop_ids.is_empty():
 		return []
 
 	var result = []
 	for troop in PlayerInventory.troop_roster:
-		if troop.troop_name in zone_troop_names:
+		if troop.troop_id in zone_troop_ids:
 			result.append(troop)
 	return result
 
@@ -319,18 +332,28 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 	field_node.add_child(hpbar)
 
 	var max_hp = eff.get("hp", 100)
+	var attack_val = eff.get("attack", 10)
+
+	# Apply zone Forge/Shrine buffs — 5% per level
+	var forge_lvl = PlayerInventory.current_battle_forge_level
+	var shrine_lvl = PlayerInventory.current_battle_shrine_level
+	if forge_lvl > 0:
+		attack_val = int(attack_val * (1.0 + forge_lvl * 0.05))
+	if shrine_lvl > 0:
+		max_hp = int(max_hp * (1.0 + shrine_lvl * 0.05))
+
 	var attack_speed = max(0.5, 2.5 - eff.get("speed", 3) * 0.15)
 
 	placed_troops.append({
 		"troop": troop, "pos": pos,
 		"hp": max_hp, "max_hp": max_hp,
-		"attack": eff.get("attack", 10),
+		"attack": attack_val,
 		"defense": eff.get("defense", 5),
 		"type": type_name,
 		"attack_t": attack_speed,
 		"attack_interval": attack_speed,
 		"heal_t": 3.0,
-		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg,
+		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "label": lbl,
 		"sz": sz,
 	})
 
@@ -344,22 +367,35 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 # -------------------------------------------------------
 # Wave spawning
 # -------------------------------------------------------
-func _spawn_wave(wave_num: int) -> void:
+var _enemies_pending_spawn: int = 0
+
+func _spawn_battle_force() -> void:
 	var stage = PlayerInventory.current_stage
-	var base_count = 4 + wave_num * 2
-	var count = max(2, int(base_count * attack_force_mult))
-	var is_boss_wave = (wave_num == total_waves - 1)
+	var base_count = 6 + stage
+	var count = max(5, int(base_count * attack_force_mult))
+	if is_conquering:
+		count = max(4, int(count * 0.7))   # conquest fights are a bit smaller, but never trivial
+
+	_all_enemies_spawned = false
+	_enemies_pending_spawn = count
 
 	for i in range(count):
-		var delay = i * 0.8
-		get_tree().create_timer(delay).timeout.connect(_spawn_one_enemy.bind(wave_num, is_boss_wave and i == 0))
+		var delay = i * 0.5
+		var is_boss = (i == count - 1) and count >= 4
+		var t = get_tree().create_timer(delay)
+		t.timeout.connect(_on_enemy_spawn_timer.bind(stage, is_boss))
 
-func _spawn_one_enemy(wave_num: int, is_boss: bool) -> void:
-	var stage = PlayerInventory.current_stage
+func _on_enemy_spawn_timer(stage: int, is_boss: bool) -> void:
+	_spawn_one_enemy(stage, is_boss)
+	_enemies_pending_spawn -= 1
+	if _enemies_pending_spawn <= 0:
+		_all_enemies_spawned = true
+
+func _spawn_one_enemy(stage: int, is_boss: bool) -> void:
 	var sz = 50.0 if is_boss else 24.0
-	var max_hp = int((20 + wave_num * 15 + stage * 8) * (4 if is_boss else 1) * max(0.6, attack_force_mult))
-	var spd = 40.0 + wave_num * 5.0
-	var atk = int((3 + wave_num * 2 + stage) * max(0.6, attack_force_mult))
+	var max_hp = int((18 + stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult))
+	var spd = 45.0 + stage * 4.0
+	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult))
 
 	var ey = randf_range(30, FIELD_H - 140)
 
@@ -397,32 +433,28 @@ func _process(delta: float) -> void:
 	if game_over: return
 	place_cooldown -= delta
 
-	# Wave timer
-	if not wave_active:
-		wave_timer -= delta
-		hud_timer.text = "Next wave in: %.1fs" % max(0, wave_timer)
-		if wave_timer <= 0:
-			current_wave += 1
-			wave_active = true
-			_spawn_wave(current_wave - 1)
+	if not battle_active:
+		if battle_started:
+			# Player pressed Begin Battle — spawn the full force now
+			battle_active = true
+			battle_started = false
+			_spawn_battle_force()
 			_refresh_hud()
-			_set_status("Wave %d incoming!" % current_wave)
+			_set_status("Charge!")
+			if begin_battle_btn: begin_battle_btn.visible = false
+		else:
+			hud_timer.text = "Place your troops, then press Begin Battle"
 	else:
-		hud_timer.text = "Wave %d active" % current_wave
+		hud_timer.text = "Battle in progress..."
 
 	_process_enemies(delta)
 	_process_troops(delta)
 	_move_projectiles(delta)
 	_update_visuals()
 
-	# Check wave cleared
-	if wave_active and enemies.is_empty():
-		wave_active = false
-		if current_wave >= total_waves:
-			_on_victory()
-		else:
-			wave_timer = WAVE_INTERVAL
-			_set_status("Wave %d cleared! Next wave in %.0fs..." % [current_wave, WAVE_INTERVAL])
+	# Check battle won — all enemies cleared, including any still in spawn queue
+	if battle_active and enemies.is_empty() and _all_enemies_spawned:
+		_on_victory()
 
 func _process_enemies(delta: float) -> void:
 	var new_enemies = []
@@ -489,22 +521,12 @@ func _process_troops(delta: float) -> void:
 		match t["type"]:
 			"KNIGHT":
 				# Tank — melee, also taunts: enemies within range prefer to target knights
-				t["attack_t"] -= delta
-				if t["attack_t"] <= 0:
-					var nearest = _nearest_enemy(t["pos"], 120)
-					if nearest:
-						_damage_enemy(nearest, t["attack"])
-						t["attack_t"] = t["attack_interval"]
+				_melee_engage(t, delta, 120.0, 70.0, t["attack"], 1.0)
 			"ROGUE":
 				# Fast melee striker — short range but hits hard and fast, no taunt
-				t["attack_t"] -= delta
-				if t["attack_t"] <= 0:
-					var nearest = _nearest_enemy(t["pos"], 90)
-					if nearest:
-						_damage_enemy(nearest, int(t["attack"] * 1.3))
-						t["attack_t"] = t["attack_interval"] * 0.6
+				_melee_engage(t, delta, 90.0, 95.0, int(t["attack"] * 1.3), 0.6)
 			"ARCHER":
-				# Ranged — shoots nearest enemy anywhere on the field
+				# Ranged — shoots nearest enemy anywhere on the field, doesn't need to move
 				t["attack_t"] -= delta
 				if t["attack_t"] <= 0:
 					var nearest = _nearest_enemy(t["pos"], 500)
@@ -512,7 +534,23 @@ func _process_troops(delta: float) -> void:
 						_fire_proj(t["pos"], nearest["pos"], t["attack"], true)
 						t["attack_t"] = t["attack_interval"]
 			"MAGE":
-				# AoE — damages all enemies in a large radius
+				# AoE — damages all enemies in a large radius.
+				# If nothing is in range, drifts slowly toward the action instead
+				# of staying frozen at its placement spot forever.
+				var in_range = false
+				for e in enemies:
+					if t["pos"].distance_to(e["pos"]) < 250:
+						in_range = true
+						break
+
+				if not in_range:
+					var target = _nearest_enemy_anywhere(t["pos"])
+					if not target.is_empty():
+						var dir = (target["pos"] - t["pos"]).normalized()
+						t["pos"] += dir * 40.0 * delta   # slow drift, much slower than melee
+						t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
+						t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+
 				t["attack_t"] -= delta
 				if t["attack_t"] <= 0:
 					var hit_any = false
@@ -525,7 +563,7 @@ func _process_troops(delta: float) -> void:
 					else:
 						t["attack_t"] = 0.2
 			"HEALER":
-				# Heals nearest wounded troop AND attacks nearby enemies
+				# Heals nearest wounded troop AND attacks nearby enemies, stays put
 				t["attack_t"] -= delta
 				if t["attack_t"] <= 0:
 					var nearest = _nearest_enemy(t["pos"], 200)
@@ -646,6 +684,40 @@ func _nearest_enemy(from: Vector2, max_range: float) -> Dictionary:
 			nearest = e
 	return nearest
 
+# Unlike _nearest_enemy, this has no range cap — used so melee troops can
+# always see and walk toward a target even before it's in attack range.
+func _nearest_enemy_anywhere(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for e in enemies:
+		if e["hp"] <= 0: continue
+		var d = from.distance_to(e["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = e
+	return nearest
+
+# Shared logic for melee troops (Knight, Rogue): walk toward the nearest
+# enemy if out of range, attack if in range. Mirrors how enemies already
+# behave, so both sides actively close the distance and engage.
+func _melee_engage(t: Dictionary, delta: float, attack_range: float, move_speed: float,
+		dmg: int, attack_speed_mult: float) -> void:
+	var target = _nearest_enemy_anywhere(t["pos"])
+	if target.is_empty(): return
+
+	var dist = t["pos"].distance_to(target["pos"])
+	if dist <= attack_range:
+		t["attack_t"] -= delta
+		if t["attack_t"] <= 0:
+			_damage_enemy(target, dmg)
+			t["attack_t"] = t["attack_interval"] * attack_speed_mult
+	else:
+		var dir = (target["pos"] - t["pos"]).normalized()
+		t["pos"] += dir * move_speed * delta
+		# Keep troop inside the battlefield bounds
+		t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
+		t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+
 func _nearest_troop(from: Vector2) -> Dictionary:
 	var nearest = {}
 	var nearest_dist = INF
@@ -680,12 +752,24 @@ func _update_visuals() -> void:
 		if is_instance_valid(e["hp_bar_bg"]):
 			e["hp_bar_bg"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2 + 7)
 
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var sz = t["sz"]
+		if is_instance_valid(t["rect"]):
+			t["rect"].position = t["pos"] - Vector2(sz/2, sz/2)
+		if is_instance_valid(t["hp_bar"]):
+			t["hp_bar"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
+		if is_instance_valid(t["hp_bar_bg"]):
+			t["hp_bar_bg"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
+		if t.has("label") and is_instance_valid(t["label"]):
+			t["label"].position = t["pos"] - Vector2(20, sz/2 + 14)
+
 # -------------------------------------------------------
 # HUD
 # -------------------------------------------------------
 func _refresh_hud() -> void:
 	if hud_wave:
-		hud_wave.text = "Wave %d / %d" % [current_wave, total_waves]
+		hud_wave.text = battle_title
 	if hud_base_hp:
 		hud_base_hp.text = "Base HP: %d / %d" % [base_hp, base_max_hp]
 		var col = Color(0.9,0.2,0.2) if base_hp < base_max_hp * 0.3 else Color(0.4,0.7,1.0)
@@ -693,6 +777,11 @@ func _refresh_hud() -> void:
 
 func _set_status(msg: String) -> void:
 	if hud_status: hud_status.text = msg
+
+func _on_begin_battle_pressed() -> void:
+	if battle_active: return
+	battle_started = true
+	_set_status("Charge!")
 
 func _on_retreat() -> void:
 	if battle_zone_id >= 0:
@@ -763,7 +852,7 @@ func _show_end_screen(won: bool) -> void:
 	vbox.add_child(title)
 
 	var sub = Label.new()
-	sub.text = ("All %d waves survived!" % total_waves) if won else "Your base has fallen."
+	sub.text = "The battle is won!" if won else "Your base has fallen."
 	sub.add_theme_color_override("font_color", Color(0.8,0.8,0.8))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(sub)

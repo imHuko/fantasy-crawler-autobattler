@@ -59,7 +59,13 @@ var hud_diff: Label
 var notification_label: Label
 
 func _ready() -> void:
-	_generate_map()
+	if PlayerInventory.map_generated:
+		_load_map_state()
+	else:
+		_generate_map()
+		_save_map_state()
+		PlayerInventory.map_generated = true
+
 	_build_ui()
 	_apply_pending_battle_result()
 	_draw_map()
@@ -69,6 +75,18 @@ func _ready() -> void:
 	# force the next one immediately — no map interaction allowed until resolved
 	if mandatory_battle_queue.size() > 0:
 		call_deferred("_launch_next_mandatory_battle")
+	elif PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["intro"]:
+		call_deferred("_show_map_tutorial_popup", "intro")
+
+func _load_map_state() -> void:
+	zones = PlayerInventory.map_zones
+	connections = PlayerInventory.map_connections
+	turn = PlayerInventory.map_turn
+
+func _save_map_state() -> void:
+	PlayerInventory.map_zones = zones
+	PlayerInventory.map_connections = connections
+	PlayerInventory.map_turn = turn
 
 func _apply_pending_battle_result() -> void:
 	var result = PlayerInventory.last_battle_result
@@ -121,6 +139,8 @@ func _apply_pending_battle_result() -> void:
 	PlayerInventory.current_battle_zone = -1
 	PlayerInventory.conquering_zone = false
 	PlayerInventory.current_battle_zone_troop_names = []
+	PlayerInventory.current_battle_forge_level = 0
+	PlayerInventory.current_battle_shrine_level = 0
 
 # -------------------------------------------------------
 # Map Generation
@@ -131,14 +151,23 @@ func _generate_map() -> void:
 
 	var zone_count = PlayerInventory.difficulty_settings.get("zone_count", 13)
 
-	# Place starting zone left-center
+	# Place starting zone left-center.
+	# If the player went through the tutorial, the city starts NEUTRAL —
+	# conquering it is the first thing they do on the real map, mirroring
+	# the tutorial dungeon's "fight to get something" lesson. Skipping the
+	# tutorial pre-owns the city as before so there's no forced detour.
 	var start_pos = Vector2(120, MAP_H / 2)
-	zones.append(_make_zone(0, "city", start_pos, "player", "Your City"))
+	var start_owner = "neutral" if PlayerInventory.play_tutorial else "player"
+	zones.append(_make_zone(0, "city", start_pos, start_owner, "Your City"))
 	zones[0]["dist_from_start"] = 0
+	zones[0]["enemy_strength"] = 1   # always a gentle first fight
 
-	# Station all starting troops at the home city
-	for troop in PlayerInventory.troop_roster:
-		zones[0]["troops"].append(troop.troop_name)
+	# Station all starting troops at the home city only if it's already owned.
+	# If neutral, troops wait off-map until the city is conquered (handled
+	# by _apply_pending_battle_result placing them there on victory).
+	if start_owner == "player":
+		for troop in PlayerInventory.troop_roster:
+			zones[0]["troops"].append(troop.troop_id)
 
 	# Generate remaining zones
 	var used_positions = [start_pos]
@@ -198,7 +227,7 @@ func _make_zone(id: int, ztype: String, pos: Vector2, owner: String, zname: Stri
 		"pos": pos, "owner": owner,
 		"troops": [] if owner != "player" else [],
 		"connections": [],
-		"buildings": [],
+		"buildings": {},   # { "Forge": 2, "Watchtower": 1 } — building name -> level
 		"dist_from_start": 0,
 		"enemy_strength": 0,
 		"troop_queue": [],
@@ -426,8 +455,8 @@ func _open_popup(zone: Dictionary) -> void:
 		troop_lbl.text = "Troops: None"
 	else:
 		var names = []
-		for t in zone["troops"]:
-			names.append(t if t is String else t.get("name", "Unknown"))
+		for troop_id in zone["troops"]:
+			names.append(_get_troop_name_by_id(troop_id))
 		troop_lbl.text = "Troops: " + ", ".join(names)
 	troop_lbl.add_theme_font_size_override("font_size", 11)
 	troop_lbl.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
@@ -449,7 +478,15 @@ func _open_popup(zone: Dictionary) -> void:
 
 	# Buildings
 	var build_lbl = Label.new()
-	build_lbl.text = "Buildings: " + (", ".join(zone["buildings"]) if not zone["buildings"].is_empty() else "None")
+	var building_strs = []
+	for bname in zone["buildings"]:
+		var lvl = zone["buildings"][bname]
+		if BUILDINGS[bname].get("max_level", 1) > 1:
+			building_strs.append("%s Lv%d" % [bname, lvl])
+		else:
+			building_strs.append(bname)
+	build_lbl.text = "Buildings: " + (", ".join(building_strs) if not building_strs.is_empty() else "None")
+	build_lbl.text += "  (%d/%d slots)" % [zone["buildings"].size(), PlayerInventory.max_buildings_per_zone]
 	build_lbl.add_theme_font_size_override("font_size", 11)
 	build_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5))
 	vbox.add_child(build_lbl)
@@ -497,6 +534,77 @@ func _close_popup() -> void:
 		popup_panel = null
 
 # -------------------------------------------------------
+# Map Tutorial Popups
+# Short narrated hints shown once each, only when play_tutorial is on.
+# -------------------------------------------------------
+const TUTORIAL_HINTS = {
+	"intro": {
+		"title": "The World Map",
+		"body": "This is your campaign map. Your City sits unclaimed \\u2014 conquer it first to establish your base. From there, expand outward: build up zones, station troops, and push back the creatures of the wilds.",
+	},
+	"conquer": {
+		"title": "Conquering Zones",
+		"body": "Conquering a neutral zone always triggers a battle against its guards. Stronger zones lie further from your territory. You can only conquer zones adjacent to ground you already hold.",
+	},
+	"build": {
+		"title": "Building Up",
+		"body": "Each zone can hold up to 2 buildings. Watchtowers warn you of attacks earlier, Farms and Barracks generate resources, and Forges/Shrines buff troops stationed nearby. Choose wisely \\u2014 you can't build everything everywhere.",
+	},
+	"move_troops": {
+		"title": "Positioning Troops",
+		"body": "Troops take time to travel between zones based on distance. Keep your border zones defended \\u2014 reinforcements from far away won't always arrive in time.",
+	},
+	"end_turn": {
+		"title": "Ending Your Turn",
+		"body": "Ending a turn advances time \\u2014 resources accrue, marching troops get closer, and the wilds may move against you. Watch for attack warnings on your zones and make sure you're ready before they land.",
+	},
+}
+
+func _show_map_tutorial_popup(hint_key: String) -> void:
+	if PlayerInventory.map_tutorial_seen.get(hint_key, true):
+		return
+	PlayerInventory.map_tutorial_seen[hint_key] = true
+
+	var hint = TUTORIAL_HINTS[hint_key]
+
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
+
+	var bg = ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.6)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(bg)
+
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	panel.custom_minimum_size = Vector2(380, 0)
+	overlay.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	var title = Label.new()
+	title.text = hint["title"]
+	title.add_theme_font_size_override("font_size", 18)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	vbox.add_child(title)
+
+	var body = Label.new()
+	body.text = hint["body"]
+	body.add_theme_font_size_override("font_size", 13)
+	body.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD
+	vbox.add_child(body)
+
+	var btn = Button.new()
+	btn.text = "Got it"
+	btn.custom_minimum_size = Vector2(0, 38)
+	btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
+	btn.pressed.connect(func(): overlay.queue_free())
+	vbox.add_child(btn)
+
+# -------------------------------------------------------
 # Zone Actions
 # -------------------------------------------------------
 func _is_adjacent_to_player(zone_id: int) -> bool:
@@ -519,22 +627,45 @@ func _on_battle_lost(zone_id: int) -> void:
 
 func _on_conquer(zone_id: int) -> void:
 	_close_popup()
+
+	var any_zone_owned = false
+	for z in zones:
+		if z["owner"] == "player":
+			any_zone_owned = true
+			break
+
+	var staging_troop_ids: Array
+
+	if not any_zone_owned and zone_id == 0:
+		# First-ever conquest, no territory yet — use the full roster directly.
+		staging_troop_ids = []
+		for troop in PlayerInventory.troop_roster:
+			staging_troop_ids.append(troop.troop_id)
+	else:
+		# Conquering uses troops from the nearest adjacent zone you already own,
+		# since the target zone itself has no player troops stationed yet.
+		if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["conquer"]:
+			_show_map_tutorial_popup("conquer")
+
+		var staging_zone_id = -1
+		for conn_id in zones[zone_id]["connections"]:
+			if zones[conn_id]["owner"] == "player":
+				staging_zone_id = conn_id
+				break
+
+		if staging_zone_id == -1:
+			_notify("You must own an adjacent zone to launch a conquest from.")
+			return
+
+		staging_troop_ids = zones[staging_zone_id]["troops"]
+		PlayerInventory.set_battle_zone_buffs(
+			get_best_forge_level(staging_zone_id), get_best_shrine_level(staging_zone_id))
+
 	# Always triggers a battle — zone has guards based on distance
 	PlayerInventory.current_battle_zone = zone_id
 	PlayerInventory.current_attack_force = max(0.5, zones[zone_id]["enemy_strength"] * 0.3)
 	PlayerInventory.conquering_zone = true
-
-	# Conquering uses troops from the nearest adjacent zone you already own,
-	# since the target zone itself has no player troops stationed yet.
-	var staging_zone_id = -1
-	for conn_id in zones[zone_id]["connections"]:
-		if zones[conn_id]["owner"] == "player":
-			staging_zone_id = conn_id
-			break
-	if staging_zone_id == -1:
-		staging_zone_id = 0  # fallback to home city
-
-	PlayerInventory.set_battle_roster_from_zone_troops(zones[staging_zone_id]["troops"])
+	PlayerInventory.set_battle_roster_from_zone_troops(staging_troop_ids)
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
 
@@ -542,10 +673,14 @@ func _on_conquer(zone_id: int) -> void:
 
 func _on_move_troops(zone_id: int) -> void:
 	_close_popup()
+	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["move_troops"]:
+		_show_map_tutorial_popup("move_troops")
 	_open_move_troops_panel(zone_id)
 
 func _on_build(zone_id: int) -> void:
 	_close_popup()
+	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["build"]:
+		_show_map_tutorial_popup("build")
 	_open_build_panel(zone_id)
 
 # -------------------------------------------------------
@@ -575,7 +710,7 @@ func _open_move_troops_panel(target_zone_id: int) -> void:
 
 	for i in range(PlayerInventory.troop_roster.size()):
 		var troop = PlayerInventory.troop_roster[i]
-		var already_here = troop.troop_name in zones[target_zone_id]["troops"]
+		var already_here = troop.troop_id in zones[target_zone_id]["troops"]
 
 		var btn = Button.new()
 		btn.text = "%s [%s]%s" % [
@@ -586,7 +721,7 @@ func _open_move_troops_panel(target_zone_id: int) -> void:
 		btn.add_theme_font_size_override("font_size", 12)
 		btn.add_theme_color_override("font_color",
 			Color(0.4, 1.0, 0.4) if already_here else Color(0.8, 0.8, 0.8))
-		btn.pressed.connect(_on_assign_troop.bind(troop.troop_name, target_zone_id))
+		btn.pressed.connect(_on_assign_troop.bind(troop.troop_id, target_zone_id))
 		vbox.add_child(btn)
 
 	var close_btn = Button.new()
@@ -594,22 +729,24 @@ func _open_move_troops_panel(target_zone_id: int) -> void:
 	close_btn.pressed.connect(_close_popup)
 	vbox.add_child(close_btn)
 
-func _on_assign_troop(troop_name: String, zone_id: int) -> void:
+func _on_assign_troop(troop_id: String, zone_id: int) -> void:
+	var troop_display_name = _get_troop_name_by_id(troop_id)
+
 	# Find which zone this troop is currently in (if any)
 	var from_zone_id = -1
 	for z in zones:
-		if troop_name in z["troops"]:
+		if troop_id in z["troops"]:
 			from_zone_id = z["id"]
 			break
 
 	# Cancel any existing march for this troop
 	for m in marching_troops.duplicate():
-		if m["troop_name"] == troop_name:
+		if m["troop_id"] == troop_id:
 			marching_troops.erase(m)
 
 	if from_zone_id == zone_id:
 		_close_popup()
-		_notify("%s is already stationed there." % troop_name)
+		_notify("%s is already stationed there." % troop_display_name)
 		return
 
 	# Calculate travel time based on distance
@@ -622,36 +759,58 @@ func _on_assign_troop(troop_name: String, zone_id: int) -> void:
 
 	if travel_turns <= 1 and from_zone_id >= 0:
 		# Close enough — arrives same turn
-		zones[from_zone_id]["troops"].erase(troop_name)
-		zones[zone_id]["troops"].append(troop_name)
-		_notify("%s stationed at %s" % [troop_name, zones[zone_id]["name"]])
+		zones[from_zone_id]["troops"].erase(troop_id)
+		zones[zone_id]["troops"].append(troop_id)
+		_notify("%s stationed at %s" % [troop_display_name, zones[zone_id]["name"]])
 	else:
 		# Remove from origin immediately (troop is "marching")
 		if from_zone_id >= 0:
-			zones[from_zone_id]["troops"].erase(troop_name)
+			zones[from_zone_id]["troops"].erase(troop_id)
 		marching_troops.append({
-			"troop_name": troop_name, "from_zone": from_zone_id,
+			"troop_id": troop_id, "troop_name": troop_display_name, "from_zone": from_zone_id,
 			"to_zone": zone_id, "turns_left": travel_turns
 		})
-		_notify("%s marching to %s \u2014 arrives in %d turn(s)" % [troop_name, zones[zone_id]["name"], travel_turns])
+		_notify("%s marching to %s \u2014 arrives in %d turn(s)" % [troop_display_name, zones[zone_id]["name"], travel_turns])
 
 	_close_popup()
 	_draw_map()
+
+func _get_troop_name_by_id(troop_id: String) -> String:
+	for troop in PlayerInventory.troop_roster:
+		if troop.troop_id == troop_id:
+			return troop.troop_name
+	return "Unknown Unit"
 
 # -------------------------------------------------------
 # Build Panel
 # -------------------------------------------------------
 const BUILDINGS = {
-	"Barracks":   {"desc": "Unlocks an additional troop slot.", "cost": 3},
-	"Watchtower": {"desc": "Gives +1 turn warning on incoming attacks.", "cost": 2},
-	"Farm":       {"desc": "Generates food resources each turn.", "cost": 2},
-	"Dungeon":    {"desc": "Allows dungeon runs from this zone.", "cost": 4},
+	"Watchtower": {
+		"desc": "Extends attack warning by +1 turn for this zone and its neighbors.",
+		"cost": 2, "max_level": 1,
+	},
+	"Barracks": {
+		"desc": "Unlocks an additional troop slot. Generates a trickle of Gold each turn.",
+		"cost": 3, "max_level": 1,
+	},
+	"Farm": {
+		"desc": "Generates Food each turn.",
+		"cost": 2, "max_level": 1,
+	},
+	"Forge": {
+		"desc": "Troops stationed here or in adjacent zones gain bonus attack. +5% per level.",
+		"cost": 3, "max_level": 4,
+	},
+	"Shrine": {
+		"desc": "Troops stationed here or in adjacent zones gain bonus HP. +5% per level.",
+		"cost": 3, "max_level": 4,
+	},
 }
 
 func _open_build_panel(zone_id: int) -> void:
 	popup_panel = PanelContainer.new()
-	popup_panel.position = Vector2(MAP_W / 2 - 160, MAP_H / 2 - 120)
-	popup_panel.custom_minimum_size = Vector2(320, 0)
+	popup_panel.position = Vector2(MAP_W / 2 - 170, MAP_H / 2 - 140)
+	popup_panel.custom_minimum_size = Vector2(340, 0)
 	add_child(popup_panel)
 
 	var vbox = VBoxContainer.new()
@@ -664,20 +823,46 @@ func _open_build_panel(zone_id: int) -> void:
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
 	vbox.add_child(title)
 
+	var slots_used = zones[zone_id]["buildings"].size()
+	var slots_max = PlayerInventory.max_buildings_per_zone
+	var slot_lbl = Label.new()
+	slot_lbl.text = "Building slots: %d / %d" % [slots_used, slots_max]
+	slot_lbl.add_theme_font_size_override("font_size", 11)
+	slot_lbl.add_theme_color_override("font_color",
+		Color(0.9, 0.5, 0.3) if slots_used >= slots_max else Color(0.6, 0.6, 0.6))
+	vbox.add_child(slot_lbl)
+
+	var sep = HSeparator.new()
+	vbox.add_child(sep)
+
 	for bname in BUILDINGS:
 		var b = BUILDINGS[bname]
-		var already_built = bname in zones[zone_id]["buildings"]
+		var current_level = zones[zone_id]["buildings"].get(bname, 0)
+		var max_level = b.get("max_level", 1)
+		var at_max = current_level >= max_level
+		var zone_full = slots_used >= slots_max and current_level == 0
 
 		var hbox = HBoxContainer.new()
 		vbox.add_child(hbox)
 
 		var btn = Button.new()
-		btn.text = bname + (" ✓" if already_built else " (Cost: %d turns)" % b["cost"])
+		var btn_text = bname
+		if max_level > 1:
+			btn_text += " (Lv%d/%d)" % [current_level, max_level]
+		if at_max:
+			btn_text += " ✓ MAX"
+		elif zone_full:
+			btn_text += " (zone full)"
+		else:
+			var action = "Upgrade" if current_level > 0 else "Build"
+			btn_text += "  [%s \\u2014 %d turns]" % [action, b["cost"]]
+
+		btn.text = btn_text
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.add_theme_font_size_override("font_size", 12)
-		btn.disabled = already_built
+		btn.disabled = at_max or zone_full
 		btn.add_theme_color_override("font_color",
-			Color(0.4, 0.8, 0.4) if already_built else Color(0.85, 0.75, 0.4))
+			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if zone_full else Color(0.85, 0.75, 0.4)))
 		btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
 		hbox.add_child(btn)
 
@@ -686,7 +871,6 @@ func _open_build_panel(zone_id: int) -> void:
 		desc.add_theme_font_size_override("font_size", 10)
 		desc.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
 		desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-		desc.custom_minimum_size = Vector2(0, 0)
 		vbox.add_child(desc)
 
 	var close_btn = Button.new()
@@ -695,24 +879,91 @@ func _open_build_panel(zone_id: int) -> void:
 	vbox.add_child(close_btn)
 
 func _on_build_selected(building_name: String, zone_id: int) -> void:
-	if building_name not in zones[zone_id]["buildings"]:
-		zones[zone_id]["buildings"].append(building_name)
-		if building_name == "Barracks":
-			PlayerInventory.unlock_troop_slot()
+	var zone = zones[zone_id]
+	var current_level = zone["buildings"].get(building_name, 0)
+	var max_level = BUILDINGS[building_name].get("max_level", 1)
+	var is_new_building = current_level == 0
+
+	if is_new_building and zone["buildings"].size() >= PlayerInventory.max_buildings_per_zone:
+		_notify("This zone's building slots are full!")
+		_close_popup()
+		return
+
+	if current_level >= max_level:
+		_close_popup()
+		return
+
+	zone["buildings"][building_name] = current_level + 1
+
+	if building_name == "Barracks" and current_level == 0:
+		PlayerInventory.unlock_troop_slot()
+
 	_close_popup()
 	_draw_map()
-	_notify("Built %s in %s!" % [building_name, zones[zone_id]["name"]])
+
+	if current_level == 0:
+		_notify("Built %s in %s!" % [building_name, zone["name"]])
+	else:
+		_notify("Upgraded %s to Lv%d in %s!" % [building_name, current_level + 1, zone["name"]])
+
+# -------------------------------------------------------
+# Building Effects
+# -------------------------------------------------------
+
+# Returns the warning-time bonus for a zone from its own Watchtower
+# plus any adjacent zone's Watchtower.
+func get_watchtower_bonus(zone_id: int) -> int:
+	var bonus = 0
+	if zones[zone_id]["buildings"].has("Watchtower"):
+		bonus += 1
+	for conn_id in zones[zone_id]["connections"]:
+		if zones[conn_id]["buildings"].has("Watchtower"):
+			bonus = max(bonus, 1)
+	return bonus
+
+# Returns the best Forge level affecting this zone (itself or adjacent), 0 if none
+func get_best_forge_level(zone_id: int) -> int:
+	var best = zones[zone_id]["buildings"].get("Forge", 0)
+	for conn_id in zones[zone_id]["connections"]:
+		best = max(best, zones[conn_id]["buildings"].get("Forge", 0))
+	return best
+
+# Returns the best Shrine level affecting this zone (itself or adjacent), 0 if none
+func get_best_shrine_level(zone_id: int) -> int:
+	var best = zones[zone_id]["buildings"].get("Shrine", 0)
+	for conn_id in zones[zone_id]["connections"]:
+		best = max(best, zones[conn_id]["buildings"].get("Shrine", 0))
+	return best
+
+# Generates resources from Farm/Barracks each turn
+func _process_resource_generation() -> void:
+	var food_gain = 0
+	var gold_gain = 0
+	for zone in zones:
+		if zone["owner"] != "player": continue
+		if zone["buildings"].has("Farm"):
+			food_gain += 3
+		if zone["buildings"].has("Barracks"):
+			gold_gain += 2
+	if food_gain > 0:
+		PlayerInventory.resources["food"] += food_gain
+	if gold_gain > 0:
+		PlayerInventory.resources["gold"] += gold_gain
 
 # -------------------------------------------------------
 # Turn System
 # -------------------------------------------------------
 func _on_end_turn() -> void:
 	_close_popup()
+	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["end_turn"]:
+		_show_map_tutorial_popup("end_turn")
 	turn += 1
 	_process_marching_troops()
 	_process_enemy_expansion()
+	_process_resource_generation()
 	_process_pending_attacks()
 	_maybe_spawn_attack()
+	PlayerInventory.map_turn = turn
 	_refresh_hud()
 	_draw_map()
 
@@ -721,7 +972,7 @@ func _process_marching_troops() -> void:
 	for m in marching_troops:
 		m["turns_left"] -= 1
 		if m["turns_left"] <= 0:
-			zones[m["to_zone"]]["troops"].append(m["troop_name"])
+			zones[m["to_zone"]]["troops"].append(m["troop_id"])
 			_notify("%s arrived at %s" % [m["troop_name"], zones[m["to_zone"]]["name"]])
 			arrived.append(m)
 	for a in arrived:
@@ -758,12 +1009,13 @@ func _maybe_spawn_attack() -> void:
 
 	var target_id = targets[randi() % targets.size()]
 	var force = diff_settings.get("force_size", 1.0)
+	var effective_warning = warning + get_watchtower_bonus(target_id)
 	pending_attacks.append({
 		"zone_id": target_id,
-		"turns_until": warning,
+		"turns_until": effective_warning,
 		"force_size": force,
 	})
-	_notify("⚠ Creatures from the wilds will attack %s in %d turns!" % [zones[target_id]["name"], warning])
+	_notify("⚠ Creatures from the wilds will attack %s in %d turns!" % [zones[target_id]["name"], effective_warning])
 
 	# Nightmare/Hard can roll a second attack same turn
 	if pending_attacks.size() < max_simultaneous and randf() < attack_chance * 0.5:
@@ -793,6 +1045,8 @@ func _launch_next_mandatory_battle() -> void:
 	PlayerInventory.current_attack_force = attack["force_size"]
 	PlayerInventory.conquering_zone = false
 	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
+	PlayerInventory.set_battle_zone_buffs(
+		get_best_forge_level(attack["zone_id"]), get_best_shrine_level(attack["zone_id"]))
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
 

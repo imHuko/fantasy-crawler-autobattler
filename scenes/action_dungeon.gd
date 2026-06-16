@@ -54,6 +54,9 @@ var hero_hp: int = HERO_HP_BASE
 var hero_max_hp: int = HERO_HP_BASE
 var hero_speed: float = HERO_SPEED_BASE
 var hero_attack: int = 12
+var hero_armor: int = 0
+var hero_crit_chance: float = 0.0
+var hero_crit_damage: int = 0
 var attack_timer: float = 0.0
 var invincible_timer: float = 0.0
 
@@ -84,11 +87,14 @@ func _ready() -> void:
 	_enter_room(0, "")
 
 func _load_hero_stats() -> void:
-	if PlayerInventory.troop_roster.size() > 0:
-		var eff = PlayerInventory.troop_roster[0].get_effective_stats()
-		hero_max_hp  = max(50,  eff.get("hp",      HERO_HP_BASE))
-		hero_speed   = max(100, HERO_SPEED_BASE + eff.get("speed", 0) * 8.0)
-		hero_attack  = max(5,   eff.get("attack",  12))
+	PlayerInventory.ensure_hero_exists()
+	var eff = PlayerInventory.hero.get_effective_stats()
+	hero_max_hp  = max(50,  eff.get("hp",      HERO_HP_BASE))
+	hero_speed   = max(100, HERO_SPEED_BASE + eff.get("speed", 0) * 8.0)
+	hero_attack  = max(5,   eff.get("attack",  12))
+	hero_armor   = eff.get("armor", 0)
+	hero_crit_chance = eff.get("crit_chance", 0.0)
+	hero_crit_damage = eff.get("crit_damage", 0)
 	hero_hp = hero_max_hp
 
 # -------------------------------------------------------
@@ -346,7 +352,10 @@ func _attack_tick(delta: float) -> void:
 
 	if nearest:
 		attack_timer = ATTACK_INTERVAL
-		_fire(hero_pos, nearest["pos"], true, hero_attack)
+		var dmg = hero_attack
+		if randf() < hero_crit_chance:
+			dmg = int(dmg * (1.0 + hero_crit_damage / 100.0))
+		_fire(hero_pos, nearest["pos"], true, dmg)
 
 func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int) -> void:
 	var dir = (toward - from).normalized()
@@ -526,7 +535,8 @@ func _check_door_transition() -> void:
 
 func _take_damage(amount: int) -> void:
 	if invincible_timer > 0: return
-	hero_hp -= amount
+	var reduced = max(1, amount - int(hero_armor * 0.5))
+	hero_hp -= reduced
 	hero_hp = max(0, hero_hp)
 	invincible_timer = 0.6
 	_refresh_hud()
@@ -685,7 +695,10 @@ func _show_end_screen(won: bool) -> void:
 	vbox.add_child(info)
 
 	var btn = Button.new()
-	btn.text = "Back to Management"
+	var first_time = not PlayerInventory.map_generated
+	btn.text = "Continue to World Map" if first_time else "Back to Management"
 	btn.custom_minimum_size = Vector2(220, 44)
-	btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
+	btn.pressed.connect(func():
+		var dest = "res://scenes/world_map.tscn" if first_time else "res://scenes/management_screen.tscn"
+		get_tree().change_scene_to_file(dest))
 	vbox.add_child(btn)
