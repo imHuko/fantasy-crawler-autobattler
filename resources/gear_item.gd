@@ -9,6 +9,7 @@ enum Quality { NORMAL, AWAKENED, ASCENDANT, TRANSCENDENT }
 @export var rarity:  Rarity  = Rarity.COMMON
 @export var slot:    Slot    = Slot.WEAPON
 @export var quality: Quality = Quality.NORMAL
+@export var item_level: int = 1   # the stage/difficulty this item dropped at (1-10); scales stat ranges
 @export var stats: Dictionary = {}
 @export var stat_ranges: Dictionary = {}
 # stat_ranges stores the rolled ceiling for each stat so we can show the bar
@@ -52,6 +53,21 @@ func get_quality_suffix() -> String:
 		Quality.TRANSCENDENT:  return " ✦✦✦"
 	return ""
 
+# Returns item level's stat scaling as a % of the maximum possible (item
+# level 10). Gives players a concrete sense of how much headroom this
+# specific item still has compared to its absolute ceiling.
+# NOTE: kept in sync manually with GearGenerator.ITEM_LEVEL_MULT — this is
+# a local copy since GearItem (a Resource) shouldn't reach into the
+# GearGenerator autoload. If that table's numbers change, update both.
+const ITEM_LEVEL_MULT_REF = {
+	1: 0.55, 2: 0.65, 3: 0.78, 4: 0.92, 5: 1.05,
+	6: 1.25, 7: 1.50, 8: 1.80, 9: 2.20, 10: 2.70,
+}
+func get_stat_budget_pct() -> int:
+	var mult = ITEM_LEVEL_MULT_REF.get(clamp(item_level, 1, 10), 1.0)
+	var max_mult = ITEM_LEVEL_MULT_REF[10]
+	return int(round((mult / max_mult) * 100))
+
 func get_rarity_color() -> Color:
 	match rarity:
 		Rarity.COMMON:    return Color(0.75, 0.75, 0.75)
@@ -73,23 +89,29 @@ func get_display_color() -> Color:
 
 func get_suggested_units() -> Array:
 	var suggestions = []
-	var total = 0
 	var tank_score = 0
 	var dps_score = 0
 	var mage_score = 0
 	var heal_score = 0
+	var rogue_score = 0
 
 	for stat in stats:
 		match stat:
 			"hp":           tank_score  += 2; heal_score += 1
 			"armor":        tank_score  += 3
-			"attack":       dps_score   += 2; mage_score += 1
-			"attack_speed": dps_score   += 2; mage_score += 2
-			"crit_chance":  dps_score   += 2; mage_score += 1
-			"crit_damage":  dps_score   += 2; mage_score += 2
+			"attack":       dps_score   += 2; mage_score += 1; rogue_score += 2
+			"attack_speed": dps_score   += 2; mage_score += 2; rogue_score += 2
+			"crit_chance":  dps_score   += 2; mage_score += 1; rogue_score += 3
+			"crit_damage":  dps_score   += 2; mage_score += 2; rogue_score += 3
+			# Decisive rather than fuzzy — these stats only do anything for
+			# specific archetypes, so the suggestion should reflect that clearly.
+			"spell_power":  mage_score  += 4; heal_score += 4
+			"lifesteal":    tank_score  += 1; dps_score += 2; mage_score += 1; rogue_score += 2
+			"thorns":       tank_score  += 3; rogue_score += 1
+			"move_speed":   tank_score  += 1; rogue_score += 3
 
 	var scores = {"KNIGHT": tank_score, "ARCHER": dps_score,
-				  "MAGE": mage_score, "HEALER": heal_score}
+				  "MAGE": mage_score, "HEALER": heal_score, "ROGUE": rogue_score}
 	var max_score = 0
 	for s in scores.values():
 		if s > max_score: max_score = s

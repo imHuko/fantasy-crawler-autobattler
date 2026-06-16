@@ -23,6 +23,9 @@ var selected_slot: String = ""
 var selected_slot_button: Button = null
 var selected_gear: GearItem = null
 var selected_gear_button: Button = null
+
+# Stats that display and roll as percentages rather than flat numbers
+const PERCENT_STATS = ["crit_chance", "attack_speed", "spell_power", "lifesteal", "move_speed"]
 var focus_troop: TroopData = null   # "working on" troop, used by hover-compare when no slot is selected
 var show_suggestions: bool = true
 var compare_panel: PanelContainer = null
@@ -327,6 +330,9 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	vbox.add_child(slots_hbox)
 
 	for slot_key in ["WEAPON", "ARMOR", "RING", "ACCESSORY"]:
+		var slot_container = VBoxContainer.new()
+		slot_container.add_theme_constant_override("separation", 2)
+
 		var btn = DroppableSlotButton.new()
 		btn.custom_minimum_size = Vector2(80, 50)
 		btn.set_meta("troop", troop)
@@ -337,8 +343,19 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 		btn.on_drop_callback = _equip_gear_to_slot
 		_refresh_slot_button(btn, troop, slot_key)
 		btn.pressed.connect(_on_slot_pressed.bind(btn, troop, slot_key))
-		slots_hbox.add_child(btn)
+		btn.mouse_entered.connect(_on_slot_hover.bind(troop, slot_key, btn))
+		btn.mouse_exited.connect(_on_slot_unhover.bind(btn, troop, slot_key))
+		slot_container.add_child(btn)
 		all_slot_buttons.append(btn)
+
+		var unequip_btn = Button.new()
+		unequip_btn.text = "Unequip"
+		unequip_btn.custom_minimum_size = Vector2(80, 22)
+		unequip_btn.add_theme_font_size_override("font_size", 10)
+		unequip_btn.pressed.connect(_on_unequip_pressed.bind(troop, slot_key, btn))
+		slot_container.add_child(unequip_btn)
+
+		slots_hbox.add_child(slot_container)
 
 	return card
 
@@ -362,6 +379,31 @@ func _refresh_slot_button(btn: Button, troop: TroopData, slot_key: String) -> vo
 		btn.text = SLOT_ICONS[slot_key] + "\n[empty]"
 		btn.add_theme_color_override("font_color", Color(0.45, 0.45, 0.45))
 
+func _on_slot_hover(troop: TroopData, slot_key: String, btn: Button) -> void:
+	var gear: GearItem = troop.equipped_gear[slot_key]
+	if gear:
+		btn.text = _gear_display_text(gear, true)
+
+func _on_slot_unhover(btn: Button, troop: TroopData, slot_key: String) -> void:
+	_refresh_slot_button(btn, troop, slot_key)
+
+func _on_unequip_pressed(troop: TroopData, slot_key: String, slot_btn: Button) -> void:
+	var gear: GearItem = troop.unequip(slot_key)
+	if gear == null:
+		_update_status("Nothing equipped in that slot.")
+		return
+
+	PlayerInventory.add_gear(gear)
+
+	_update_status("Unequipped %s from %s." % [gear.item_name, troop.troop_name])
+	_refresh_slot_button(slot_btn, troop, slot_key)
+
+	var stats_label = slot_btn.get_meta("stats_label")
+	_refresh_stats_text(stats_label, troop)
+
+	_populate_gear()
+	_update_set_bonuses()
+
 func _make_gear_button(gear: GearItem) -> Button:
 	var btn = DraggableGearButton.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -384,7 +426,9 @@ func _make_gear_button(gear: GearItem) -> Button:
 
 func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
 	var quality_suffix = gear.get_quality_suffix()
-	var header = "[%s] %s%s" % [gear.get_rarity_name()[0], gear.item_name, quality_suffix]
+	var item_lvl = gear.item_level if "item_level" in gear else 5
+	var budget_pct = gear.get_stat_budget_pct() if gear.has_method("get_stat_budget_pct") else 100
+	var header = "[%s] iLvl%d (%d%%) %s%s" % [gear.get_rarity_name()[0], item_lvl, budget_pct, gear.item_name, quality_suffix]
 	var slot_line = gear.get_slot_name()
 	if gear.set_name != "":
 		slot_line += " | Set: " + gear.set_name
@@ -393,17 +437,21 @@ func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
 	for stat in gear.stats:
 		var val = gear.stats[stat]
 		var stat_str = ""
-		if stat in ["crit_chance", "attack_speed"]:
+		if stat in PERCENT_STATS:
 			stat_str = "%s: %.0f%%" % [stat.replace("_", " "), val * 100]
 		elif stat == "crit_damage":
 			stat_str = "crit dmg: +%d%%" % val
 		else:
 			stat_str = "%s: %d" % [stat.replace("_", " "), val]
 
+		var stack_count = gear.stat_ranges.get(stat, {}).get("stacked", 1)
+		if stack_count > 1:
+			stat_str += " (x%d stacked!)" % stack_count
+
 		if show_ranges and gear.stat_ranges.has(stat):
 			var r = gear.stat_ranges[stat]
 			var is_q = r.get("is_quality", false)
-			if stat in ["crit_chance", "attack_speed"]:
+			if stat in PERCENT_STATS:
 				stat_str += " [%.0f-%.0f%%]%s" % [r["min"]*100, r["max"]*100, " ✦" if is_q else ""]
 			else:
 				stat_str += " [%s-%s]%s" % [str(r["min"]), str(r["max"]), " ✦" if is_q else ""]
@@ -616,7 +664,7 @@ func _show_compare(hover_gear: GearItem, override_troop: TroopData = null, overr
 
 		var left_lbl = Label.new()
 		left_lbl.add_theme_font_size_override("font_size", 11)
-		if stat in ["crit_chance", "attack_speed"]:
+		if stat in PERCENT_STATS:
 			left_lbl.text = "%s: %.0f%%" % [stat.replace("_"," "), old_val * 100]
 		else:
 			left_lbl.text = "%s: %s" % [stat.replace("_"," "), str(old_val)]
@@ -625,9 +673,9 @@ func _show_compare(hover_gear: GearItem, override_troop: TroopData = null, overr
 		var right_lbl = Label.new()
 		right_lbl.add_theme_font_size_override("font_size", 11)
 		var diff_str = ""
-		if diff > 0:   diff_str = " (▲%s)" % str(snappedf(diff, 0.01) if stat in ["crit_chance","attack_speed"] else diff)
-		elif diff < 0: diff_str = " (▼%s)" % str(snappedf(-diff, 0.01) if stat in ["crit_chance","attack_speed"] else -diff)
-		if stat in ["crit_chance", "attack_speed"]:
+		if diff > 0:   diff_str = " (▲%s)" % str(snappedf(diff, 0.01) if stat in PERCENT_STATS else diff)
+		elif diff < 0: diff_str = " (▼%s)" % str(snappedf(-diff, 0.01) if stat in PERCENT_STATS else -diff)
+		if stat in PERCENT_STATS:
 			right_lbl.text = "%s: %.0f%%%s" % [stat.replace("_"," "), new_val * 100, diff_str]
 		else:
 			right_lbl.text = "%s: %s%s" % [stat.replace("_"," "), str(new_val), diff_str]

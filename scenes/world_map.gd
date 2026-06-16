@@ -561,7 +561,9 @@ func _open_popup(zone: Dictionary) -> void:
 	if zone["owner"] == "player":
 		_add_popup_btn(vbox, "Move Troops Here", Color(0.4, 0.8, 1.0), _on_move_troops.bind(zone["id"]))
 		_add_popup_btn(vbox, "Build Here", Color(0.85, 0.75, 0.4), _on_build.bind(zone["id"]))
-		_add_popup_btn(vbox, "Enter Dungeon", Color(0.65, 0.3, 0.9), func():
+		var explore_tier = _get_explore_tier(zone["id"])
+		_add_popup_btn(vbox, "Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9), func():
+			PlayerInventory.dungeon_tier = explore_tier
 			SaveManager.save_game()
 			get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn"))
 	elif zone["owner"] == "neutral":
@@ -582,6 +584,15 @@ func _open_popup(zone: Dictionary) -> void:
 	close_btn.text = "Close"
 	close_btn.pressed.connect(_close_popup)
 	vbox.add_child(close_btn)
+
+func _get_explore_tier(zone_id: int) -> String:
+	var dist = zones[zone_id].get("dist_from_start", 0.0)
+	if dist < 220.0:
+		return "Quick"
+	elif dist < 480.0:
+		return "Standard"
+	else:
+		return "Deep Delve"
 
 func _add_popup_btn(parent: VBoxContainer, text: String, col: Color, callback: Callable) -> void:
 	var btn = Button.new()
@@ -1212,3 +1223,5 @@ func _input(event: InputEvent) -> void:
 			_close_popup()
 			selected_zone_id = -1
 			_draw_map()
+	if event is InputEventKey and event.pressed and event.keycode == KEY_SPACE:
+		_on_pause_pressed()

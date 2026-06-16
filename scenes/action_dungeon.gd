@@ -539,11 +539,11 @@ func _kill_enemy(idx: int) -> void:
 	# Gear drop — staged into pending_room_gear, not committed to the
 	# permanent inventory until the room is actually cleared. This is what
 	# makes retreat correctly forfeit loot from an in-progress room.
-	var drop_chance = 1.0 if e["is_boss"] else 0.35
+	var drop_chance = 1.0 if e["is_boss"] else 0.16
 	if randf() < drop_chance:
-		var diff = clamp(PlayerInventory.current_stage + (2 if e["is_boss"] else 0), 1, 10)
+		var diff = clamp(PlayerInventory.current_stage + (1 if e["is_boss"] else 0), 1, 10)
 		if PlayerInventory.dungeon_tier == "Deep Delve":
-			diff = clamp(diff + 2, 1, 10)
+			diff = clamp(diff + 1, 1, 10)
 		var biomes = ["crypt","forest_ruins","dragon_lair"]
 		var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
 		pending_room_gear.append(gear)
@@ -806,10 +806,34 @@ func _show_end_screen(outcome: String) -> void:
 	vbox.add_child(title)
 
 	var info = Label.new()
-	info.text = "Gear collected this run: %d items" % run_gear.size()
+	info.text = "Gear collected this run: %d item%s" % [run_gear.size(), "" if run_gear.size() == 1 else "s"]
 	info.add_theme_color_override("font_color", Color(0.9, 0.75, 0.2))
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(info)
+
+	if run_gear.size() > 0:
+		var scroll = ScrollContainer.new()
+		scroll.custom_minimum_size = Vector2(280, min(220, run_gear.size() * 26))
+		vbox.add_child(scroll)
+
+		var gear_list_vbox = VBoxContainer.new()
+		gear_list_vbox.add_theme_constant_override("separation", 2)
+		scroll.add_child(gear_list_vbox)
+
+		for gear in run_gear:
+			var row = Label.new()
+			var quality_tag = (" " + gear.get_quality_name()) if gear.get_quality_name() != "" else ""
+			row.text = "%s  [%s%s]" % [gear.item_name, gear.get_rarity_name(), quality_tag]
+			row.add_theme_font_size_override("font_size", 12)
+			row.add_theme_color_override("font_color", gear.get_display_color())
+			row.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			gear_list_vbox.add_child(row)
+	else:
+		var none_lbl = Label.new()
+		none_lbl.text = "No gear found this run."
+		none_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		none_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox.add_child(none_lbl)
 
 	var btn = Button.new()
 	var first_time = not PlayerInventory.map_generated

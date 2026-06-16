@@ -4,16 +4,16 @@ extends Node
 # Rarity Weights by Difficulty (1-10)
 # -------------------------------------------------------
 const RARITY_WEIGHTS = {
-	1:  { "COMMON": 80, "RARE": 16, "EPIC": 3,  "LEGENDARY": 1  },
-	2:  { "COMMON": 72, "RARE": 22, "EPIC": 5,  "LEGENDARY": 1  },
-	3:  { "COMMON": 62, "RARE": 27, "EPIC": 8,  "LEGENDARY": 3  },
-	4:  { "COMMON": 50, "RARE": 30, "EPIC": 14, "LEGENDARY": 6  },
-	5:  { "COMMON": 40, "RARE": 32, "EPIC": 20, "LEGENDARY": 8  },
-	6:  { "COMMON": 30, "RARE": 32, "EPIC": 26, "LEGENDARY": 12 },
-	7:  { "COMMON": 20, "RARE": 30, "EPIC": 32, "LEGENDARY": 18 },
-	8:  { "COMMON": 12, "RARE": 26, "EPIC": 36, "LEGENDARY": 26 },
-	9:  { "COMMON": 6,  "RARE": 20, "EPIC": 38, "LEGENDARY": 36 },
-	10: { "COMMON": 2,  "RARE": 12, "EPIC": 36, "LEGENDARY": 50 },
+	1:  { "COMMON": 915, "RARE": 70,  "EPIC": 10, "LEGENDARY": 5   },
+	2:  { "COMMON": 880, "RARE": 100, "EPIC": 18, "LEGENDARY": 2   },
+	3:  { "COMMON": 82,  "RARE": 14,  "EPIC": 3,  "LEGENDARY": 1   },
+	4:  { "COMMON": 72,  "RARE": 20,  "EPIC": 6,  "LEGENDARY": 2   },
+	5:  { "COMMON": 60,  "RARE": 25,  "EPIC": 11, "LEGENDARY": 4   },
+	6:  { "COMMON": 46,  "RARE": 28,  "EPIC": 18, "LEGENDARY": 8   },
+	7:  { "COMMON": 32,  "RARE": 28,  "EPIC": 26, "LEGENDARY": 14  },
+	8:  { "COMMON": 18,  "RARE": 26,  "EPIC": 34, "LEGENDARY": 22  },
+	9:  { "COMMON": 8,   "RARE": 20,  "EPIC": 38, "LEGENDARY": 34  },
+	10: { "COMMON": 2,   "RARE": 12,  "EPIC": 36, "LEGENDARY": 50  },
 }
 
 # Stat count per rarity
@@ -31,14 +31,39 @@ const QUALITY_MULTIPLIERS = {
 	"TRANSCENDENT": { "min_mult": 2.2,  "max_mult": 3.0  },
 }
 
-const SLOT_STATS = {
-	"WEAPON":    ["attack", "attack_speed", "crit_chance", "crit_damage"],
-	"ARMOR":     ["hp", "armor", "hp", "attack_speed"],
-	"RING":      ["attack", "crit_chance", "crit_damage", "hp"],
-	"ACCESSORY": ["hp", "armor", "attack", "crit_chance"],
+# Item level (1-10, same scale as dungeon stage/difficulty) scales the
+# stat range itself rather than just picking a position within a fixed
+# range. This curve is deliberately gentle: a well-rolled Legendary at
+# item level 1 should still be clearly strong and worth using for a
+# while, not gated down toward Common-tier numbers. Rarity is what
+# should carry most of the early power difference; item level is a
+# slower-building, longer-term ceiling on top of that.
+const ITEM_LEVEL_MULT = {
+	1:  0.80, 2:  0.85, 3:  0.90, 4:  0.95, 5:  1.00,
+	6:  1.10, 7:  1.25, 8:  1.45, 9:  1.70, 10: 2.00,
 }
 
-const FLOAT_STATS = ["crit_chance", "attack_speed"]
+func _get_item_level_mult(item_level: int) -> float:
+	return ITEM_LEVEL_MULT.get(clamp(item_level, 1, 10), 1.0)
+
+# Diminishing returns when the same stat gets picked more than once on a
+# single item (e.g. a Legendary rolling HP four times instead of four
+# different stats). Each repeat contributes less than the last, so
+# stacking is powerful but not simply linear — a 4x stack lands around
+# 2.4x a single roll's value, not a full 4x.
+const STACK_DIMINISH = [1.0, 0.65, 0.45, 0.30, 0.20, 0.15]
+
+func _get_stack_mult(occurrence_index: int) -> float:
+	return STACK_DIMINISH[min(occurrence_index, STACK_DIMINISH.size() - 1)]
+
+const SLOT_STATS = {
+	"WEAPON":    ["attack", "attack_speed", "crit_chance", "crit_damage", "spell_power", "lifesteal", "thorns", "move_speed"],
+	"ARMOR":     ["hp", "armor", "attack_speed", "spell_power", "lifesteal", "thorns", "move_speed"],
+	"RING":      ["attack", "crit_chance", "crit_damage", "hp", "spell_power", "lifesteal", "thorns", "move_speed"],
+	"ACCESSORY": ["hp", "armor", "attack", "crit_chance", "spell_power", "lifesteal", "thorns", "move_speed"],
+}
+
+const FLOAT_STATS = ["crit_chance", "attack_speed", "spell_power", "lifesteal", "move_speed"]
 const FLOAT_RANGES = {
 	"crit_chance": {
 		"COMMON":    {"min": 0.02, "max": 0.05},
@@ -52,12 +77,45 @@ const FLOAT_RANGES = {
 		"EPIC":      {"min": 0.10, "max": 0.18},
 		"LEGENDARY": {"min": 0.15, "max": 0.28},
 	},
+	# % bonus to Mage damage / Healer heal amount. Dead weight on Knight/
+	# Archer/Rogue — they have no spell-power-affected ability at all.
+	"spell_power": {
+		"COMMON":    {"min": 0.05, "max": 0.12},
+		"RARE":      {"min": 0.10, "max": 0.22},
+		"EPIC":      {"min": 0.18, "max": 0.35},
+		"LEGENDARY": {"min": 0.30, "max": 0.50},
+	},
+	# % of damage dealt returned as self-heal. Inert on Healer, who doesn't
+	# deal direct damage through the same path.
+	"lifesteal": {
+		"COMMON":    {"min": 0.03, "max": 0.06},
+		"RARE":      {"min": 0.05, "max": 0.09},
+		"EPIC":      {"min": 0.08, "max": 0.12},
+		"LEGENDARY": {"min": 0.10, "max": 0.15},
+	},
+	# % bonus to closing speed. Meaningful for melee (Knight/Rogue) that
+	# need to close distance; negligible for ranged/stationary units.
+	"move_speed": {
+		"COMMON":    {"min": 0.05, "max": 0.12},
+		"RARE":      {"min": 0.10, "max": 0.20},
+		"EPIC":      {"min": 0.18, "max": 0.32},
+		"LEGENDARY": {"min": 0.28, "max": 0.45},
+	},
 }
 const CRIT_DMG_RANGES = {
 	"COMMON":    {"min": 8,  "max": 18},
 	"RARE":      {"min": 15, "max": 28},
 	"EPIC":      {"min": 22, "max": 40},
 	"LEGENDARY": {"min": 35, "max": 60},
+}
+# Flat damage reflected on melee hits taken. Reliable on Knight/Rogue
+# (melee, get hit often); situational on Archer/Mage/Healer (only
+# triggers when an enemy reaches them directly).
+const THORNS_RANGES = {
+	"COMMON":    {"min": 2,  "max": 5},
+	"RARE":      {"min": 4,  "max": 9},
+	"EPIC":      {"min": 7,  "max": 15},
+	"LEGENDARY": {"min": 12, "max": 24},
 }
 
 const SETS = {
@@ -105,6 +163,7 @@ const RARITY_PREFIXES = {
 func generate(biome: String, difficulty: int) -> GearItem:
 	difficulty = clamp(difficulty, 1, 10)
 	var gear = GearItem.new()
+	gear.item_level = difficulty
 
 	var rarity_name = _roll_rarity(difficulty)
 	gear.rarity = GearItem.Rarity[rarity_name]
@@ -125,8 +184,8 @@ func generate(biome: String, difficulty: int) -> GearItem:
 		var base = GENERIC_NAMES[slot_name][randi() % GENERIC_NAMES[slot_name].size()]
 		gear.item_name = RARITY_PREFIXES[rarity_name] + base
 
-	# Roll stats with quality multiplier
-	var stat_result = _roll_stats(slot_name, rarity_name, quality_name)
+	# Roll stats with quality and item level multipliers
+	var stat_result = _roll_stats(slot_name, rarity_name, quality_name, difficulty)
 	gear.stats = stat_result["stats"]
 	gear.stat_ranges = stat_result["ranges"]
 
@@ -164,18 +223,12 @@ func _roll_quality(rarity_name: String) -> String:
 # -------------------------------------------------------
 # Stat Rolling
 # -------------------------------------------------------
-func _roll_stats(slot_name: String, rarity_name: String, quality_name: String) -> Dictionary:
+func _roll_stats(slot_name: String, rarity_name: String, quality_name: String, item_level: int = 5) -> Dictionary:
 	var roll_info = STAT_ROLLS[rarity_name]
-	var available = SLOT_STATS[slot_name].duplicate()
-	available.shuffle()
-	var unique_stats = []
-	for s in available:
-		if s not in unique_stats:
-			unique_stats.append(s)
+	var pool = SLOT_STATS[slot_name]
 
 	var q_mult = QUALITY_MULTIPLIERS.get(quality_name, {"min_mult": 1.0, "max_mult": 1.0})
-	var stats = {}
-	var ranges = {}
+	var lvl_mult = _get_item_level_mult(item_level)
 	var base_count = roll_info["count"]
 
 	# Sharper Eye talent: Common/Rare gear has a chance to roll one extra stat
@@ -183,41 +236,76 @@ func _roll_stats(slot_name: String, rarity_name: String, quality_name: String) -
 		if randf() < 0.25:
 			base_count += 1
 
-	var count = min(base_count, unique_stats.size())
+	# Each of the `count` slots independently picks ANY stat from the pool,
+	# including ones already picked — no dedup. Most rolls naturally land
+	# on a spread of different stats just from random chance, but the same
+	# stat CAN come up multiple times, which is what lets something like a
+	# Legendary roll quadruple HP instead of four different stats.
+	var occurrence_counts = {}   # stat -> how many times picked so far
+	var stats = {}
+	var ranges = {}
 
-	for i in range(count):
-		var stat = unique_stats[i]
-		var rolled_val
-		var range_min
-		var range_max
+	for i in range(base_count):
+		var stat = pool[randi() % pool.size()]
+		var occurrence = occurrence_counts.get(stat, 0)
+		occurrence_counts[stat] = occurrence + 1
+		var stack_mult = _get_stack_mult(occurrence)
 
-		if stat == "crit_damage":
-			var r = CRIT_DMG_RANGES[rarity_name]
-			range_min = r["min"]
-			range_max = int(r["max"] * q_mult["max_mult"])
-			var q_min = int(r["max"] * q_mult["min_mult"]) if quality_name != "NORMAL" else r["min"]
-			rolled_val = randi_range(q_min, range_max)
-		elif stat in FLOAT_STATS:
-			var r = FLOAT_RANGES[stat][rarity_name]
-			range_min = r["min"]
-			range_max = snappedf(r["max"] * q_mult["max_mult"], 0.01)
-			var q_min = snappedf(r["max"] * q_mult["min_mult"], 0.01) if quality_name != "NORMAL" else r["min"]
-			rolled_val = snappedf(randf_range(q_min, range_max), 0.01)
+		var rolled = _roll_single_stat(stat, rarity_name, quality_name, q_mult, lvl_mult, stack_mult)
+
+		if stats.has(stat):
+			# Merge into the existing value/range rather than overwriting
+			stats[stat] += rolled["value"]
+			ranges[stat]["rolled"] = stats[stat]
+			ranges[stat]["max"] += rolled["range_max"]
+			ranges[stat]["stacked"] = occurrence_counts[stat]
 		else:
-			range_min = roll_info["min"]
-			range_max = int(roll_info["max"] * q_mult["max_mult"])
-			var q_min = int(roll_info["max"] * q_mult["min_mult"]) if quality_name != "NORMAL" else roll_info["min"]
-			rolled_val = randi_range(q_min, range_max)
-
-		stats[stat] = rolled_val
-		ranges[stat] = {
-			"rolled": rolled_val,
-			"min": range_min,
-			"max": range_max,
-			"is_quality": quality_name != "NORMAL"
-		}
+			stats[stat] = rolled["value"]
+			ranges[stat] = {
+				"rolled": rolled["value"],
+				"min": rolled["range_min"],
+				"max": rolled["range_max"],
+				"is_quality": quality_name != "NORMAL",
+				"stacked": 1,
+			}
 
 	return {"stats": stats, "ranges": ranges}
+
+# Rolls a single instance of one stat, scaled by quality, item level, and
+# the stacking diminishing-returns multiplier for repeat picks of the
+# same stat on one item.
+func _roll_single_stat(stat: String, rarity_name: String, quality_name: String,
+		q_mult: Dictionary, lvl_mult: float, stack_mult: float) -> Dictionary:
+	var range_min
+	var range_max
+	var rolled_val
+
+	if stat == "crit_damage":
+		var r = CRIT_DMG_RANGES[rarity_name]
+		range_min = int(r["min"] * lvl_mult * stack_mult)
+		range_max = int(r["max"] * q_mult["max_mult"] * lvl_mult * stack_mult)
+		var q_min = int(r["max"] * q_mult["min_mult"] * lvl_mult * stack_mult) if quality_name != "NORMAL" else range_min
+		rolled_val = randi_range(min(q_min, range_max), range_max)
+	elif stat == "thorns":
+		var r = THORNS_RANGES[rarity_name]
+		range_min = int(r["min"] * lvl_mult * stack_mult)
+		range_max = int(r["max"] * q_mult["max_mult"] * lvl_mult * stack_mult)
+		var q_min = int(r["max"] * q_mult["min_mult"] * lvl_mult * stack_mult) if quality_name != "NORMAL" else range_min
+		rolled_val = randi_range(min(q_min, range_max), range_max)
+	elif stat in FLOAT_STATS:
+		var r = FLOAT_RANGES[stat][rarity_name]
+		range_min = snappedf(r["min"] * lvl_mult * stack_mult, 0.01)
+		range_max = snappedf(r["max"] * q_mult["max_mult"] * lvl_mult * stack_mult, 0.01)
+		var q_min = snappedf(r["max"] * q_mult["min_mult"] * lvl_mult * stack_mult, 0.01) if quality_name != "NORMAL" else range_min
+		rolled_val = snappedf(randf_range(min(q_min, range_max), range_max), 0.01)
+	else:
+		var roll_info = STAT_ROLLS[rarity_name]
+		range_min = int(roll_info["min"] * lvl_mult * stack_mult)
+		range_max = int(roll_info["max"] * q_mult["max_mult"] * lvl_mult * stack_mult)
+		var q_min = int(roll_info["max"] * q_mult["min_mult"] * lvl_mult * stack_mult) if quality_name != "NORMAL" else range_min
+		rolled_val = randi_range(min(q_min, range_max), range_max)
+
+	return {"value": rolled_val, "range_min": range_min, "range_max": range_max}
 
 # -------------------------------------------------------
 # Helpers
