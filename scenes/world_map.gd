@@ -39,12 +39,17 @@ const ZONE_NAMES = [
 # Zone data structure
 # { id, name, type, pos, owner, troops, connections, buildings,
 #   dist_from_start, enemy_strength, troop_queue }
+const TRAVEL_SPEED = 120.0  # distance units per turn
+
 var zones: Array = []
 var connections: Array = []   # pairs of zone ids
 var selected_zone_id: int = -1
 var popup_panel: Control = null
 var turn: int = 1
-var pending_attacks: Array = []  # {zone_id, turns_until, force_size}
+var pending_attacks: Array = []   # {zone_id, turns_until, force_size}
+var marching_troops: Array = []   # {troop_name, from_zone, to_zone, turns_left}
+var mandatory_battle_queue: Array = []   # attacks that have triggered and must be resolved before continuing
+var end_turn_button_ref: Button = null
 
 # UI
 var zone_nodes: Array = []
@@ -59,6 +64,11 @@ func _ready() -> void:
 	_apply_pending_battle_result()
 	_draw_map()
 	_refresh_hud()
+
+	# If there are still mandatory battles queued (multiple simultaneous attacks),
+	# force the next one immediately — no map interaction allowed until resolved
+	if mandatory_battle_queue.size() > 0:
+		call_deferred("_launch_next_mandatory_battle")
 
 func _apply_pending_battle_result() -> void:
 	var result = PlayerInventory.last_battle_result
@@ -100,9 +110,17 @@ func _apply_pending_battle_result() -> void:
 			remaining_attacks.append(pa)
 	pending_attacks = remaining_attacks
 
+	# Pop this battle from the mandatory queue if it was one
+	var remaining_queue = []
+	for mb in mandatory_battle_queue:
+		if mb["zone_id"] != zone_id:
+			remaining_queue.append(mb)
+	mandatory_battle_queue = remaining_queue
+
 	PlayerInventory.last_battle_result = ""
 	PlayerInventory.current_battle_zone = -1
 	PlayerInventory.conquering_zone = false
+	PlayerInventory.current_battle_zone_troop_names = []
 
 # -------------------------------------------------------
 # Map Generation
@@ -111,8 +129,7 @@ func _generate_map() -> void:
 	var rng = RandomNumberGenerator.new()
 	rng.seed = PlayerInventory.map_seed
 
-	var diff = PlayerInventory.difficulty
-	var zone_count = {"Easy": 10, "Normal": 13, "Hard": 15, "Nightmare": 15}.get(diff, 13)
+	var zone_count = PlayerInventory.difficulty_settings.get("zone_count", 13)
 
 	# Place starting zone left-center
 	var start_pos = Vector2(120, MAP_H / 2)
@@ -242,8 +259,10 @@ func _build_ui() -> void:
 	end_turn_btn.text = "End Turn >"
 	end_turn_btn.custom_minimum_size = Vector2(120, 32)
 	end_turn_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	end_turn_btn.disabled = mandatory_battle_queue.size() > 0
 	end_turn_btn.pressed.connect(_on_end_turn)
 	hbox.add_child(end_turn_btn)
+	end_turn_button_ref = end_turn_btn
 
 	# Back to management
 	var mgmt_btn = Button.new()
@@ -347,6 +366,16 @@ func _make_zone_node(zone: Dictionary) -> Control:
 			warn.position = Vector2(-8, -36)
 			container.add_child(warn)
 
+	# Incoming troops marker
+	for m in marching_troops:
+		if m["to_zone"] == zone["id"]:
+			var march_lbl = Label.new()
+			march_lbl.text = "→%d" % m["turns_left"]
+			march_lbl.add_theme_font_size_override("font_size", 10)
+			march_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
+			march_lbl.position = Vector2(16, 16)
+			container.add_child(march_lbl)
+
 	return container
 
 # -------------------------------------------------------
@@ -404,6 +433,19 @@ func _open_popup(zone: Dictionary) -> void:
 	troop_lbl.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
 	troop_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
 	vbox.add_child(troop_lbl)
+
+	# Incoming troops
+	var incoming = []
+	for m in marching_troops:
+		if m["to_zone"] == zone["id"]:
+			incoming.append("%s (%d turn%s)" % [m["troop_name"], m["turns_left"], "s" if m["turns_left"] != 1 else ""])
+	if incoming.size() > 0:
+		var incoming_lbl = Label.new()
+		incoming_lbl.text = "Incoming: " + ", ".join(incoming)
+		incoming_lbl.add_theme_font_size_override("font_size", 10)
+		incoming_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
+		incoming_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
+		vbox.add_child(incoming_lbl)
 
 	# Buildings
 	var build_lbl = Label.new()
@@ -481,6 +523,18 @@ func _on_conquer(zone_id: int) -> void:
 	PlayerInventory.current_battle_zone = zone_id
 	PlayerInventory.current_attack_force = max(0.5, zones[zone_id]["enemy_strength"] * 0.3)
 	PlayerInventory.conquering_zone = true
+
+	# Conquering uses troops from the nearest adjacent zone you already own,
+	# since the target zone itself has no player troops stationed yet.
+	var staging_zone_id = -1
+	for conn_id in zones[zone_id]["connections"]:
+		if zones[conn_id]["owner"] == "player":
+			staging_zone_id = conn_id
+			break
+	if staging_zone_id == -1:
+		staging_zone_id = 0  # fallback to home city
+
+	PlayerInventory.set_battle_roster_from_zone_troops(zones[staging_zone_id]["troops"])
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
 
@@ -541,15 +595,48 @@ func _open_move_troops_panel(target_zone_id: int) -> void:
 	vbox.add_child(close_btn)
 
 func _on_assign_troop(troop_name: String, zone_id: int) -> void:
-	# Remove from other zones first
+	# Find which zone this troop is currently in (if any)
+	var from_zone_id = -1
 	for z in zones:
-		z["troops"].erase(troop_name)
-	# Add to target zone
-	if troop_name not in zones[zone_id]["troops"]:
+		if troop_name in z["troops"]:
+			from_zone_id = z["id"]
+			break
+
+	# Cancel any existing march for this troop
+	for m in marching_troops.duplicate():
+		if m["troop_name"] == troop_name:
+			marching_troops.erase(m)
+
+	if from_zone_id == zone_id:
+		_close_popup()
+		_notify("%s is already stationed there." % troop_name)
+		return
+
+	# Calculate travel time based on distance
+	var travel_turns = 0
+	if from_zone_id >= 0:
+		var dist = zones[from_zone_id]["pos"].distance_to(zones[zone_id]["pos"])
+		travel_turns = max(1, int(ceil(dist / TRAVEL_SPEED)))
+	else:
+		travel_turns = 1  # unassigned troop, quick mobilization
+
+	if travel_turns <= 1 and from_zone_id >= 0:
+		# Close enough — arrives same turn
+		zones[from_zone_id]["troops"].erase(troop_name)
 		zones[zone_id]["troops"].append(troop_name)
+		_notify("%s stationed at %s" % [troop_name, zones[zone_id]["name"]])
+	else:
+		# Remove from origin immediately (troop is "marching")
+		if from_zone_id >= 0:
+			zones[from_zone_id]["troops"].erase(troop_name)
+		marching_troops.append({
+			"troop_name": troop_name, "from_zone": from_zone_id,
+			"to_zone": zone_id, "turns_left": travel_turns
+		})
+		_notify("%s marching to %s \u2014 arrives in %d turn(s)" % [troop_name, zones[zone_id]["name"], travel_turns])
+
 	_close_popup()
 	_draw_map()
-	_notify("%s stationed at %s" % [troop_name, zones[zone_id]["name"]])
 
 # -------------------------------------------------------
 # Build Panel
@@ -622,11 +709,23 @@ func _on_build_selected(building_name: String, zone_id: int) -> void:
 func _on_end_turn() -> void:
 	_close_popup()
 	turn += 1
+	_process_marching_troops()
 	_process_enemy_expansion()
 	_process_pending_attacks()
 	_maybe_spawn_attack()
 	_refresh_hud()
 	_draw_map()
+
+func _process_marching_troops() -> void:
+	var arrived = []
+	for m in marching_troops:
+		m["turns_left"] -= 1
+		if m["turns_left"] <= 0:
+			zones[m["to_zone"]]["troops"].append(m["troop_name"])
+			_notify("%s arrived at %s" % [m["troop_name"], zones[m["to_zone"]]["name"]])
+			arrived.append(m)
+	for a in arrived:
+		marching_troops.erase(a)
 
 func _process_enemy_expansion() -> void:
 	# The wilds don't expand — neutral zones stay neutral until conquered
@@ -637,13 +736,19 @@ func _maybe_spawn_attack() -> void:
 	var diff_settings = PlayerInventory.difficulty_settings
 	var attack_chance = diff_settings.get("attack_frequency", 0.6) * 0.25
 	var warning = int(diff_settings.get("warning_turns", 3))
+	var max_simultaneous = int(diff_settings.get("max_simultaneous_attacks", 1))
 
+	if pending_attacks.size() >= max_simultaneous: return
 	if randf() > attack_chance: return
 
 	# Attacks come from the wilds — any player zone adjacent to a neutral zone
 	var targets = []
 	for zone in zones:
 		if zone["owner"] != "player": continue
+		var already_pending = false
+		for pa in pending_attacks:
+			if pa["zone_id"] == zone["id"]: already_pending = true
+		if already_pending: continue
 		for conn_id in zone["connections"]:
 			if zones[conn_id]["owner"] == "neutral":
 				targets.append(zone["id"])
@@ -652,10 +757,6 @@ func _maybe_spawn_attack() -> void:
 	if targets.is_empty(): return
 
 	var target_id = targets[randi() % targets.size()]
-	# Check not already pending
-	for pa in pending_attacks:
-		if pa["zone_id"] == target_id: return
-
 	var force = diff_settings.get("force_size", 1.0)
 	pending_attacks.append({
 		"zone_id": target_id,
@@ -664,21 +765,34 @@ func _maybe_spawn_attack() -> void:
 	})
 	_notify("⚠ Creatures from the wilds will attack %s in %d turns!" % [zones[target_id]["name"], warning])
 
+	# Nightmare/Hard can roll a second attack same turn
+	if pending_attacks.size() < max_simultaneous and randf() < attack_chance * 0.5:
+		_maybe_spawn_attack()
+
 func _process_pending_attacks() -> void:
 	var remaining = []
+	var triggered = []
 	for attack in pending_attacks:
 		attack["turns_until"] -= 1
 		if attack["turns_until"] <= 0:
-			_trigger_attack(attack)
+			triggered.append(attack)
 		else:
 			remaining.append(attack)
 	pending_attacks = remaining
 
-func _trigger_attack(attack: Dictionary) -> void:
+	if triggered.size() > 0:
+		mandatory_battle_queue.append_array(triggered)
+		_launch_next_mandatory_battle()
+
+func _launch_next_mandatory_battle() -> void:
+	if mandatory_battle_queue.is_empty(): return
+	var attack = mandatory_battle_queue[0]
 	var zone = zones[attack["zone_id"]]
-	_notify("⚔ %s is under attack from the wilds!" % zone["name"])
+	_notify("⚔ %s is under attack from the wilds! You must defend it now." % zone["name"])
 	PlayerInventory.current_battle_zone = attack["zone_id"]
 	PlayerInventory.current_attack_force = attack["force_size"]
+	PlayerInventory.conquering_zone = false
+	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
 

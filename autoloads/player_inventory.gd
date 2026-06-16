@@ -36,6 +36,21 @@ var last_battle_was_conquest: bool = false
 # Tutorial state
 var tutorial_complete: bool = false
 
+# Snapshot of troop names eligible for the current/next battle.
+# Set by world_map right before launching defense_scene so the battle
+# only offers troops actually stationed at (or staged near) that zone.
+var current_battle_zone_troop_names: Array = []
+
+func set_battle_roster_from_zone_troops(troop_names: Array) -> void:
+	current_battle_zone_troop_names = troop_names.duplicate()
+
+func get_zone_troop_names(zone_id: int) -> Array:
+	# zone_id is unused here since world_map already resolved the
+	# correct troop list before the scene change; this just returns
+	# the snapshot. Kept as a function (not a raw var read) so the
+	# lookup logic can be made zone-aware later without touching callers.
+	return current_battle_zone_troop_names
+
 # -------------------------------------------------------
 # Talent hooks for gear quality system
 # Updated by talent tree purchases

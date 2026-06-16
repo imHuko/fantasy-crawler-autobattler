@@ -18,6 +18,7 @@ const C_TROOP_K  = Color(0.30, 0.60, 1.00)   # Knight - blue
 const C_TROOP_A  = Color(0.20, 0.80, 0.30)   # Archer - green
 const C_TROOP_M  = Color(0.80, 0.30, 0.90)   # Mage - purple
 const C_TROOP_H  = Color(1.00, 0.80, 0.20)   # Healer - gold
+const C_TROOP_R  = Color(0.85, 0.15, 0.35)   # Rogue - crimson
 const C_ENEMY    = Color(0.85, 0.25, 0.20)
 const C_PROJ_T   = Color(0.60, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.50, 0.10)
@@ -26,6 +27,7 @@ const C_HEAL     = Color(0.40, 1.00, 0.40)
 const TROOP_COLORS = {
 	"KNIGHT": C_TROOP_K, "ARCHER": C_TROOP_A,
 	"MAGE":   C_TROOP_M, "HEALER": C_TROOP_H,
+	"ROGUE":  C_TROOP_R,
 }
 
 const WAVE_INTERVAL   = 8.0    # seconds between waves
@@ -158,9 +160,10 @@ func _build_ui() -> void:
 	roster_hbox.add_theme_constant_override("separation", 6)
 	roster_vbox.add_child(roster_hbox)
 
-	# Build a slot button for each troop in roster
-	for i in range(PlayerInventory.troop_roster.size()):
-		var troop: TroopData = PlayerInventory.troop_roster[i]
+	# Build a slot button for each troop available to this battle
+	var available_troops = _get_battle_roster()
+	for i in range(available_troops.size()):
+		var troop: TroopData = available_troops[i]
 		var eff = troop.get_effective_stats()
 		var col = TROOP_COLORS.get(troop.get_type_name(), Color.WHITE)
 
@@ -176,6 +179,29 @@ func _build_ui() -> void:
 		btn.pressed.connect(_on_roster_selected.bind(i))
 		roster_hbox.add_child(btn)
 		roster_slots.append({"troop": troop, "btn": btn, "placed": false})
+
+	if available_troops.is_empty():
+		var warn = Label.new()
+		warn.text = "No troops stationed here! You'll have to fight with whatever you brought \\u2014 nothing."
+		warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
+		roster_hbox.add_child(warn)
+
+# Returns the troops eligible for this battle.
+# If a zone is set, only troops stationed at that zone (by name) can be placed.
+# Falls back to the full roster for battles with no zone context (e.g. quick dungeon test).
+func _get_battle_roster() -> Array:
+	if battle_zone_id < 0:
+		return PlayerInventory.troop_roster.duplicate()
+
+	var zone_troop_names = PlayerInventory.get_zone_troop_names(battle_zone_id)
+	if zone_troop_names.is_empty():
+		return []
+
+	var result = []
+	for troop in PlayerInventory.troop_roster:
+		if troop.troop_name in zone_troop_names:
+			result.append(troop)
+	return result
 
 func _build_field() -> void:
 	field_node = Node2D.new()
@@ -469,6 +495,14 @@ func _process_troops(delta: float) -> void:
 					if nearest:
 						_damage_enemy(nearest, t["attack"])
 						t["attack_t"] = t["attack_interval"]
+			"ROGUE":
+				# Fast melee striker — short range but hits hard and fast, no taunt
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var nearest = _nearest_enemy(t["pos"], 90)
+					if nearest:
+						_damage_enemy(nearest, int(t["attack"] * 1.3))
+						t["attack_t"] = t["attack_interval"] * 0.6
 			"ARCHER":
 				# Ranged — shoots nearest enemy anywhere on the field
 				t["attack_t"] -= delta
