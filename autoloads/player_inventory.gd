@@ -13,6 +13,21 @@ var unlocked_troop_slots: int = 3
 var current_stage: int = 1
 
 # -------------------------------------------------------
+# Talent hooks for gear quality system
+# Updated by talent tree purchases
+# -------------------------------------------------------
+var talents = {
+	"awakened_unlock":             false,
+	"awakened_chance_epic":        0.0,
+	"awakened_chance_legendary":   0.0,
+	"ascendant_unlock":            false,
+	"ascendant_chance_epic":       0.0,
+	"ascendant_chance_legendary":  0.0,
+	"transcendent_unlock":         false,
+	"transcendent_chance":         0.0,
+}
+
+# -------------------------------------------------------
 # Gear Management
 # -------------------------------------------------------
 

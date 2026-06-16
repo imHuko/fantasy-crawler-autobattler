@@ -12,6 +12,7 @@ func save_game() -> void:
 		"unlocked_slots": PlayerInventory.unlocked_troop_slots,
 		"gear_count": PlayerInventory.gear_inventory.size(),
 		"troop_count": PlayerInventory.troop_roster.size(),
+		"talents": PlayerInventory.talents,
 		"gear": [],
 		"troops": [],
 	}
@@ -22,7 +23,9 @@ func save_game() -> void:
 			"name": gear.item_name,
 			"rarity": gear.rarity,
 			"slot": gear.slot,
+			"quality": gear.quality,
 			"stats": gear.stats,
+			"stat_ranges": gear.stat_ranges,
 			"set_name": gear.set_name,
 		})
 
@@ -69,6 +72,10 @@ func load_game() -> void:
 
 	PlayerInventory.current_stage = data.get("stage", 1)
 	PlayerInventory.unlocked_troop_slots = data.get("unlocked_slots", 3)
+	if data.has("talents"):
+		for key in data["talents"]:
+			if PlayerInventory.talents.has(key):
+				PlayerInventory.talents[key] = data["talents"][key]
 	PlayerInventory.gear_inventory.clear()
 	PlayerInventory.troop_roster.clear()
 
@@ -128,9 +135,11 @@ func new_game() -> void:
 
 func _dict_to_gear(d: Dictionary) -> GearItem:
 	var gear = GearItem.new()
-	gear.item_name = d.get("name", "Unknown")
-	gear.rarity    = int(d.get("rarity", 0))
-	gear.slot      = int(d.get("slot", 0))
-	gear.stats     = d.get("stats", {})
-	gear.set_name  = d.get("set_name", "")
+	gear.item_name   = d.get("name", "Unknown")
+	gear.rarity      = int(d.get("rarity", 0))
+	gear.slot        = int(d.get("slot", 0))
+	gear.quality     = int(d.get("quality", 0))
+	gear.stats       = d.get("stats", {})
+	gear.stat_ranges = d.get("stat_ranges", {})
+	gear.set_name    = d.get("set_name", "")
 	return gear

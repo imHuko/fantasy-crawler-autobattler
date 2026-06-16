@@ -21,6 +21,8 @@ const SLOT_ICONS = {
 var selected_troop: TroopData = null
 var selected_slot: String = ""
 var selected_slot_button: Button = null
+var show_suggestions: bool = true
+var compare_panel: PanelContainer = null
 
 var troop_list: VBoxContainer
 var gear_list: VBoxContainer
@@ -46,12 +48,31 @@ func _build_ui() -> void:
 	outer.add_theme_constant_override("separation", 6)
 	add_child(outer)
 
-	# Title
+	# Title row
+	var title_hbox = HBoxContainer.new()
+	outer.add_child(title_hbox)
+
 	var title = Label.new()
 	title.text = "GEAR MANAGEMENT"
 	title.add_theme_font_size_override("font_size", 22)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	outer.add_child(title)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_hbox.add_child(title)
+
+	var suggest_btn = Button.new()
+	suggest_btn.text = "Suggestions: ON"
+	suggest_btn.add_theme_font_size_override("font_size", 11)
+	suggest_btn.pressed.connect(func():
+		show_suggestions = !show_suggestions
+		suggest_btn.text = "Suggestions: " + ("ON" if show_suggestions else "OFF")
+		_populate_gear())
+	title_hbox.add_child(suggest_btn)
+
+	var alt_hint = Label.new()
+	alt_hint.text = " Hold Alt on gear to see stat ranges"
+	alt_hint.add_theme_font_size_override("font_size", 10)
+	alt_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+	outer.add_child(alt_hint)
 
 	# Main split: left troops, right inventory
 	var hbox = HBoxContainer.new()
@@ -241,26 +262,66 @@ func _refresh_slot_button(btn: Button, troop: TroopData, slot_key: String) -> vo
 func _make_gear_button(gear: GearItem) -> Button:
 	var btn = Button.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 48)
+	btn.custom_minimum_size = Vector2(0, 56)
 	btn.set_meta("gear", gear)
 
-	var stat_str = ""
+	btn.text = _gear_display_text(gear, false)
+	btn.add_theme_color_override("font_color", gear.get_display_color())
+	btn.pressed.connect(_on_gear_selected.bind(gear))
+
+	# Alt held = show stat ranges
+	btn.mouse_entered.connect(_on_gear_hover.bind(gear, btn))
+	btn.mouse_exited.connect(_on_gear_unhover.bind(gear, btn))
+	return btn
+
+func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
+	var quality_suffix = gear.get_quality_suffix()
+	var header = "[%s] %s%s" % [gear.get_rarity_name()[0], gear.item_name, quality_suffix]
+	var slot_line = gear.get_slot_name()
+	if gear.set_name != "":
+		slot_line += " | Set: " + gear.set_name
+
+	var stat_lines = ""
 	for stat in gear.stats:
 		var val = gear.stats[stat]
-		if stat == "crit_chance":
-			stat_str += " crit:%.0f%%" % (val * 100)
+		var stat_str = ""
+		if stat in ["crit_chance", "attack_speed"]:
+			stat_str = "%s: %.0f%%" % [stat.replace("_", " "), val * 100]
+		elif stat == "crit_damage":
+			stat_str = "crit dmg: +%d%%" % val
 		else:
-			stat_str += " %s:%d" % [stat.left(3), val]
+			stat_str = "%s: %d" % [stat.replace("_", " "), val]
 
-	btn.text = "[%s] %s\n%s |%s" % [
-		gear.get_rarity_name()[0],
-		gear.item_name,
-		gear.get_slot_name(),
-		stat_str
-	]
-	btn.add_theme_color_override("font_color", RARITY_COLORS[gear.get_rarity_name()])
-	btn.pressed.connect(_on_gear_selected.bind(gear))
-	return btn
+		if show_ranges and gear.stat_ranges.has(stat):
+			var r = gear.stat_ranges[stat]
+			var is_q = r.get("is_quality", false)
+			if stat in ["crit_chance", "attack_speed"]:
+				stat_str += " [%.0f-%.0f%%]%s" % [r["min"]*100, r["max"]*100, " ✦" if is_q else ""]
+			else:
+				stat_str += " [%s-%s]%s" % [str(r["min"]), str(r["max"]), " ✦" if is_q else ""]
+
+		stat_lines += "
+  " + stat_str
+
+	# Unit suggestions
+	var suggest_str = ""
+	if show_suggestions:
+		var suggestions = gear.get_suggested_units()
+		if suggestions.size() > 0:
+			suggest_str = "\n  » " + " / ".join(suggestions)
+
+	return header + "\n" + slot_line + stat_lines + suggest_str
+
+func _on_gear_hover(gear: GearItem, btn: Button) -> void:
+	var show_ranges = Input.is_key_pressed(KEY_ALT)
+	btn.text = _gear_display_text(gear, show_ranges)
+	# Show compare if a slot is selected
+	if selected_troop != null and selected_slot != "":
+		_show_compare(gear)
+
+func _on_gear_unhover(gear: GearItem, btn: Button) -> void:
+	btn.text = _gear_display_text(gear, false)
+	_hide_compare()
 
 func _on_slot_pressed(btn: Button, troop: TroopData, slot_key: String) -> void:
 	# Clicking same slot again = deselect
@@ -340,6 +401,95 @@ func _update_set_bonuses() -> void:
 
 func _update_status(msg: String) -> void:
 	status_label.text = msg
+
+func _show_compare(hover_gear: GearItem) -> void:
+	_hide_compare()
+	if selected_troop == null or selected_slot == "": return
+	var equipped: GearItem = selected_troop.equipped_gear[selected_slot]
+	if equipped == null: return
+	if hover_gear.get_slot_name() != selected_slot: return
+
+	compare_panel = PanelContainer.new()
+	compare_panel.position = Vector2(get_viewport().size.x / 2 - 160, 80)
+	compare_panel.custom_minimum_size = Vector2(320, 0)
+	add_child(compare_panel)
+
+	var vbox = VBoxContainer.new()
+	compare_panel.add_child(vbox)
+
+	var title = Label.new()
+	title.text = "COMPARE"
+	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	vbox.add_child(title)
+
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 16)
+	vbox.add_child(hbox)
+
+	# Equipped column
+	var left_vbox = VBoxContainer.new()
+	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(left_vbox)
+	var left_title = Label.new()
+	left_title.text = "Equipped"
+	left_title.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	left_vbox.add_child(left_title)
+	var left_name = Label.new()
+	left_name.text = equipped.item_name + equipped.get_quality_suffix()
+	left_name.add_theme_color_override("font_color", equipped.get_display_color())
+	left_name.autowrap_mode = TextServer.AUTOWRAP_WORD
+	left_vbox.add_child(left_name)
+
+	# New item column
+	var right_vbox = VBoxContainer.new()
+	right_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(right_vbox)
+	var right_title = Label.new()
+	right_title.text = "New Item"
+	right_title.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	right_vbox.add_child(right_title)
+	var right_name = Label.new()
+	right_name.text = hover_gear.item_name + hover_gear.get_quality_suffix()
+	right_name.add_theme_color_override("font_color", hover_gear.get_display_color())
+	right_name.autowrap_mode = TextServer.AUTOWRAP_WORD
+	right_vbox.add_child(right_name)
+
+	# Stat diffs
+	var all_stats = []
+	for s in equipped.stats: if s not in all_stats: all_stats.append(s)
+	for s in hover_gear.stats: if s not in all_stats: all_stats.append(s)
+
+	for stat in all_stats:
+		var old_val = equipped.stats.get(stat, 0)
+		var new_val = hover_gear.stats.get(stat, 0)
+		var diff = new_val - old_val
+
+		var left_lbl = Label.new()
+		left_lbl.add_theme_font_size_override("font_size", 11)
+		if stat in ["crit_chance", "attack_speed"]:
+			left_lbl.text = "%s: %.0f%%" % [stat.replace("_"," "), old_val * 100]
+		else:
+			left_lbl.text = "%s: %s" % [stat.replace("_"," "), str(old_val)]
+		left_vbox.add_child(left_lbl)
+
+		var right_lbl = Label.new()
+		right_lbl.add_theme_font_size_override("font_size", 11)
+		var diff_str = ""
+		if diff > 0:   diff_str = " (▲%s)" % str(snappedf(diff, 0.01) if stat in ["crit_chance","attack_speed"] else diff)
+		elif diff < 0: diff_str = " (▼%s)" % str(snappedf(-diff, 0.01) if stat in ["crit_chance","attack_speed"] else -diff)
+		if stat in ["crit_chance", "attack_speed"]:
+			right_lbl.text = "%s: %.0f%%%s" % [stat.replace("_"," "), new_val * 100, diff_str]
+		else:
+			right_lbl.text = "%s: %s%s" % [stat.replace("_"," "), str(new_val), diff_str]
+		var col = Color(0.3,0.9,0.3) if diff > 0 else (Color(0.9,0.3,0.3) if diff < 0 else Color(0.8,0.8,0.8))
+		right_lbl.add_theme_color_override("font_color", col)
+		right_vbox.add_child(right_lbl)
+
+func _hide_compare() -> void:
+	if compare_panel and is_instance_valid(compare_panel):
+		compare_panel.queue_free()
+		compare_panel = null
 
 func _short_name(full_name: String) -> String:
 	if full_name.length() <= 10:
