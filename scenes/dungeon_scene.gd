@@ -381,8 +381,8 @@ func _log(msg: String) -> void:
 func _rarity_color(rarity_name: String) -> Color:
 	match rarity_name:
 		"COMMON":    return Color(0.75, 0.75, 0.75)
-		"UNCOMMON":  return Color(0.25, 0.85, 0.25)
 		"RARE":      return Color(0.25, 0.50, 1.00)
+		"EPIC":      return Color(0.65, 0.25, 0.90)
 		"LEGENDARY": return Color(1.00, 0.65, 0.10)
 	return Color.WHITE
 

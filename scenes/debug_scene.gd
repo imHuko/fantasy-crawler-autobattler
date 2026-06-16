@@ -4,7 +4,7 @@ func _ready() -> void:
 	print("\n========== DEBUG SCENE START ==========\n")
 	_test_gear_items()
 	_test_troop_data()
-not	_test_inventory()
+	_test_inventory()
 	print("\n========== DEBUG SCENE END ==========\n")
 
 func _test_gear_items() -> void:
@@ -48,14 +48,14 @@ func _test_troop_data() -> void:
 	# Equip a weapon and armor
 	var sword = GearItem.new()
 	sword.item_name = "Iron Sword"
-	sword.rarity = GearItem.Rarity.UNCOMMON
+	sword.rarity = GearItem.Rarity.RARE
 	sword.slot = GearItem.Slot.WEAPON
 	sword.stats = { "attack": 12, "crit_chance": 0.08 }
 	sword.set_name = "Iron Oath"
 
 	var armor = GearItem.new()
 	armor.item_name = "Iron Oath Plate"
-	armor.rarity = GearItem.Rarity.UNCOMMON
+	armor.rarity = GearItem.Rarity.RARE
 	armor.slot = GearItem.Slot.ARMOR
 	armor.stats = { "defense": 10, "hp": 30 }
 	armor.set_name = "Iron Oath"

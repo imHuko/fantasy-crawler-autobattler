@@ -6,8 +6,8 @@ extends Control
 
 const RARITY_COLORS = {
 	"COMMON":    Color(0.75, 0.75, 0.75),
-	"UNCOMMON":  Color(0.25, 0.85, 0.25),
 	"RARE":      Color(0.25, 0.50, 1.00),
+	"EPIC":      Color(0.65, 0.25, 0.90),
 	"LEGENDARY": Color(1.00, 0.65, 0.10),
 }
 
@@ -21,8 +21,11 @@ const SLOT_ICONS = {
 var selected_troop: TroopData = null
 var selected_slot: String = ""
 var selected_slot_button: Button = null
+var selected_gear: GearItem = null
+var selected_gear_button: Button = null
 var show_suggestions: bool = true
 var compare_panel: PanelContainer = null
+var all_slot_buttons: Array = []   # every gear slot button across every troop card, for cross-card highlighting
 
 var troop_list: VBoxContainer
 var gear_list: VBoxContainer
@@ -167,17 +170,6 @@ func _build_ui() -> void:
 		get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn"))
 	dungeon_hbox.add_child(action_btn)
 
-	var defense_btn = Button.new()
-	defense_btn.text = "⚔ Defend Base"
-	defense_btn.custom_minimum_size = Vector2(200, 44)
-	defense_btn.add_theme_font_size_override("font_size", 15)
-	defense_btn.add_theme_color_override("font_color", Color(1, 0.5, 0.3))
-	defense_btn.tooltip_text = "Place troops and defend against waves"
-	defense_btn.pressed.connect(func():
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/defense_scene.tscn"))
-	dungeon_hbox.add_child(defense_btn)
-
 	# --- STATUS BAR ---
 	var status_panel = PanelContainer.new()
 	outer.add_child(status_panel)
@@ -191,6 +183,7 @@ func _build_ui() -> void:
 func _populate_troops() -> void:
 	for child in troop_list.get_children():
 		child.queue_free()
+	all_slot_buttons.clear()
 
 	PlayerInventory.ensure_hero_exists()
 	var hero_label = Label.new()
@@ -223,7 +216,24 @@ func _populate_gear() -> void:
 		gear_list.add_child(empty)
 		return
 
-	for gear in PlayerInventory.gear_inventory:
+	var gear_to_show = PlayerInventory.gear_inventory.duplicate()
+
+	# Determine which slot type to prioritize: either a directly selected
+	# slot, or the slot type of currently selected gear (so clicking a ring
+	# first also bubbles other rings to the top of the list).
+	var priority_slot = selected_slot
+	if priority_slot == "" and selected_gear != null:
+		priority_slot = selected_gear.get_slot_name()
+
+	if priority_slot != "":
+		gear_to_show.sort_custom(func(a, b):
+			var a_match = a.get_slot_name() == priority_slot
+			var b_match = b.get_slot_name() == priority_slot
+			if a_match and not b_match: return true
+			if b_match and not a_match: return false
+			return false)
+
+	for gear in gear_to_show:
 		gear_list.add_child(_make_gear_button(gear))
 
 func _make_troop_card(troop: TroopData) -> PanelContainer:
@@ -256,14 +266,18 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	vbox.add_child(slots_hbox)
 
 	for slot_key in ["WEAPON", "ARMOR", "RING", "ACCESSORY"]:
-		var btn = Button.new()
+		var btn = DroppableSlotButton.new()
 		btn.custom_minimum_size = Vector2(80, 50)
 		btn.set_meta("troop", troop)
 		btn.set_meta("slot", slot_key)
 		btn.set_meta("stats_label", stats_label)
+		btn.troop_ref = troop
+		btn.slot_key_ref = slot_key
+		btn.on_drop_callback = _equip_gear_to_slot
 		_refresh_slot_button(btn, troop, slot_key)
 		btn.pressed.connect(_on_slot_pressed.bind(btn, troop, slot_key))
 		slots_hbox.add_child(btn)
+		all_slot_buttons.append(btn)
 
 	return card
 
@@ -288,14 +302,19 @@ func _refresh_slot_button(btn: Button, troop: TroopData, slot_key: String) -> vo
 		btn.add_theme_color_override("font_color", Color(0.45, 0.45, 0.45))
 
 func _make_gear_button(gear: GearItem) -> Button:
-	var btn = Button.new()
+	var btn = DraggableGearButton.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn.custom_minimum_size = Vector2(0, 56)
 	btn.set_meta("gear", gear)
+	btn.gear_item = gear
 
 	btn.text = _gear_display_text(gear, false)
-	btn.add_theme_color_override("font_color", gear.get_display_color())
-	btn.pressed.connect(_on_gear_selected.bind(gear))
+	if selected_gear == gear:
+		btn.add_theme_color_override("font_color", Color(1, 1, 0))
+		selected_gear_button = btn
+	else:
+		btn.add_theme_color_override("font_color", gear.get_display_color())
+	btn.pressed.connect(_on_gear_selected.bind(gear, btn))
 
 	# Alt held = show stat ranges
 	btn.mouse_entered.connect(_on_gear_hover.bind(gear, btn))
@@ -352,54 +371,82 @@ func _on_gear_unhover(gear: GearItem, btn: Button) -> void:
 	_hide_compare()
 
 func _on_slot_pressed(btn: Button, troop: TroopData, slot_key: String) -> void:
-	# Clicking same slot again = deselect
+	# Clicking the same slot again = deselect
 	if selected_slot_button == btn:
 		_clear_selection()
 		_update_status("Selection cleared.")
 		return
 
-	# Deselect previous
-	if selected_slot_button:
-		_refresh_slot_button(selected_slot_button,
-			selected_slot_button.get_meta("troop"),
-			selected_slot_button.get_meta("slot"))
+	# If gear was already selected first, this completes the equip directly
+	if selected_gear != null:
+		if selected_gear.get_slot_name() != slot_key:
+			_update_status("Wrong slot! That's a %s piece — you clicked a %s slot." % [selected_gear.get_slot_name(), slot_key])
+			return
+		_equip_gear_to_slot(selected_gear, troop, slot_key, btn)
+		return
 
+	# Otherwise, just select this slot and wait for a gear pick
+	_clear_selection()
 	selected_troop = troop
 	selected_slot = slot_key
 	selected_slot_button = btn
 	btn.add_theme_color_override("font_color", Color(1, 1, 0))
 	_update_status("Selected %s slot on %s — now pick a %s from inventory." % [slot_key, troop.troop_name, slot_key])
+	_populate_gear()   # re-sort gear list to prioritize this slot type
 
-func _on_gear_selected(gear: GearItem) -> void:
-	if selected_troop == null:
-		_update_status("Pick a gear slot on a troop first!")
+func _on_gear_selected(gear: GearItem, btn: Button) -> void:
+	# Clicking the same gear again = deselect.
+	# Compare by the GearItem itself, not the button — the button gets
+	# destroyed and recreated every time _populate_gear() runs, so a stale
+	# button reference would never match after the list refreshes.
+	if selected_gear == gear:
+		_clear_selection()
+		_update_status("Selection cleared.")
 		return
 
-	if gear.get_slot_name() != selected_slot:
-		_update_status("Wrong slot! That's a %s piece — you selected a %s slot." % [gear.get_slot_name(), selected_slot])
+	# If a slot was already selected first, this completes the equip directly
+	if selected_troop != null and selected_slot != "":
+		if gear.get_slot_name() != selected_slot:
+			_update_status("Wrong slot! That's a %s piece — you selected a %s slot." % [gear.get_slot_name(), selected_slot])
+			return
+		_equip_gear_to_slot(gear, selected_troop, selected_slot, selected_slot_button)
 		return
 
+	# Otherwise, select this gear and highlight every matching slot across all troops
+	_clear_selection()
+	selected_gear = gear
+	selected_gear_button = btn
+	btn.add_theme_color_override("font_color", Color(1, 1, 0))
+
+	var matching_slot = gear.get_slot_name()
+	var highlighted = 0
+	for slot_btn in all_slot_buttons:
+		if slot_btn.get_meta("slot") == matching_slot:
+			slot_btn.add_theme_color_override("font_color", Color(0.5, 1.0, 0.5))
+			highlighted += 1
+
+	_update_status("Selected %s — highlighted %d matching %s slot(s). Click one to equip." % [gear.item_name, highlighted, matching_slot])
+	_populate_gear()
+
+# Shared equip logic used regardless of which was clicked first (slot or gear)
+func _equip_gear_to_slot(gear: GearItem, troop: TroopData, slot_key: String, slot_btn: Button) -> void:
 	# Return old gear to inventory
-	var old_gear: GearItem = selected_troop.equipped_gear[selected_slot]
+	var old_gear: GearItem = troop.equipped_gear[slot_key]
 	if old_gear:
 		PlayerInventory.add_gear(old_gear)
 
 	# Equip new gear
-	selected_troop.equip(gear)
+	troop.equip(gear)
 	PlayerInventory.remove_gear(gear)
 
-	_update_status("Equipped %s to %s!" % [gear.item_name, selected_troop.troop_name])
+	_update_status("Equipped %s to %s!" % [gear.item_name, troop.troop_name])
 
-	# Refresh slot button and stats
-	var prev_btn = selected_slot_button
-	var prev_troop = selected_troop
-	var prev_slot = selected_slot
 	_clear_selection()
-	_refresh_slot_button(prev_btn, prev_troop, prev_slot)
+	_refresh_slot_button(slot_btn, troop, slot_key)
 
 	# Refresh stats label on that card
-	var stats_label = prev_btn.get_meta("stats_label")
-	_refresh_stats_text(stats_label, prev_troop)
+	var stats_label = slot_btn.get_meta("stats_label")
+	_refresh_stats_text(stats_label, troop)
 
 	_populate_gear()
 	_update_set_bonuses()
@@ -409,9 +456,15 @@ func _clear_selection() -> void:
 		_refresh_slot_button(selected_slot_button,
 			selected_slot_button.get_meta("troop"),
 			selected_slot_button.get_meta("slot"))
+	# Un-highlight any cross-card matched slots
+	for slot_btn in all_slot_buttons:
+		if slot_btn != selected_slot_button:
+			_refresh_slot_button(slot_btn, slot_btn.get_meta("troop"), slot_btn.get_meta("slot"))
 	selected_troop = null
 	selected_slot = ""
 	selected_slot_button = null
+	selected_gear = null
+	selected_gear_button = null
 
 func _update_set_bonuses() -> void:
 	var counts = PlayerInventory.get_global_set_counts()

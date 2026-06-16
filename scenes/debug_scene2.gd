@@ -9,7 +9,7 @@ func _ready() -> void:
 
 func _test_rarity_distribution() -> void:
 	print(">> Rarity distribution at difficulty 5 (100 rolls):")
-	var counts = { "COMMON": 0, "UNCOMMON": 0, "RARE": 0, "LEGENDARY": 0 }
+	var counts = { "COMMON": 0, "RARE": 0, "EPIC": 0, "LEGENDARY": 0 }
 	for i in range(100):
 		var gear = GearGenerator.generate("forest_ruins", 5)
 		counts[gear.get_rarity_name()] += 1
