@@ -176,7 +176,14 @@ func _roll_stats(slot_name: String, rarity_name: String, quality_name: String) -
 	var q_mult = QUALITY_MULTIPLIERS.get(quality_name, {"min_mult": 1.0, "max_mult": 1.0})
 	var stats = {}
 	var ranges = {}
-	var count = min(roll_info["count"], unique_stats.size())
+	var base_count = roll_info["count"]
+
+	# Sharper Eye talent: Common/Rare gear has a chance to roll one extra stat
+	if rarity_name in ["COMMON", "RARE"] and PlayerInventory.unlocked_talents.get("gear_sharper_eye", false):
+		if randf() < 0.25:
+			base_count += 1
+
+	var count = min(base_count, unique_stats.size())
 
 	for i in range(count):
 		var stat = unique_stats[i]
@@ -231,12 +238,17 @@ func _roll_slot() -> String:
 	return GearItem.Slot.keys()[randi() % GearItem.Slot.keys().size()]
 
 func _get_set_threshold(rarity_name: String) -> float:
+	var base_threshold = 0.08
 	match rarity_name:
-		"COMMON":    return 0.08
-		"RARE":      return 0.20
-		"EPIC":      return 0.50
-		"LEGENDARY": return 0.85
-	return 0.08
+		"COMMON":    base_threshold = 0.08
+		"RARE":      base_threshold = 0.20
+		"EPIC":      base_threshold = 0.50
+		"LEGENDARY": base_threshold = 0.85
+
+	if PlayerInventory.unlocked_talents.get("gear_set_seeker", false):
+		base_threshold = min(1.0, base_threshold * 1.5)
+
+	return base_threshold
 
 func _roll_set(biome: String) -> String:
 	var weights = BIOME_SET_WEIGHTS.get(biome, BIOME_SET_WEIGHTS["forest_ruins"])

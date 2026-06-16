@@ -91,6 +91,7 @@ var hero: TroopData = null
 func ensure_hero_exists() -> void:
 	if hero == null:
 		hero = TroopData.new()
+		hero.is_hero = true
 		hero.troop_name = "Hero"
 		hero.troop_type = TroopData.TroopType.KNIGHT
 		hero.base_stats = { "hp": 120, "attack": 16, "defense": 8, "speed": 4 }
@@ -130,6 +131,9 @@ var talents = {
 	"transcendent_unlock":         false,
 	"transcendent_chance":         0.0,
 }
+
+# Tracks which talent node IDs have been purchased (see talent_tree.gd for definitions)
+var unlocked_talents: Dictionary = {}
 
 # -------------------------------------------------------
 # Gear Management

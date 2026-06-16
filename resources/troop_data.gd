@@ -6,6 +6,7 @@ enum TroopType { KNIGHT, ARCHER, MAGE, HEALER, ROGUE }
 @export var troop_name: String = ""
 @export var troop_type: TroopType = TroopType.KNIGHT
 @export var troop_id: String = ""   # unique identifier, independent of display name
+@export var is_hero: bool = false   # true only for PlayerInventory.hero, set at creation
 
 func _init() -> void:
 	if troop_id == "":
@@ -35,6 +36,17 @@ func get_effective_stats() -> Dictionary:
 					effective[stat] += gear.stats[stat]
 				else:
 					effective[stat] = gear.stats[stat]
+
+	# Talent-granted flat bonuses, applied to all troops (and the hero, via
+	# the same TroopData class) after gear so they stack on top cleanly.
+	if PlayerInventory.unlocked_talents.get("combat_hardened_ranks", false):
+		effective["hp"] = effective.get("hp", 0) + 15
+	if PlayerInventory.unlocked_talents.get("combat_sharpened_blades", false):
+		effective["attack"] = effective.get("attack", 0) + 5
+	if is_hero and PlayerInventory.unlocked_talents.get("combat_heros_resolve", false):
+		effective["hp"] = effective.get("hp", 0) + 30
+		effective["attack"] = effective.get("attack", 0) + 8
+
 	return effective
 
 # Returns a list of set names currently equipped (for set bonus checking)

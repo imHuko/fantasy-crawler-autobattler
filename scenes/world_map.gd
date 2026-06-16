@@ -669,7 +669,10 @@ func _on_conquer(zone_id: int) -> void:
 
 	# Always triggers a battle — zone has guards based on distance
 	PlayerInventory.current_battle_zone = zone_id
-	PlayerInventory.current_attack_force = max(0.5, zones[zone_id]["enemy_strength"] * 0.3)
+	var conquest_force = zones[zone_id]["enemy_strength"] * 0.3
+	if PlayerInventory.unlocked_talents.get("diplomatic_tongue", false):
+		conquest_force *= 0.8
+	PlayerInventory.current_attack_force = max(0.5, conquest_force)
 	PlayerInventory.conquering_zone = true
 	PlayerInventory.set_battle_roster_from_zone_troops(staging_troop_ids)
 	SaveManager.save_game()
@@ -758,8 +761,11 @@ func _on_assign_troop(troop_id: String, zone_id: int) -> void:
 	# Calculate travel time based on distance
 	var travel_turns = 0
 	if from_zone_id >= 0:
+		var effective_speed = TRAVEL_SPEED
+		if PlayerInventory.unlocked_talents.get("combat_forced_march", false):
+			effective_speed *= 1.5
 		var dist = zones[from_zone_id]["pos"].distance_to(zones[zone_id]["pos"])
-		travel_turns = max(1, int(ceil(dist / TRAVEL_SPEED)))
+		travel_turns = max(1, int(ceil(dist / effective_speed)))
 	else:
 		travel_turns = 1  # unassigned troop, quick mobilization
 
@@ -793,23 +799,23 @@ func _get_troop_name_by_id(troop_id: String) -> String:
 const BUILDINGS = {
 	"Watchtower": {
 		"desc": "Extends attack warning by +1 turn for this zone and its neighbors.",
-		"cost": 2, "max_level": 1,
+		"cost": 30, "max_level": 1,
 	},
 	"Barracks": {
 		"desc": "Unlocks an additional troop slot. Generates a trickle of Gold each turn.",
-		"cost": 3, "max_level": 1,
+		"cost": 45, "max_level": 1,
 	},
 	"Farm": {
 		"desc": "Generates Food each turn.",
-		"cost": 2, "max_level": 1,
+		"cost": 30, "max_level": 1,
 	},
 	"Forge": {
 		"desc": "Troops stationed here or in adjacent zones gain bonus attack. +5% per level.",
-		"cost": 3, "max_level": 4,
+		"cost": 45, "max_level": 4,
 	},
 	"Shrine": {
 		"desc": "Troops stationed here or in adjacent zones gain bonus HP. +5% per level.",
-		"cost": 3, "max_level": 4,
+		"cost": 45, "max_level": 4,
 	},
 }
 
@@ -847,6 +853,8 @@ func _open_build_panel(zone_id: int) -> void:
 		var max_level = b.get("max_level", 1)
 		var at_max = current_level >= max_level
 		var zone_full = slots_used >= slots_max and current_level == 0
+		var effective_cost = _get_building_cost(bname)
+		var cant_afford = not PlayerInventory.can_afford({"food": 0, "gold": effective_cost})
 
 		var hbox = HBoxContainer.new()
 		vbox.add_child(hbox)
@@ -861,14 +869,16 @@ func _open_build_panel(zone_id: int) -> void:
 			btn_text += " (zone full)"
 		else:
 			var action = "Upgrade" if current_level > 0 else "Build"
-			btn_text += "  [%s \\u2014 %d turns]" % [action, b["cost"]]
+			btn_text += "  [%s \\u2014 %d 🌾🪙]" % [action, effective_cost]
+			if cant_afford:
+				btn_text += " (can't afford)"
 
 		btn.text = btn_text
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.add_theme_font_size_override("font_size", 12)
-		btn.disabled = at_max or zone_full
+		btn.disabled = at_max or zone_full or cant_afford
 		btn.add_theme_color_override("font_color",
-			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if zone_full else Color(0.85, 0.75, 0.4)))
+			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if (zone_full or cant_afford) else Color(0.85, 0.75, 0.4)))
 		btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
 		hbox.add_child(btn)
 
@@ -899,6 +909,13 @@ func _on_build_selected(building_name: String, zone_id: int) -> void:
 		_close_popup()
 		return
 
+	var cost = _get_building_cost(building_name)
+	if not PlayerInventory.can_afford({"food": 0, "gold": cost}):
+		_notify("Not enough resources \\u2014 need %d combined Food+Gold." % cost)
+		_close_popup()
+		return
+
+	PlayerInventory.spend_resources({"food": 0, "gold": cost})
 	zone["buildings"][building_name] = current_level + 1
 
 	if building_name == "Barracks" and current_level == 0:
@@ -906,51 +923,85 @@ func _on_build_selected(building_name: String, zone_id: int) -> void:
 
 	_close_popup()
 	_draw_map()
+	_refresh_hud()
 
 	if current_level == 0:
 		_notify("Built %s in %s!" % [building_name, zone["name"]])
 	else:
 		_notify("Upgraded %s to Lv%d in %s!" % [building_name, current_level + 1, zone["name"]])
 
+# Returns the resource cost to build/upgrade a building, with the
+# Efficient Construction talent discount applied (-25%, minimum 10).
+func _get_building_cost(building_name: String) -> int:
+	var base_cost = BUILDINGS[building_name]["cost"]
+	if PlayerInventory.unlocked_talents.get("buildings_efficient_construction", false):
+		return max(10, int(base_cost * 0.75))
+	return base_cost
+
 # -------------------------------------------------------
 # Building Effects
 # -------------------------------------------------------
 
 # Returns the warning-time bonus for a zone from its own Watchtower
-# plus any adjacent zone's Watchtower.
+# plus any adjacent zone's Watchtower. Reinforced Towers talent makes
+# each contributing Watchtower worth +2 turns instead of +1.
 func get_watchtower_bonus(zone_id: int) -> int:
+	var per_tower = 2 if PlayerInventory.unlocked_talents.get("buildings_reinforced_towers", false) else 1
 	var bonus = 0
 	if zones[zone_id]["buildings"].has("Watchtower"):
-		bonus += 1
+		bonus = per_tower
 	for conn_id in zones[zone_id]["connections"]:
 		if zones[conn_id]["buildings"].has("Watchtower"):
-			bonus = max(bonus, 1)
+			bonus = max(bonus, per_tower)
 	return bonus
 
-# Returns the best Forge level affecting this zone (itself or adjacent), 0 if none
+# Returns the best Forge level affecting this zone. Normally only itself
+# or directly adjacent zones count; the Wider Reach talent extends this
+# to zones up to 2 connections away.
 func get_best_forge_level(zone_id: int) -> int:
-	var best = zones[zone_id]["buildings"].get("Forge", 0)
-	for conn_id in zones[zone_id]["connections"]:
-		best = max(best, zones[conn_id]["buildings"].get("Forge", 0))
-	return best
+	return _get_best_building_level_in_range(zone_id, "Forge")
 
-# Returns the best Shrine level affecting this zone (itself or adjacent), 0 if none
+# Returns the best Shrine level affecting this zone (same range rules as Forge)
 func get_best_shrine_level(zone_id: int) -> int:
-	var best = zones[zone_id]["buildings"].get("Shrine", 0)
+	return _get_best_building_level_in_range(zone_id, "Shrine")
+
+func _get_best_building_level_in_range(zone_id: int, building_name: String) -> int:
+	var wider_reach = PlayerInventory.unlocked_talents.get("buildings_wider_reach", false)
+	var best = zones[zone_id]["buildings"].get(building_name, 0)
+
+	# Range 1: directly adjacent zones (always applies)
 	for conn_id in zones[zone_id]["connections"]:
-		best = max(best, zones[conn_id]["buildings"].get("Shrine", 0))
+		best = max(best, zones[conn_id]["buildings"].get(building_name, 0))
+
+	# Range 2: zones adjacent to those adjacent zones (only with the talent)
+	if wider_reach:
+		for conn_id in zones[zone_id]["connections"]:
+			for conn2_id in zones[conn_id]["connections"]:
+				if conn2_id == zone_id: continue
+				best = max(best, zones[conn2_id]["buildings"].get(building_name, 0))
+
 	return best
 
 # Generates resources from Farm/Barracks each turn
 func _process_resource_generation() -> void:
 	var food_gain = 0
 	var gold_gain = 0
+	var farm_yield = 5 if PlayerInventory.unlocked_talents.get("economy_bountiful_harvest", false) else 3
+	var barracks_yield = 4 if PlayerInventory.unlocked_talents.get("economy_steady_coffers", false) else 2
+	var trade_routes = PlayerInventory.unlocked_talents.get("economy_trade_routes", false)
+
 	for zone in zones:
 		if zone["owner"] != "player": continue
-		if zone["buildings"].has("Farm"):
-			food_gain += 3
-		if zone["buildings"].has("Barracks"):
-			gold_gain += 2
+		var has_farm = zone["buildings"].has("Farm")
+		var has_barracks = zone["buildings"].has("Barracks")
+		if has_farm:
+			food_gain += farm_yield
+		if has_barracks:
+			gold_gain += barracks_yield
+		# Trade Routes: even zones without Farm/Barracks contribute a small trickle
+		if trade_routes and not has_farm and not has_barracks:
+			gold_gain += 1
+
 	if food_gain > 0:
 		PlayerInventory.resources["food"] += food_gain
 	if gold_gain > 0:

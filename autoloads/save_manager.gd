@@ -13,6 +13,8 @@ func save_game() -> void:
 		"gear_count": PlayerInventory.gear_inventory.size(),
 		"troop_count": PlayerInventory.troop_roster.size(),
 		"talents": PlayerInventory.talents,
+		"unlocked_talents": PlayerInventory.unlocked_talents,
+		"max_buildings_per_zone": PlayerInventory.max_buildings_per_zone,
 		"resources": PlayerInventory.resources,
 		"map_generated": PlayerInventory.map_generated,
 		"map_turn": PlayerInventory.map_turn,
@@ -112,6 +114,7 @@ func load_game() -> void:
 	if data.get("hero") != null:
 		var h_data = data["hero"]
 		var h = TroopData.new()
+		h.is_hero = true
 		if h_data.has("id") and h_data["id"] != "":
 			h.troop_id = h_data["id"]
 		h.troop_name = h_data.get("name", "Hero")
@@ -126,6 +129,9 @@ func load_game() -> void:
 		for key in data["talents"]:
 			if PlayerInventory.talents.has(key):
 				PlayerInventory.talents[key] = data["talents"][key]
+	if data.has("unlocked_talents"):
+		PlayerInventory.unlocked_talents = data["unlocked_talents"]
+	PlayerInventory.max_buildings_per_zone = data.get("max_buildings_per_zone", 2)
 	if data.has("resources"):
 		for key in data["resources"]:
 			if PlayerInventory.resources.has(key):
@@ -183,6 +189,8 @@ func new_game() -> void:
 		"move_troops": false, "end_turn": false,
 	}
 	PlayerInventory.resources = {"food": 0, "gold": 0}
+	PlayerInventory.unlocked_talents = {}
+	PlayerInventory.max_buildings_per_zone = 2
 
 	# Starting troop — just the Knight. A second unit is earned via the tutorial dungeon.
 	var knight = TroopData.new()
@@ -193,6 +201,7 @@ func new_game() -> void:
 
 	# Dedicated dungeon hero — separate from the troop roster, own gear loadout
 	PlayerInventory.hero = TroopData.new()
+	PlayerInventory.hero.is_hero = true
 	PlayerInventory.hero.troop_name = "Hero"
 	PlayerInventory.hero.troop_type = TroopData.TroopType.KNIGHT
 	PlayerInventory.hero.base_stats = { "hp": 120, "attack": 16, "defense": 8, "speed": 4 }
@@ -226,6 +235,23 @@ const RECRUIT_BASE_STATS = {
 }
 
 const RECRUIT_COST = {"food": 15, "gold": 15}
+
+# Returns the recruit cost as a combined Food+Gold total, with the Talent
+# Scout discount applied if unlocked (-20%, minimum 10).
+func get_effective_recruit_cost() -> int:
+	var base_cost = RECRUIT_COST["food"] + RECRUIT_COST["gold"]
+	if PlayerInventory.unlocked_talents.get("recruiting_talent_scout", false):
+		return max(10, int(base_cost * 0.8))
+	return base_cost
+
+# Returns how many recruit choices the shop should offer at once.
+# Base is 1; Pick of the Litter raises it to 2, Cream of the Crop to 3.
+func get_recruit_choice_count() -> int:
+	if PlayerInventory.unlocked_talents.get("recruiting_cream_of_the_crop", false):
+		return 3
+	if PlayerInventory.unlocked_talents.get("recruiting_pick_of_the_litter", false):
+		return 2
+	return 1
 
 # Generates a random recruitable TroopData of the given type (or fully random if omitted).
 # Stats roll with small variance (±10%) around the type's base stats, so units
