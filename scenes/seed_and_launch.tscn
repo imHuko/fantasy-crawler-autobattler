@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://seed_and_launch"]
+
+[ext_resource type="Script" path="res://scenes/seed_and_launch.gd" id="1_seed"]
+
+[node name="SeedAndLaunch" type="Node"]
+script = ExtResource("1_seed")
