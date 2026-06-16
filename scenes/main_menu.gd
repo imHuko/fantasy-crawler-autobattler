@@ -95,8 +95,7 @@ func _on_continue() -> void:
 	get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
 
 func _on_new_game() -> void:
-	SaveManager.new_game()
-	get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+	get_tree().change_scene_to_file("res://scenes/new_game_screen.tscn")
 
 func _on_delete_save() -> void:
 	if FileAccess.file_exists(SAVE_PATH):

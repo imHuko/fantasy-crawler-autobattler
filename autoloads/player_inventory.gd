@@ -12,6 +12,17 @@ var unlocked_troop_slots: int = 3
 # Current stage/progression value
 var current_stage: int = 1
 
+# Game setup
+var player_name: String = "Commander"
+var map_seed: int = 0
+var difficulty: String = "Normal"
+var difficulty_settings: Dictionary = {
+	"attack_frequency": 0.6,
+	"warning_turns": 3,
+	"force_size": 1.0,
+	"enemy_expansion": 0.7,
+}
+
 # -------------------------------------------------------
 # Talent hooks for gear quality system
 # Updated by talent tree purchases

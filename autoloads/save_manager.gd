@@ -13,6 +13,10 @@ func save_game() -> void:
 		"gear_count": PlayerInventory.gear_inventory.size(),
 		"troop_count": PlayerInventory.troop_roster.size(),
 		"talents": PlayerInventory.talents,
+		"player_name": PlayerInventory.player_name,
+		"map_seed": PlayerInventory.map_seed,
+		"difficulty": PlayerInventory.difficulty,
+		"difficulty_settings": PlayerInventory.difficulty_settings,
 		"gear": [],
 		"troops": [],
 	}
@@ -72,6 +76,10 @@ func load_game() -> void:
 
 	PlayerInventory.current_stage = data.get("stage", 1)
 	PlayerInventory.unlocked_troop_slots = data.get("unlocked_slots", 3)
+	PlayerInventory.player_name = data.get("player_name", "Commander")
+	PlayerInventory.map_seed = data.get("map_seed", 0)
+	PlayerInventory.difficulty = data.get("difficulty", "Normal")
+	PlayerInventory.difficulty_settings = data.get("difficulty_settings", PlayerInventory.difficulty_settings)
 	if data.has("talents"):
 		for key in data["talents"]:
 			if PlayerInventory.talents.has(key):
