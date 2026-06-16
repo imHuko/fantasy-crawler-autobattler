@@ -129,6 +129,17 @@ func _build_ui() -> void:
 	gear_list.add_theme_constant_override("separation", 4)
 	right_scroll.add_child(gear_list)
 
+	# --- WORLD MAP BUTTON ---
+	var map_btn = Button.new()
+	map_btn.text = "🗺 World Map"
+	map_btn.custom_minimum_size = Vector2(200, 48)
+	map_btn.add_theme_font_size_override("font_size", 17)
+	map_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.6))
+	map_btn.pressed.connect(func():
+		SaveManager.save_game()
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn"))
+	outer.add_child(map_btn)
+
 	# --- DUNGEON BUTTONS ---
 	var dungeon_hbox = HBoxContainer.new()
 	dungeon_hbox.add_theme_constant_override("separation", 10)

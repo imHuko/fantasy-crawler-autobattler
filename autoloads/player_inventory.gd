@@ -23,6 +23,11 @@ var difficulty_settings: Dictionary = {
 	"enemy_expansion": 0.7,
 }
 
+# Map state
+var current_battle_zone: int = -1
+var current_attack_force: float = 1.0
+var conquering_zone: bool = false
+
 # -------------------------------------------------------
 # Talent hooks for gear quality system
 # Updated by talent tree purchases
