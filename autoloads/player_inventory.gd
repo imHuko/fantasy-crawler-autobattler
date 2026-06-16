@@ -28,11 +28,37 @@ var current_battle_zone: int = -1
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false
 
-# Resources — banked for future spending (talent trees, etc)
+# Resources — banked for spending (recruiting, rerolling, talents, etc).
+# Food and Gold are interchangeable for spending purposes — costs are
+# checked and paid against their combined total.
 var resources: Dictionary = {
 	"food": 0,
 	"gold": 0,
 }
+
+func get_total_resources() -> int:
+	return resources.get("food", 0) + resources.get("gold", 0)
+
+# Checks if a cost dict (e.g. {"food": 15, "gold": 15}) can be paid using
+# the combined Food+Gold total, regardless of which pool the numbers
+# nominally came from.
+func can_afford(cost: Dictionary) -> bool:
+	var total_cost = cost.get("food", 0) + cost.get("gold", 0)
+	return get_total_resources() >= total_cost
+
+# Deducts a cost from the combined pool, draining Food first then Gold.
+# Returns false (and deducts nothing) if the combined total can't cover it.
+func spend_resources(cost: Dictionary) -> bool:
+	var total_cost = cost.get("food", 0) + cost.get("gold", 0)
+	if get_total_resources() < total_cost:
+		return false
+
+	var remaining = total_cost
+	var from_food = min(remaining, resources.get("food", 0))
+	resources["food"] -= from_food
+	remaining -= from_food
+	resources["gold"] -= remaining
+	return true
 
 # Per-zone building slot limit. Talents can raise this later.
 var max_buildings_per_zone: int = 2

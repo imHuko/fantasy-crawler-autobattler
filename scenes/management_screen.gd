@@ -132,7 +132,11 @@ func _build_ui() -> void:
 	gear_list.add_theme_constant_override("separation", 4)
 	right_scroll.add_child(gear_list)
 
-	# --- WORLD MAP BUTTON ---
+	# --- WORLD MAP / SHOP BUTTONS ---
+	var top_nav_hbox = HBoxContainer.new()
+	top_nav_hbox.add_theme_constant_override("separation", 10)
+	outer.add_child(top_nav_hbox)
+
 	var map_btn = Button.new()
 	map_btn.text = "🗺 World Map"
 	map_btn.custom_minimum_size = Vector2(200, 48)
@@ -141,7 +145,18 @@ func _build_ui() -> void:
 	map_btn.pressed.connect(func():
 		SaveManager.save_game()
 		get_tree().change_scene_to_file("res://scenes/world_map.tscn"))
-	outer.add_child(map_btn)
+	top_nav_hbox.add_child(map_btn)
+
+	var shop_btn = Button.new()
+	shop_btn.text = "🛒 Shop  (🌾%d 🪙%d)" % [PlayerInventory.resources.get("food", 0), PlayerInventory.resources.get("gold", 0)]
+	shop_btn.custom_minimum_size = Vector2(200, 48)
+	shop_btn.add_theme_font_size_override("font_size", 15)
+	shop_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	shop_btn.tooltip_text = "Spend Food and Gold on recruits and rerolls"
+	shop_btn.pressed.connect(func():
+		SaveManager.save_game()
+		get_tree().change_scene_to_file("res://scenes/shop_screen.tscn"))
+	top_nav_hbox.add_child(shop_btn)
 
 	# --- DUNGEON BUTTONS ---
 	var dungeon_hbox = HBoxContainer.new()

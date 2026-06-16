@@ -56,6 +56,7 @@ var zone_nodes: Array = []
 var connection_lines: Node2D
 var hud_turn: Label
 var hud_diff: Label
+var hud_resources: Label
 var notification_label: Label
 
 func _ready() -> void:
@@ -273,6 +274,11 @@ func _build_ui() -> void:
 	hud_diff = Label.new()
 	hud_diff.add_theme_font_size_override("font_size", 13)
 	hbox.add_child(hud_diff)
+
+	hud_resources = Label.new()
+	hud_resources.add_theme_font_size_override("font_size", 13)
+	hud_resources.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	hbox.add_child(hud_resources)
 
 	var spacer = Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -1062,6 +1068,8 @@ func _refresh_hud() -> void:
 		hud_diff.text = "[%s]" % PlayerInventory.difficulty
 		hud_diff.add_theme_color_override("font_color",
 			col.get(PlayerInventory.difficulty, Color.WHITE))
+	if hud_resources:
+		hud_resources.text = "🌾%d 🪙%d" % [PlayerInventory.resources.get("food", 0), PlayerInventory.resources.get("gold", 0)]
 
 func _notify(msg: String) -> void:
 	if notification_label:

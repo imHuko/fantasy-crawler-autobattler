@@ -225,7 +225,12 @@ const RECRUIT_BASE_STATS = {
 	"ROGUE":  { "hp": 110, "attack": 26, "defense": 6,  "speed": 7 },
 }
 
-# Generates a random recruitable TroopData of the given type (or fully random if omitted)
+const RECRUIT_COST = {"food": 15, "gold": 15}
+
+# Generates a random recruitable TroopData of the given type (or fully random if omitted).
+# Stats roll with small variance (±10%) around the type's base stats, so units
+# of the same type aren't perfectly identical without overshadowing gear as the
+# primary power source.
 func generate_recruit(troop_type: String = "") -> TroopData:
 	if troop_type == "":
 		var types = RECRUIT_NAME_POOL.keys()
@@ -235,8 +240,18 @@ func generate_recruit(troop_type: String = "") -> TroopData:
 	troop.troop_type = TroopData.TroopType[troop_type]
 	var names = RECRUIT_NAME_POOL[troop_type]
 	troop.troop_name = names[randi() % names.size()]
-	troop.base_stats = RECRUIT_BASE_STATS[troop_type].duplicate()
+	troop.base_stats = _roll_stats(RECRUIT_BASE_STATS[troop_type])
 	return troop
+
+# Rolls each stat within ±10% of its base value, rounded to a whole number
+# (minimum 1) so stats never roll down to zero or negative.
+func _roll_stats(base: Dictionary) -> Dictionary:
+	var rolled = {}
+	for stat in base:
+		var val = base[stat]
+		var variance = val * 0.1
+		rolled[stat] = max(1, int(round(val + randf_range(-variance, variance))))
+	return rolled
 
 func _dict_to_gear(d: Dictionary) -> GearItem:
 	var gear = GearItem.new()
