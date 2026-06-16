@@ -169,25 +169,13 @@ func _build_ui() -> void:
 		get_tree().change_scene_to_file("res://scenes/talent_tree_screen.tscn"))
 	top_nav_hbox.add_child(talent_btn)
 
-	# --- DUNGEON BUTTONS ---
+	# --- DUNGEON BUTTON ---
 	var dungeon_hbox = HBoxContainer.new()
 	dungeon_hbox.add_theme_constant_override("separation", 10)
 	outer.add_child(dungeon_hbox)
 
-	var quick_btn = Button.new()
-	quick_btn.text = "Quick Dungeon"
-	quick_btn.custom_minimum_size = Vector2(180, 44)
-	quick_btn.add_theme_font_size_override("font_size", 15)
-	quick_btn.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
-	quick_btn.tooltip_text = "Text-based dungeon crawl"
-	quick_btn.pressed.connect(func():
-		SaveManager.save_game()
-		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/dungeon_scene.tscn")
-		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))
-	dungeon_hbox.add_child(quick_btn)
-
 	var action_btn = Button.new()
-	action_btn.text = "Action Dungeon  >"
+	action_btn.text = "⚔ Dungeon  >"
 	action_btn.custom_minimum_size = Vector2(200, 44)
 	action_btn.add_theme_font_size_override("font_size", 15)
 	action_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))

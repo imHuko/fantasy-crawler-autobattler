@@ -2,7 +2,7 @@ extends Control
 
 # -------------------------------------------------------
 # Dungeon Tier Picker — choose Quick / Standard / Deep Delve
-# before launching either the Action Dungeon or Quick Dungeon.
+# before launching the Action Dungeon.
 # The destination scene is passed in via PlayerInventory so this
 # screen can be reused for both entry points.
 # -------------------------------------------------------
