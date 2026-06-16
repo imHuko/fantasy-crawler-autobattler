@@ -302,10 +302,14 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 	var col = TROOP_COLORS.get(type_name, Color.WHITE)
 	var sz = 30.0
 
-	# Rect
-	var rect = ColorRect.new()
-	rect.color = col
-	rect.size = Vector2(sz, sz)
+	# Sprite (procedural shape-based placeholder, swap for real art later)
+	var unit_type_map = {
+		"KNIGHT": UnitSprite.UnitType.KNIGHT, "ARCHER": UnitSprite.UnitType.ARCHER,
+		"MAGE": UnitSprite.UnitType.MAGE, "HEALER": UnitSprite.UnitType.HEALER,
+		"ROGUE": UnitSprite.UnitType.ROGUE,
+	}
+	var rect = UnitSprite.new()
+	rect.setup(unit_type_map.get(type_name, UnitSprite.UnitType.KNIGHT), col, sz)
 	rect.position = pos - Vector2(sz/2, sz/2)
 	field_node.add_child(rect)
 
@@ -399,9 +403,9 @@ func _spawn_one_enemy(stage: int, is_boss: bool) -> void:
 
 	var ey = randf_range(30, FIELD_H - 140)
 
-	var rect = ColorRect.new()
-	rect.color = Color(1, 0.2, 0.1) if is_boss else C_ENEMY
-	rect.size = Vector2(sz, sz)
+	var rect = UnitSprite.new()
+	rect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
+		Color(1, 0.2, 0.1) if is_boss else C_ENEMY, sz)
 	rect.position = Vector2(SPAWN_X - sz, ey - sz/2)
 	field_node.add_child(rect)
 
@@ -747,6 +751,14 @@ func _update_visuals() -> void:
 	for e in enemies:
 		if is_instance_valid(e["rect"]):
 			e["rect"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2)
+			# Detect an attack firing by watching for attack_t resetting to
+			# a high value — purely cosmetic, doesn't touch combat logic.
+			if e["rect"] is UnitSprite:
+				var prev = e.get("_prev_attack_t", 0.0)
+				if e["attack_t"] > prev + 0.3:
+					e["rect"].play_attack()
+				e["_prev_attack_t"] = e["attack_t"]
+				e["rect"].face(Vector2(-1, 0))   # enemies face left toward the base
 		if is_instance_valid(e["hp_bar"]):
 			e["hp_bar"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2 + 7)
 		if is_instance_valid(e["hp_bar_bg"]):
@@ -757,6 +769,12 @@ func _update_visuals() -> void:
 		var sz = t["sz"]
 		if is_instance_valid(t["rect"]):
 			t["rect"].position = t["pos"] - Vector2(sz/2, sz/2)
+			if t["rect"] is UnitSprite:
+				var prev = t.get("_prev_attack_t", 0.0)
+				if t["attack_t"] > prev + 0.3:
+					t["rect"].play_attack()
+				t["_prev_attack_t"] = t["attack_t"]
+				t["rect"].face(Vector2(1, 0))   # troops face right toward enemies
 		if is_instance_valid(t["hp_bar"]):
 			t["hp_bar"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
 		if is_instance_valid(t["hp_bar_bg"]):

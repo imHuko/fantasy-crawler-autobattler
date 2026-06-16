@@ -7,6 +7,7 @@ extends Node2D
 const ROOM_W = 640
 const ROOM_H = 480
 const WALL_T = 32
+const MIN_SPAWN_DIST_FROM_HERO = 200.0
 const DOOR_W = 64
 
 const HERO_SPEED_BASE = 180.0
@@ -69,7 +70,7 @@ var hero_projs: Array = []     # {pos, dir}
 var enemy_projs: Array = []    # {pos, dir, damage}
 
 var room_node: Node2D = null
-var hero_rect: ColorRect = null
+var hero_rect: UnitSprite = null
 var hud_hp: Label = null
 var hud_room: Label = null
 var hud_gear: Label = null
@@ -241,9 +242,8 @@ func _build_room_visuals() -> void:
 func _build_hero_rect() -> void:
 	if hero_rect:
 		hero_rect.queue_free()
-	hero_rect = ColorRect.new()
-	hero_rect.size = Vector2(24, 24)
-	hero_rect.color = C_HERO
+	hero_rect = UnitSprite.new()
+	hero_rect.setup(UnitSprite.UnitType.HERO, C_HERO, 24.0)
 	room_node.add_child(hero_rect)
 	hero_rect.position = hero_pos - Vector2(12, 12)
 
@@ -270,13 +270,23 @@ func _spawn_enemies(room: Dictionary) -> void:
 		var max_hp = int((8 + stage * 6) * (boss_hp_mult if is_boss else 1.0) * tier_mult)
 		var spd = 55.0 + stage * 4.0
 
-		var ex = randf_range(WALL_T + 80, ROOM_W - WALL_T - 80)
-		var ey = randf_range(WALL_T + 80, ROOM_H - WALL_T - 80)
+		var ex: float
+		var ey: float
+		var tries = 0
+		# Reroll until far enough from the hero's entry position — prevents
+		# enemies (especially bosses) spawning right on top of the player
+		# the moment a room loads.
+		while true:
+			ex = randf_range(WALL_T + 80, ROOM_W - WALL_T - 80)
+			ey = randf_range(WALL_T + 80, ROOM_H - WALL_T - 80)
+			tries += 1
+			if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
+				break
 		var epos = Vector2(ex, ey)
 
-		var erect = ColorRect.new()
-		erect.size = Vector2(sz, sz)
-		erect.color = C_BOSS if is_boss else C_ENEMY
+		var erect = UnitSprite.new()
+		erect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
+			C_BOSS if is_boss else C_ENEMY, sz)
 		erect.position = epos - Vector2(sz/2, sz/2)
 		room_node.add_child(erect)
 
@@ -370,12 +380,16 @@ func _attack_tick(delta: float) -> void:
 		var dmg = hero_attack
 		if randf() < hero_crit_chance:
 			dmg = int(dmg * (1.0 + hero_crit_damage / 100.0))
-		_fire(hero_pos, nearest["pos"], true, dmg)
+		_fire(hero_pos, nearest["pos"], true, dmg, hero_rect)
 
-func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int) -> void:
+func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_sprite: UnitSprite = null) -> void:
 	var dir = (toward - from).normalized()
 	var proj = {"pos": Vector2(from.x, from.y),
 				"dir": dir, "damage": dmg, "is_hero": is_hero}
+
+	if attacker_sprite and is_instance_valid(attacker_sprite):
+		attacker_sprite.face(dir)
+		attacker_sprite.play_attack()
 
 	var prect = ColorRect.new()
 	prect.size = Vector2(10, 10)
@@ -449,8 +463,9 @@ func _move_projectiles(delta: float) -> void:
 func _process_enemies(delta: float) -> void:
 	for i in range(enemies.size()):
 		var e = enemies[i]
+		var e_sprite = enemy_rects[i] if i < enemy_rects.size() else null
 		if e["is_boss"]:
-			_process_boss(e, delta)
+			_process_boss(e, delta, e_sprite)
 		else:
 			# Move toward hero
 			var move_dir = (hero_pos - e["pos"]).normalized()
@@ -464,14 +479,14 @@ func _process_enemies(delta: float) -> void:
 			e["shoot_t"] -= delta
 			if e["shoot_t"] <= 0:
 				if hero_pos.distance_to(e["pos"]) < 300:
-					_fire(e["pos"], hero_pos, false, e["attack"])
+					_fire(e["pos"], hero_pos, false, e["attack"], e_sprite)
 				e["shoot_t"] = randf_range(1.8, 2.8)
 
 			# Melee
 			if invincible_timer <= 0 and e["pos"].distance_to(hero_pos) < e["sz"]/2 + 14:
 				_take_damage(e["attack"])
 
-func _process_boss(e: Dictionary, delta: float) -> void:
+func _process_boss(e: Dictionary, delta: float, e_sprite: UnitSprite = null) -> void:
 	e["boss_t"] -= delta
 	e["boss_a"] += delta * 120.0
 
@@ -481,13 +496,13 @@ func _process_boss(e: Dictionary, delta: float) -> void:
 			0:  # Ring of 8
 				for i in range(8):
 					var angle = deg_to_rad(i * 45.0)
-					_fire(e["pos"], e["pos"] + Vector2(cos(angle), sin(angle)) * 80, false, e["attack"])
+					_fire(e["pos"], e["pos"] + Vector2(cos(angle), sin(angle)) * 80, false, e["attack"], e_sprite)
 				e["boss_t"] = 2.5
 				e["boss_p"] += 1
 			1:  # Spiral
 				for i in range(3):
 					var angle = deg_to_rad(e["boss_a"] + i * 120.0)
-					_fire(e["pos"], e["pos"] + Vector2(cos(angle), sin(angle)) * 80, false, e["attack"])
+					_fire(e["pos"], e["pos"] + Vector2(cos(angle), sin(angle)) * 80, false, e["attack"], e_sprite)
 				e["boss_t"] = 0.15
 				if e["boss_a"] > 360.0:
 					e["boss_a"] = 0.0
@@ -498,7 +513,7 @@ func _process_boss(e: Dictionary, delta: float) -> void:
 					var spread = deg_to_rad((i - 2) * 18.0)
 					var base_dir = (hero_pos - e["pos"]).normalized()
 					var rot = base_dir.rotated(spread)
-					_fire(e["pos"], e["pos"] + rot * 80, false, e["attack"])
+					_fire(e["pos"], e["pos"] + rot * 80, false, e["attack"], e_sprite)
 				e["boss_t"] = 2.0
 				e["boss_p"] += 1
 
@@ -578,7 +593,7 @@ func _update_visuals() -> void:
 	if hero_rect and is_instance_valid(hero_rect):
 		hero_rect.position = hero_pos - Vector2(12, 12)
 		# Flash when invincible
-		hero_rect.color = Color(1,1,1) if fmod(invincible_timer, 0.15) > 0.075 else C_HERO
+		hero_rect.set_color(Color(1,1,1) if fmod(invincible_timer, 0.15) > 0.075 else C_HERO)
 
 	for i in range(min(enemies.size(), enemy_rects.size())):
 		var e = enemies[i]

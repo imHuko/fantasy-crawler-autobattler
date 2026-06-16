@@ -28,6 +28,23 @@ func get_quality_name() -> String:
 		Quality.TRANSCENDENT:  return "Transcendent"
 	return ""
 
+# Base sell value by rarity, scaled up by quality tier to reflect the same
+# power gap quality gives in stats (Transcendent ~3x a Normal item's worth).
+const SELL_BASE_PRICE = {
+	"COMMON": 5, "RARE": 15, "EPIC": 40, "LEGENDARY": 100,
+}
+const SELL_QUALITY_MULT = {
+	"": 1.0, "Awakened": 1.4, "Ascendant": 2.0, "Transcendent": 2.8,
+}
+
+func get_sell_price() -> int:
+	var base = SELL_BASE_PRICE.get(get_rarity_name(), 5)
+	var quality_mult = SELL_QUALITY_MULT.get(get_quality_name(), 1.0)
+	var price = base * quality_mult
+	if set_name != "":
+		price *= 1.2   # set-bonus items are slightly more valuable
+	return max(1, int(round(price)))
+
 func get_quality_suffix() -> String:
 	match quality:
 		Quality.AWAKENED:      return " ✦"

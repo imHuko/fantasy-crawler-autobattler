@@ -23,6 +23,7 @@ var selected_slot: String = ""
 var selected_slot_button: Button = null
 var selected_gear: GearItem = null
 var selected_gear_button: Button = null
+var focus_troop: TroopData = null   # "working on" troop, used by hover-compare when no slot is selected
 var show_suggestions: bool = true
 var compare_panel: PanelContainer = null
 var all_slot_buttons: Array = []   # every gear slot button across every troop card, for cross-card highlighting
@@ -105,7 +106,7 @@ func _build_ui() -> void:
 	left_scroll.add_child(troop_list)
 
 	set_bonus_label = Label.new()
-	set_bonus_label.text = "Set Bonuses: None active"
+	set_bonus_label.text = "Sets: none equipped"
 	set_bonus_label.add_theme_font_size_override("font_size", 12)
 	set_bonus_label.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5))
 	set_bonus_label.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -250,7 +251,33 @@ func _populate_gear() -> void:
 			return false)
 
 	for gear in gear_to_show:
-		gear_list.add_child(_make_gear_button(gear))
+		gear_list.add_child(_make_gear_row(gear))
+
+func _make_gear_row(gear: GearItem) -> HBoxContainer:
+	var row = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+
+	row.add_child(_make_gear_button(gear))
+
+	var sell_btn = Button.new()
+	sell_btn.text = "Sell (%d🪙)" % gear.get_sell_price()
+	sell_btn.custom_minimum_size = Vector2(90, 0)
+	sell_btn.add_theme_font_size_override("font_size", 11)
+	sell_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	sell_btn.pressed.connect(_on_sell_gear.bind(gear))
+	row.add_child(sell_btn)
+
+	return row
+
+func _on_sell_gear(gear: GearItem) -> void:
+	var price = gear.get_sell_price()
+	PlayerInventory.remove_gear(gear)
+	PlayerInventory.resources["gold"] += price
+	if selected_gear == gear:
+		_clear_selection()
+	SaveManager.save_game()
+	_update_status("Sold %s for %d Gold." % [gear.item_name, price])
+	_populate_gear()
 
 func _make_troop_card(troop: TroopData) -> PanelContainer:
 	var card = PanelContainer.new()
@@ -261,11 +288,29 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	card.add_child(vbox)
 
 	# Header
+	var header_hbox = HBoxContainer.new()
+	header_hbox.add_theme_constant_override("separation", 8)
+	vbox.add_child(header_hbox)
+
 	var header = Label.new()
 	header.text = troop.troop_name + "  [" + troop.get_type_name() + "]"
 	header.add_theme_font_size_override("font_size", 15)
 	header.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	vbox.add_child(header)
+	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header_hbox.add_child(header)
+
+	var is_focused = (focus_troop == troop)
+	var focus_btn = Button.new()
+	focus_btn.text = "★ Focused" if is_focused else "☆ Focus"
+	focus_btn.custom_minimum_size = Vector2(90, 0)
+	focus_btn.add_theme_font_size_override("font_size", 11)
+	focus_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.3) if is_focused else Color(0.6, 0.6, 0.6))
+	focus_btn.tooltip_text = "Mark this troop as the one you're working on, so hovering gear compares against their equipped items."
+	focus_btn.pressed.connect(_on_focus_troop_pressed.bind(troop))
+	header_hbox.add_child(focus_btn)
+
+	if is_focused:
+		card.add_theme_color_override("font_color", Color(1, 0.85, 0.3))
 
 	# Stats
 	var stats_label = Label.new()
@@ -375,15 +420,23 @@ func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
 
 	return header + "\n" + slot_line + stat_lines + suggest_str
 
+func _on_focus_troop_pressed(troop: TroopData) -> void:
+	focus_troop = null if focus_troop == troop else troop
+	_populate_troops()
+
 func _on_gear_hover(gear: GearItem, btn: Button) -> void:
-	var show_ranges = Input.is_key_pressed(KEY_ALT)
-	btn.text = _gear_display_text(gear, show_ranges)
-	# Show compare if a slot is selected
+	btn.text = _gear_display_text(gear, true)
+	# Show compare against an explicitly selected slot if there is one,
+	# otherwise fall back to the focused troop's equipped item of the
+	# matching slot type, so browsing gear doesn't require pre-selecting
+	# a slot first.
 	if selected_troop != null and selected_slot != "":
 		_show_compare(gear)
+	elif focus_troop != null:
+		_show_compare(gear, focus_troop, gear.get_slot_name())
 
 func _on_gear_unhover(gear: GearItem, btn: Button) -> void:
-	btn.text = _gear_display_text(gear, false)
+	btn.text = _gear_display_text(gear, true)
 	_hide_compare()
 
 func _on_slot_pressed(btn: Button, troop: TroopData, slot_key: String) -> void:
@@ -485,26 +538,25 @@ func _clear_selection() -> void:
 func _update_set_bonuses() -> void:
 	var counts = PlayerInventory.get_global_set_counts()
 	if counts.is_empty():
-		set_bonus_label.text = "Set Bonuses: None active"
+		set_bonus_label.text = "Sets: none equipped"
 		return
-	var lines = ["Set Bonuses:"]
+	var lines = ["Sets equipped:"]
 	for sname in counts:
 		var c = counts[sname]
-		var t = "  %s: %d pc" % [sname, c]
-		if c >= 4: t += " (2pc+4pc active!)"
-		elif c >= 2: t += " (2pc active!)"
-		lines.append(t)
+		lines.append("  %s: %d pc" % [sname, c])
 	set_bonus_label.text = "\n".join(lines)
 
 func _update_status(msg: String) -> void:
 	status_label.text = msg
 
-func _show_compare(hover_gear: GearItem) -> void:
+func _show_compare(hover_gear: GearItem, override_troop: TroopData = null, override_slot: String = "") -> void:
 	_hide_compare()
-	if selected_troop == null or selected_slot == "": return
-	var equipped: GearItem = selected_troop.equipped_gear[selected_slot]
+	var compare_troop = override_troop if override_troop != null else selected_troop
+	var compare_slot = override_slot if override_slot != "" else selected_slot
+	if compare_troop == null or compare_slot == "": return
+	var equipped: GearItem = compare_troop.equipped_gear[compare_slot]
 	if equipped == null: return
-	if hover_gear.get_slot_name() != selected_slot: return
+	if hover_gear.get_slot_name() != compare_slot: return
 
 	compare_panel = PanelContainer.new()
 	compare_panel.position = Vector2(get_viewport().size.x / 2 - 160, 80)
@@ -529,7 +581,7 @@ func _show_compare(hover_gear: GearItem) -> void:
 	left_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hbox.add_child(left_vbox)
 	var left_title = Label.new()
-	left_title.text = "Equipped"
+	left_title.text = "Equipped (%s)" % compare_troop.troop_name
 	left_title.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	left_vbox.add_child(left_title)
 	var left_name = Label.new()

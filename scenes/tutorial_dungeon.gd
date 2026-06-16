@@ -8,6 +8,7 @@ extends Node2D
 const ROOM_W = 640
 const ROOM_H = 480
 const WALL_T = 32
+const MIN_SPAWN_DIST_FROM_HERO = 180.0
 
 const C_FLOOR  = Color(0.16, 0.14, 0.20)
 const C_WALL   = Color(0.28, 0.24, 0.32)
@@ -95,9 +96,21 @@ func _build_hero() -> void:
 
 func _spawn_room_enemies(idx: int) -> void:
 	var count = [1, 2, 3][idx]
+
 	for i in range(count):
-		var ex = randf_range(WALL_T + 100, ROOM_W - WALL_T - 100)
-		var ey = randf_range(WALL_T + 100, ROOM_H - WALL_T - 100)
+		var ex: float
+		var ey: float
+		var tries = 0
+		# Keep rerolling until the spawn point is far enough from the hero's
+		# starting position — prevents enemies appearing right on top of the
+		# player the instant a room loads, which felt like an unfair ambush.
+		while true:
+			ex = randf_range(WALL_T + 100, ROOM_W - WALL_T - 100)
+			ey = randf_range(WALL_T + 100, ROOM_H - WALL_T - 100)
+			tries += 1
+			if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
+				break
+
 		var sz = 28.0
 		var max_hp = 18 + idx * 10
 
