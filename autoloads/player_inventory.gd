@@ -28,6 +28,14 @@ var current_battle_zone: int = -1
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false
 
+# Battle result reporting (read by world_map on _ready)
+var last_battle_result: String = ""      # "won", "lost", "retreat", ""
+var last_battle_zone: int = -1
+var last_battle_was_conquest: bool = false
+
+# Tutorial state
+var tutorial_complete: bool = false
+
 # -------------------------------------------------------
 # Talent hooks for gear quality system
 # Updated by talent tree purchases

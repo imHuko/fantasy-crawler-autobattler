@@ -1,7 +1,7 @@
 class_name TroopData
 extends Resource
 
-enum TroopType { KNIGHT, ARCHER, MAGE, HEALER }
+enum TroopType { KNIGHT, ARCHER, MAGE, HEALER, ROGUE }
 
 @export var troop_name: String = ""
 @export var troop_type: TroopType = TroopType.KNIGHT

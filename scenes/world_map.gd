@@ -56,8 +56,53 @@ var notification_label: Label
 func _ready() -> void:
 	_generate_map()
 	_build_ui()
+	_apply_pending_battle_result()
 	_draw_map()
 	_refresh_hud()
+
+func _apply_pending_battle_result() -> void:
+	var result = PlayerInventory.last_battle_result
+	if result == "": return
+
+	var zone_id = PlayerInventory.last_battle_zone
+	var was_conquest = PlayerInventory.last_battle_was_conquest
+
+	if zone_id < 0 or zone_id >= zones.size():
+		PlayerInventory.last_battle_result = ""
+		return
+
+	if result == "won":
+		zones[zone_id]["owner"] = "player"
+		if was_conquest:
+			_notify("Victory! %s is now under your control." % zones[zone_id]["name"])
+		else:
+			_notify("%s successfully defended!" % zones[zone_id]["name"])
+	elif result == "lost":
+		if was_conquest:
+			_notify("The conquest of %s failed. The wilds remain in control." % zones[zone_id]["name"])
+			# Zone stays neutral, no further setback for a failed conquest attempt
+		else:
+			# Defending and lost — zone falls back to neutral, troops there are lost
+			zones[zone_id]["owner"] = "neutral"
+			zones[zone_id]["troops"].clear()
+			zones[zone_id]["buildings"].clear()
+			_notify("%s has fallen to the wilds! All stationed troops and buildings lost." % zones[zone_id]["name"])
+	elif result == "retreat":
+		if not was_conquest:
+			# Retreating from a defense = losing the zone too, but troops survive
+			zones[zone_id]["owner"] = "neutral"
+			_notify("You retreated from %s. The zone has fallen." % zones[zone_id]["name"])
+
+	# Clear any pending attack warnings for this zone since it's now resolved
+	var remaining_attacks = []
+	for pa in pending_attacks:
+		if pa["zone_id"] != zone_id:
+			remaining_attacks.append(pa)
+	pending_attacks = remaining_attacks
+
+	PlayerInventory.last_battle_result = ""
+	PlayerInventory.current_battle_zone = -1
+	PlayerInventory.conquering_zone = false
 
 # -------------------------------------------------------
 # Map Generation
@@ -73,6 +118,10 @@ func _generate_map() -> void:
 	var start_pos = Vector2(120, MAP_H / 2)
 	zones.append(_make_zone(0, "city", start_pos, "player", "Your City"))
 	zones[0]["dist_from_start"] = 0
+
+	# Station all starting troops at the home city
+	for troop in PlayerInventory.troop_roster:
+		zones[0]["troops"].append(troop.troop_name)
 
 	# Generate remaining zones
 	var used_positions = [start_pos]

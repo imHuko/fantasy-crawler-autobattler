@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://defense_scene"]
+[gd_scene format=3 uid="uid://5qbyvuhllw20"]
 
-[ext_resource type="Script" path="res://scenes/defense_scene.gd" id="1_def"]
+[ext_resource type="Script" uid="uid://bggv5q3p4ur4k" path="res://scenes/defense_scene.gd" id="1_def"]
 
-[node name="DefenseScene" type="Node2D"]
+[node name="DefenseScene" type="Node2D" unique_id=1163342169]
 script = ExtResource("1_def")

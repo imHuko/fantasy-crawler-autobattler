@@ -17,6 +17,7 @@ func save_game() -> void:
 		"map_seed": PlayerInventory.map_seed,
 		"difficulty": PlayerInventory.difficulty,
 		"difficulty_settings": PlayerInventory.difficulty_settings,
+		"tutorial_complete": PlayerInventory.tutorial_complete,
 		"gear": [],
 		"troops": [],
 	}
@@ -80,6 +81,7 @@ func load_game() -> void:
 	PlayerInventory.map_seed = data.get("map_seed", 0)
 	PlayerInventory.difficulty = data.get("difficulty", "Normal")
 	PlayerInventory.difficulty_settings = data.get("difficulty_settings", PlayerInventory.difficulty_settings)
+	PlayerInventory.tutorial_complete = data.get("tutorial_complete", false)
 	if data.has("talents"):
 		for key in data["talents"]:
 			if PlayerInventory.talents.has(key):
@@ -110,36 +112,58 @@ func load_game() -> void:
 
 func new_game() -> void:
 	PlayerInventory.current_stage = 1
-	PlayerInventory.unlocked_troop_slots = 3
+	PlayerInventory.unlocked_troop_slots = 2
 	PlayerInventory.gear_inventory.clear()
 	PlayerInventory.troop_roster.clear()
+	PlayerInventory.tutorial_complete = false
 
-	# Starting troops
+	# Starting troop — just the Knight. A second unit is earned via the tutorial dungeon.
 	var knight = TroopData.new()
 	knight.troop_name = "Sir Aldric"
 	knight.troop_type = TroopData.TroopType.KNIGHT
 	knight.base_stats = { "hp": 200, "attack": 15, "defense": 20, "speed": 2 }
 	PlayerInventory.troop_roster.append(knight)
 
-	var archer = TroopData.new()
-	archer.troop_name = "Mira"
-	archer.troop_type = TroopData.TroopType.ARCHER
-	archer.base_stats = { "hp": 100, "attack": 22, "defense": 8, "speed": 5 }
-	PlayerInventory.troop_roster.append(archer)
-
-	var healer = TroopData.new()
-	healer.troop_name = "Brother Edwyn"
-	healer.troop_type = TroopData.TroopType.HEALER
-	healer.base_stats = { "hp": 120, "attack": 8, "defense": 10, "speed": 3 }
-	PlayerInventory.troop_roster.append(healer)
-
 	# Starting gear — a few commons to get going
-	for i in range(4):
+	for i in range(3):
 		var biomes = ["crypt", "forest_ruins"]
 		PlayerInventory.gear_inventory.append(
 			GearGenerator.generate(biomes[randi() % biomes.size()], 1))
 
 	print("[SaveManager] New game started.")
+
+# -------------------------------------------------------
+# Recruitable unit pool — used for tutorial reward and
+# any future dungeon recruit events
+# -------------------------------------------------------
+const RECRUIT_NAME_POOL = {
+	"KNIGHT": ["Sir Garran", "Dame Wrenna", "Sir Tobias"],
+	"ARCHER": ["Mira", "Fenwick", "Lyssa Swift"],
+	"MAGE":   ["Lyra", "Oswin the Pale", "Vesper"],
+	"HEALER": ["Brother Edwyn", "Sister Maren", "Calder"],
+	"ROGUE":  ["Vex", "Shade", "Quinn Blackpool"],
+}
+
+const RECRUIT_BASE_STATS = {
+	"KNIGHT": { "hp": 200, "attack": 15, "defense": 20, "speed": 2 },
+	"ARCHER": { "hp": 100, "attack": 22, "defense": 8,  "speed": 5 },
+	"MAGE":   { "hp": 80,  "attack": 30, "defense": 5,  "speed": 4 },
+	"HEALER": { "hp": 120, "attack": 8,  "defense": 10, "speed": 3 },
+	"ROGUE":  { "hp": 110, "attack": 26, "defense": 6,  "speed": 7 },
+}
+
+# Generates a random recruitable TroopData of the given type (or fully random if omitted)
+func generate_recruit(troop_type: String = "") -> TroopData:
+	if troop_type == "":
+		var types = RECRUIT_NAME_POOL.keys()
+		troop_type = types[randi() % types.size()]
+
+	var troop = TroopData.new()
+	troop.troop_type = TroopData.TroopType[troop_type]
+	var names = RECRUIT_NAME_POOL[troop_type]
+	troop.troop_name = names[randi() % names.size()]
+	troop.base_stats = RECRUIT_BASE_STATS[troop_type].duplicate()
+	return troop
 
 func _dict_to_gear(d: Dictionary) -> GearItem:
 	var gear = GearItem.new()

@@ -7,35 +7,39 @@ extends Control
 
 const DIFFICULTIES = {
 	"Easy": {
-		"desc": "Relaxed pace. Attacks are rare and telegraphed well in advance.\nGood for learning the game.",
+		"desc": "Relaxed pace. Attacks are rare, telegraphed early, and only ever hit one zone at a time.",
 		"attack_frequency": 0.3,
 		"warning_turns": 4,
 		"force_size": 0.6,
-		"enemy_expansion": 0.4,
+		"max_simultaneous_attacks": 1,
+		"zone_count": 10,
 		"color": Color(0.3, 0.9, 0.3),
 	},
 	"Normal": {
-		"desc": "Balanced challenge. Moderate attack frequency.\nRecommended for first playthrough.",
+		"desc": "Balanced challenge. Moderate attack frequency, one zone at a time.\nRecommended for first playthrough.",
 		"attack_frequency": 0.6,
 		"warning_turns": 3,
 		"force_size": 1.0,
-		"enemy_expansion": 0.7,
+		"max_simultaneous_attacks": 1,
+		"zone_count": 13,
 		"color": Color(0.4, 0.7, 1.0),
 	},
 	"Hard": {
-		"desc": "Frequent attacks with less warning. Enemies expand aggressively.\nFor experienced players.",
+		"desc": "Frequent attacks. Occasionally two zones threatened at once \u2014 you'll need to choose where to commit.",
 		"attack_frequency": 1.0,
-		"warning_turns": 2,
-		"force_size": 1.4,
-		"enemy_expansion": 1.1,
+		"warning_turns": 3,
+		"force_size": 1.3,
+		"max_simultaneous_attacks": 2,
+		"zone_count": 18,
 		"color": Color(1.0, 0.65, 0.1),
 	},
 	"Nightmare": {
-		"desc": "Relentless pressure. Multiple simultaneous attacks.\nMinimal warning. No mercy.",
-		"attack_frequency": 1.8,
-		"warning_turns": 1,
-		"force_size": 2.0,
-		"enemy_expansion": 1.8,
+		"desc": "A larger world under constant pressure. Up to three zones can be threatened simultaneously \u2014 spreading your forces thin is a losing strategy.",
+		"attack_frequency": 1.5,
+		"warning_turns": 3,
+		"force_size": 1.6,
+		"max_simultaneous_attacks": 3,
+		"zone_count": 24,
 		"color": Color(0.9, 0.2, 0.2),
 	},
 }
@@ -212,4 +216,4 @@ func _on_start() -> void:
 	PlayerInventory.difficulty_settings = DIFFICULTIES[selected_difficulty]
 
 	SaveManager.new_game()
-	get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+	get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")

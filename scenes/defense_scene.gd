@@ -30,6 +30,7 @@ const TROOP_COLORS = {
 
 const WAVE_INTERVAL   = 8.0    # seconds between waves
 const PLACE_COOLDOWN  = 0.5    # prevent double-placing
+const KNIGHT_AGGRO_BONUS = 60.0
 
 var total_waves: int = 5
 var current_wave: int = 0
@@ -38,6 +39,12 @@ var wave_active: bool = false
 var game_over: bool = false
 var base_hp: int = 20
 var base_max_hp: int = 20
+
+# Zone context — set by world map before launching this scene
+var battle_zone_id: int = -1
+var is_conquering: bool = false
+var attack_force_mult: float = 1.0
+var battle_title: String = "Defend the Base"
 
 # Troops placed on field: {data:TroopData, pos, hp, max_hp, attack_t, heal_t, rect, type_name}
 var placed_troops: Array = []
@@ -61,10 +68,27 @@ var base_rect: ColorRect
 var base_hp_bar: ColorRect
 
 func _ready() -> void:
+	_load_battle_context()
 	_build_ui()
 	_build_field()
 	_build_roster_ui()
 	_refresh_hud()
+
+func _load_battle_context() -> void:
+	battle_zone_id = PlayerInventory.current_battle_zone
+	is_conquering = PlayerInventory.conquering_zone
+	attack_force_mult = PlayerInventory.current_attack_force
+
+	if is_conquering:
+		battle_title = "Conquer Zone"
+		total_waves = 3   # conquering is shorter than full defense
+	else:
+		battle_title = "Defend the Base"
+		total_waves = 5
+
+	# Scale base HP and wave difficulty by force multiplier
+	base_max_hp = int(20 * max(0.5, attack_force_mult))
+	base_hp = base_max_hp
 
 # -------------------------------------------------------
 # Build UI
@@ -110,8 +134,8 @@ func _build_ui() -> void:
 	top_hbox.add_child(hud_status)
 
 	var back_btn = Button.new()
-	back_btn.text = "Quit to Menu"
-	back_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
+	back_btn.text = "Retreat"
+	back_btn.pressed.connect(_on_retreat)
 	top_hbox.add_child(back_btn)
 
 	# Bottom roster panel
@@ -296,7 +320,8 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 # -------------------------------------------------------
 func _spawn_wave(wave_num: int) -> void:
 	var stage = PlayerInventory.current_stage
-	var count = 4 + wave_num * 2
+	var base_count = 4 + wave_num * 2
+	var count = max(2, int(base_count * attack_force_mult))
 	var is_boss_wave = (wave_num == total_waves - 1)
 
 	for i in range(count):
@@ -306,9 +331,9 @@ func _spawn_wave(wave_num: int) -> void:
 func _spawn_one_enemy(wave_num: int, is_boss: bool) -> void:
 	var stage = PlayerInventory.current_stage
 	var sz = 50.0 if is_boss else 24.0
-	var max_hp = (20 + wave_num * 15 + stage * 8) * (4 if is_boss else 1)
+	var max_hp = int((20 + wave_num * 15 + stage * 8) * (4 if is_boss else 1) * max(0.6, attack_force_mult))
 	var spd = 40.0 + wave_num * 5.0
-	var atk = 3 + wave_num * 2 + stage
+	var atk = int((3 + wave_num * 2 + stage) * max(0.6, attack_force_mult))
 
 	var ey = randf_range(30, FIELD_H - 140)
 
@@ -379,32 +404,37 @@ func _process_enemies(delta: float) -> void:
 		if not is_instance_valid(e["rect"]):
 			continue
 
-		# Find nearest living troop (any direction)
+		# Find best target troop — knights get an effective aggro bonus
+		# (their real distance is reduced for targeting purposes, pulling enemies toward them)
 		var target_troop = null
-		var target_dist = INF
+		var target_score = INF
 		for t in placed_troops:
 			if t["hp"] <= 0: continue
 			var d = e["pos"].distance_to(t["pos"])
-			if d < target_dist:
-				target_dist = d
-				target_troop = t
-			# Knights pull aggro from further away
-			if t["type"] == "KNIGHT" and d < target_dist + 50:
-				target_dist = d
+			var score = d - (KNIGHT_AGGRO_BONUS if t["type"] == "KNIGHT" else 0.0)
+			if score < target_score:
+				target_score = score
 				target_troop = t
 
-		var melee_range = e["sz"] / 2 + 25
+		var melee_range = 0.0
+		var real_dist = INF
+		if target_troop:
+			melee_range = e["sz"] / 2 + target_troop["sz"] / 2 + 6
+			real_dist = e["pos"].distance_to(target_troop["pos"])
 
-		if target_troop and target_dist < melee_range:
+		if target_troop and real_dist <= melee_range:
 			# In melee range — stop and fight
 			e["attack_t"] -= delta
 			if e["attack_t"] <= 0:
 				_damage_troop(target_troop, e["attack"])
 				e["attack_t"] = 1.2
 		elif target_troop:
-			# Move toward nearest troop
+			# Move toward target troop
 			var dir = (target_troop["pos"] - e["pos"]).normalized()
 			e["pos"] += dir * e["speed"] * delta
+			# Keep enemy inside the field bounds
+			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
+			e["pos"].y = clamp(e["pos"].y, 10, FIELD_H - 130)
 		elif e["pos"].x <= BASE_X + 30:
 			# No troops left — attack base
 			e["attack_t"] -= delta
@@ -630,6 +660,21 @@ func _refresh_hud() -> void:
 func _set_status(msg: String) -> void:
 	if hud_status: hud_status.text = msg
 
+func _on_retreat() -> void:
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "retreat"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+
+func _on_return() -> void:
+	if battle_zone_id >= 0:
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+
 # -------------------------------------------------------
 # End states
 # -------------------------------------------------------
@@ -638,10 +683,25 @@ func _on_victory() -> void:
 	PlayerInventory.current_stage += 1
 	if PlayerInventory.current_stage in [3, 5, 8]:
 		PlayerInventory.unlock_troop_slot()
+
+	# Report result to map
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "won"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+
+	SaveManager.save_game()
 	_show_end_screen(true)
 
 func _on_defeat() -> void:
 	game_over = true
+
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "lost"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+
+	SaveManager.save_game()
 	_show_end_screen(false)
 
 func _show_end_screen(won: bool) -> void:
@@ -675,7 +735,7 @@ func _show_end_screen(won: bool) -> void:
 	vbox.add_child(sub)
 
 	var btn = Button.new()
-	btn.text = "Back to Management"
+	btn.text = "Return to Map" if battle_zone_id >= 0 else "Back to Management"
 	btn.custom_minimum_size = Vector2(220, 44)
-	btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
+	btn.pressed.connect(_on_return)
 	vbox.add_child(btn)
