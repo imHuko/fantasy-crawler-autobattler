@@ -182,7 +182,8 @@ func _build_ui() -> void:
 	quick_btn.tooltip_text = "Text-based dungeon crawl"
 	quick_btn.pressed.connect(func():
 		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/dungeon_scene.tscn"))
+		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/dungeon_scene.tscn")
+		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))
 	dungeon_hbox.add_child(quick_btn)
 
 	var action_btn = Button.new()
@@ -193,7 +194,8 @@ func _build_ui() -> void:
 	action_btn.tooltip_text = "Top-down WASD action dungeon"
 	action_btn.pressed.connect(func():
 		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn"))
+		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/action_dungeon.tscn")
+		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))
 	dungeon_hbox.add_child(action_btn)
 
 	# --- STATUS BAR ---

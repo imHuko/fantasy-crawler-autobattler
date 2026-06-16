@@ -49,6 +49,7 @@ var rooms: Array = []
 var current_room_idx: int = 0
 var came_from_dir: String = ""
 var run_gear: Array = []
+var pending_room_gear: Array = []   # drops from the CURRENT room, not yet committed
 
 var hero_hp: int = HERO_HP_BASE
 var hero_max_hp: int = HERO_HP_BASE
@@ -101,11 +102,13 @@ func _load_hero_stats() -> void:
 # Room generation
 # -------------------------------------------------------
 func _generate_rooms() -> void:
-	var count = randi_range(6, 10)
+	var count_range = {"Quick": [4, 6], "Standard": [6, 10], "Deep Delve": [10, 15]}
+	var range_for_tier = count_range.get(PlayerInventory.dungeon_tier, [6, 10])
+	var count = randi_range(range_for_tier[0], range_for_tier[1])
 	var grid: Dictionary = {}
 	var start = Vector2i(0, 0)
 	grid[start] = 0
-	rooms.append({"pos": start, "doors": {}, "cleared": false, "is_boss": false})
+	rooms.append({"pos": start, "doors": {}, "cleared": false, "is_boss": false, "is_final_boss": false})
 
 	var frontier = [start]
 	while rooms.size() < count and frontier.size() > 0:
@@ -118,7 +121,7 @@ func _generate_rooms() -> void:
 				var dn = DIR_NAMES[d]
 				var on = OPPOSITE[dn]
 				rooms[grid[cur]]["doors"][dn] = rooms.size()
-				var nr = {"pos": np, "doors": {}, "cleared": false, "is_boss": false}
+				var nr = {"pos": np, "doors": {}, "cleared": false, "is_boss": false, "is_final_boss": false}
 				nr["doors"][on] = grid[cur]
 				grid[np] = rooms.size()
 				rooms.append(nr)
@@ -127,6 +130,15 @@ func _generate_rooms() -> void:
 		frontier.erase(cur)
 
 	rooms[rooms.size()-1]["is_boss"] = true
+	rooms[rooms.size()-1]["is_final_boss"] = true
+
+	# Deep Delve: small chance for an additional mini-boss room partway through.
+	# This room reuses all boss spawn/combat logic but is NOT the final room,
+	# so clearing it doesn't end the run.
+	if PlayerInventory.dungeon_tier == "Deep Delve" and rooms.size() > 3 and randf() < 0.15:
+		var mid_idx = randi_range(2, rooms.size() - 2)
+		rooms[mid_idx]["is_boss"] = true
+		rooms[mid_idx]["is_final_boss"] = false
 
 # -------------------------------------------------------
 # Enter room
@@ -135,6 +147,7 @@ func _enter_room(idx: int, from_dir: String) -> void:
 	current_room_idx = idx
 	came_from_dir = from_dir
 	game_over = false
+	pending_room_gear.clear()
 
 	# Clear old visuals
 	if room_node:
@@ -248,11 +261,13 @@ func _add_rect(parent: Node, pos: Vector2, sz: Vector2, col: Color) -> ColorRect
 func _spawn_enemies(room: Dictionary) -> void:
 	var count = 1 if room["is_boss"] else randi_range(2, 4)
 	var stage = PlayerInventory.current_stage
+	var tier_mult = {"Quick": 0.8, "Standard": 1.0, "Deep Delve": 1.4}.get(PlayerInventory.dungeon_tier, 1.0)
+	var boss_hp_mult = {"Quick": 4.0, "Standard": 5.0, "Deep Delve": 6.0}.get(PlayerInventory.dungeon_tier, 5.0)
 
 	for i in range(count):
 		var is_boss = room["is_boss"]
 		var sz = 56.0 if is_boss else 28.0
-		var max_hp = (8 + stage * 6) * (5 if is_boss else 1)
+		var max_hp = int((8 + stage * 6) * (boss_hp_mult if is_boss else 1.0) * tier_mult)
 		var spd = 55.0 + stage * 4.0
 
 		var ex = randf_range(WALL_T + 80, ROOM_W - WALL_T - 80)
@@ -282,9 +297,9 @@ func _spawn_enemies(room: Dictionary) -> void:
 
 		var e = {
 			"pos": epos, "hp": max_hp, "max_hp": max_hp,
-			"speed": spd, "attack": 4 + stage * 2,
+			"speed": spd, "attack": int((4 + stage * 2) * tier_mult),
 			"shoot_t": randf_range(1.5, 3.0),
-			"is_boss": is_boss, "sz": sz,
+			"is_boss": is_boss, "is_final_boss": room.get("is_final_boss", false), "sz": sz,
 			"boss_p": 0, "boss_t": 2.0, "boss_a": 0.0,
 			"hp_bar": hp_bar, "hp_bar_bg": hp_bar_bg,
 		}
@@ -506,21 +521,33 @@ func _kill_enemy(idx: int) -> void:
 	enemies.remove_at(idx)
 	enemy_rects.remove_at(idx)
 
-	# Gear drop
+	# Gear drop — staged into pending_room_gear, not committed to the
+	# permanent inventory until the room is actually cleared. This is what
+	# makes retreat correctly forfeit loot from an in-progress room.
 	var drop_chance = 1.0 if e["is_boss"] else 0.35
 	if randf() < drop_chance:
 		var diff = clamp(PlayerInventory.current_stage + (2 if e["is_boss"] else 0), 1, 10)
+		if PlayerInventory.dungeon_tier == "Deep Delve":
+			diff = clamp(diff + 2, 1, 10)
 		var biomes = ["crypt","forest_ruins","dragon_lair"]
 		var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
-		PlayerInventory.add_gear(gear)
-		run_gear.append(gear)
+		pending_room_gear.append(gear)
 
 	if enemies.is_empty():
 		rooms[current_room_idx]["cleared"] = true
+		_commit_pending_room_gear()
 		_refresh_doors()
 		_refresh_hud()
-		if e["is_boss"]:
+		if e.get("is_final_boss", e["is_boss"]):
 			_on_run_complete()
+
+# Moves all gear staged for the current room into the permanent inventory
+# and the run's collected-gear tally. Called once a room is actually cleared.
+func _commit_pending_room_gear() -> void:
+	for gear in pending_room_gear:
+		PlayerInventory.add_gear(gear)
+		run_gear.append(gear)
+	pending_room_gear.clear()
 
 func _check_door_transition() -> void:
 	if not rooms[current_room_idx]["cleared"]: return
@@ -542,7 +569,7 @@ func _take_damage(amount: int) -> void:
 	_refresh_hud()
 	if hero_hp <= 0:
 		game_over = true
-		_show_end_screen(false)
+		_show_end_screen("lost")
 
 # -------------------------------------------------------
 # Visual updates each frame
@@ -607,6 +634,14 @@ func _build_hud() -> void:
 	controls.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 	vbox.add_child(controls)
 
+	var retreat_btn = Button.new()
+	retreat_btn.text = "Retreat"
+	retreat_btn.custom_minimum_size = Vector2(0, 32)
+	retreat_btn.add_theme_font_size_override("font_size", 12)
+	retreat_btn.add_theme_color_override("font_color", Color(0.9, 0.5, 0.3))
+	retreat_btn.pressed.connect(_on_retreat_pressed)
+	vbox.add_child(retreat_btn)
+
 	minimap = Control.new()
 	minimap.custom_minimum_size = Vector2(150, 150)
 	minimap.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -662,9 +697,13 @@ func _on_run_complete() -> void:
 	PlayerInventory.current_stage += 1
 	if PlayerInventory.current_stage in [3, 5, 8]:
 		PlayerInventory.unlock_troop_slot()
-	_show_end_screen(true)
+	_show_end_screen("won")
 
-func _show_end_screen(won: bool) -> void:
+func _on_retreat_pressed() -> void:
+	if game_over: return
+	_show_retreat_confirm()
+
+func _show_retreat_confirm() -> void:
 	var overlay = CanvasLayer.new()
 	add_child(overlay)
 
@@ -682,9 +721,72 @@ func _show_end_screen(won: bool) -> void:
 	panel.add_child(vbox)
 
 	var title = Label.new()
-	title.text = "RUN COMPLETE!" if won else "DEFEATED"
+	title.text = "Retreat?"
+	title.add_theme_font_size_override("font_size", 20)
+	title.add_theme_color_override("font_color", Color(0.9, 0.6, 0.3))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var msg = Label.new()
+	var pending_count = pending_room_gear.size()
+	if pending_count > 0:
+		msg.text = "You'll keep loot from cleared rooms, but lose %d item(s) found in this room." % pending_count
+	else:
+		msg.text = "You'll keep all loot found so far. This room hasn't dropped anything yet."
+	msg.add_theme_font_size_override("font_size", 13)
+	msg.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD
+	msg.custom_minimum_size = Vector2(280, 0)
+	msg.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(msg)
+
+	var hbox = HBoxContainer.new()
+	hbox.add_theme_constant_override("separation", 10)
+	vbox.add_child(hbox)
+
+	var cancel_btn = Button.new()
+	cancel_btn.text = "Keep Fighting"
+	cancel_btn.custom_minimum_size = Vector2(140, 40)
+	cancel_btn.pressed.connect(func(): overlay.queue_free())
+	hbox.add_child(cancel_btn)
+
+	var confirm_btn = Button.new()
+	confirm_btn.text = "Retreat"
+	confirm_btn.custom_minimum_size = Vector2(140, 40)
+	confirm_btn.add_theme_color_override("font_color", Color(0.9, 0.5, 0.3))
+	confirm_btn.pressed.connect(func():
+		overlay.queue_free()
+		_do_retreat())
+	hbox.add_child(confirm_btn)
+
+func _do_retreat() -> void:
+	game_over = true
+	pending_room_gear.clear()   # forfeited, per the retreat loot rule
+	_show_end_screen("retreated")
+
+func _show_end_screen(outcome: String) -> void:
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
+
+	var bg = ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.7)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(bg)
+
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	overlay.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	var title = Label.new()
+	var title_text = {"won": "RUN COMPLETE!", "lost": "DEFEATED", "retreated": "RETREATED"}.get(outcome, "RUN OVER")
+	var title_color = {"won": Color(0.3,0.9,0.3), "lost": Color(0.9,0.2,0.2), "retreated": Color(0.9,0.6,0.3)}.get(outcome, Color.WHITE)
+	title.text = title_text
 	title.add_theme_font_size_override("font_size", 28)
-	title.add_theme_color_override("font_color", Color(0.3,0.9,0.3) if won else Color(0.9,0.2,0.2))
+	title.add_theme_color_override("font_color", title_color)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 

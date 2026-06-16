@@ -28,6 +28,10 @@ var current_battle_zone: int = -1
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false
 
+# Dungeon run tier — chosen on the dungeon picker screen each time, not
+# the same as the map's Easy/Normal/Hard/Nightmare difficulty above.
+var dungeon_tier: String = "Standard"   # "Quick", "Standard", "Deep Delve"
+
 # Resources — banked for spending (recruiting, rerolling, talents, etc).
 # Food and Gold are interchangeable for spending purposes — costs are
 # checked and paid against their combined total.
@@ -68,7 +72,7 @@ var max_buildings_per_zone: int = 2
 # troops survive scene changes and saves.
 var map_zones: Array = []
 var map_connections: Array = []
-var map_turn: int = 1
+var map_elapsed_seconds: float = 0.0
 var map_generated: bool = false
 
 # Battle result reporting (read by world_map on _ready)

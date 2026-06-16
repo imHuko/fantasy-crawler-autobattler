@@ -39,25 +39,33 @@ const ZONE_NAMES = [
 # Zone data structure
 # { id, name, type, pos, owner, troops, connections, buildings,
 #   dist_from_start, enemy_strength, troop_queue }
-const TRAVEL_SPEED = 120.0  # distance units per turn
+const SECONDS_PER_OLD_TURN = 30.0
+const TRAVEL_SPEED = 120.0 / SECONDS_PER_OLD_TURN   # distance units per real second, base (1x)
+const ATTACK_ROLL_INTERVAL = SECONDS_PER_OLD_TURN   # how often a new attack is rolled, in real seconds at 1x
 
 var zones: Array = []
 var connections: Array = []   # pairs of zone ids
 var selected_zone_id: int = -1
 var popup_panel: Control = null
-var turn: int = 1
-var pending_attacks: Array = []   # {zone_id, turns_until, force_size}
-var marching_troops: Array = []   # {troop_name, from_zone, to_zone, turns_left}
+var elapsed_seconds: float = 0.0   # total real-time elapsed on the map, replaces the old turn counter
+var attack_roll_timer: float = 0.0
+var pending_attacks: Array = []   # {zone_id, seconds_remaining, force_size}
+var marching_troops: Array = []   # {troop_id, troop_name, from_zone, to_zone, from_pos, to_pos, progress (0-1), total_seconds}
 var mandatory_battle_queue: Array = []   # attacks that have triggered and must be resolved before continuing
-var end_turn_button_ref: Button = null
+
+var time_speed: float = 1.0   # 1x to 5x, set by the speed slider
+var is_paused: bool = false
 
 # UI
 var zone_nodes: Array = []
 var connection_lines: Node2D
-var hud_turn: Label
+var hud_time: Label
 var hud_diff: Label
 var hud_resources: Label
 var notification_label: Label
+var pause_btn: Button
+var speed_slider: HSlider
+var speed_label: Label
 
 func _ready() -> void:
 	if PlayerInventory.map_generated:
@@ -78,16 +86,21 @@ func _ready() -> void:
 		call_deferred("_launch_next_mandatory_battle")
 	elif PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["intro"]:
 		call_deferred("_show_map_tutorial_popup", "intro")
+		# Time-controls hint used to fire on the first End Turn click; now that
+		# time flows on its own, just show it a few seconds after the intro.
+		get_tree().create_timer(4.0).timeout.connect(func():
+			if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["end_turn"]:
+				_show_map_tutorial_popup("end_turn"))
 
 func _load_map_state() -> void:
 	zones = PlayerInventory.map_zones
 	connections = PlayerInventory.map_connections
-	turn = PlayerInventory.map_turn
+	elapsed_seconds = PlayerInventory.map_elapsed_seconds
 
 func _save_map_state() -> void:
 	PlayerInventory.map_zones = zones
 	PlayerInventory.map_connections = connections
-	PlayerInventory.map_turn = turn
+	PlayerInventory.map_elapsed_seconds = elapsed_seconds
 
 func _apply_pending_battle_result() -> void:
 	var result = PlayerInventory.last_battle_result
@@ -266,10 +279,10 @@ func _build_ui() -> void:
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
 	hbox.add_child(title)
 
-	hud_turn = Label.new()
-	hud_turn.add_theme_font_size_override("font_size", 14)
-	hud_turn.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
-	hbox.add_child(hud_turn)
+	hud_time = Label.new()
+	hud_time.add_theme_font_size_override("font_size", 14)
+	hud_time.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
+	hbox.add_child(hud_time)
 
 	hud_diff = Label.new()
 	hud_diff.add_theme_font_size_override("font_size", 13)
@@ -289,15 +302,30 @@ func _build_ui() -> void:
 	notification_label.add_theme_color_override("font_color", Color(1, 0.5, 0.3))
 	hbox.add_child(notification_label)
 
-	# End Turn button
-	var end_turn_btn = Button.new()
-	end_turn_btn.text = "End Turn >"
-	end_turn_btn.custom_minimum_size = Vector2(120, 32)
-	end_turn_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	end_turn_btn.disabled = mandatory_battle_queue.size() > 0
-	end_turn_btn.pressed.connect(_on_end_turn)
-	hbox.add_child(end_turn_btn)
-	end_turn_button_ref = end_turn_btn
+	# Pause / speed controls — replace the old End Turn button now that
+	# time flows continuously instead of advancing on a click.
+	pause_btn = Button.new()
+	pause_btn.text = "⏸"
+	pause_btn.custom_minimum_size = Vector2(40, 32)
+	pause_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	pause_btn.pressed.connect(_on_pause_pressed)
+	hbox.add_child(pause_btn)
+
+	speed_label = Label.new()
+	speed_label.text = "1.0x"
+	speed_label.custom_minimum_size = Vector2(36, 0)
+	speed_label.add_theme_font_size_override("font_size", 12)
+	speed_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	hbox.add_child(speed_label)
+
+	speed_slider = HSlider.new()
+	speed_slider.min_value = 1.0
+	speed_slider.max_value = 5.0
+	speed_slider.step = 0.5
+	speed_slider.value = time_speed
+	speed_slider.custom_minimum_size = Vector2(100, 0)
+	speed_slider.value_changed.connect(_on_speed_changed)
+	hbox.add_child(speed_slider)
 
 	# Back to management
 	var mgmt_btn = Button.new()
@@ -331,6 +359,21 @@ func _draw_map() -> void:
 		var znode = _make_zone_node(zone)
 		add_child(znode)
 		zone_nodes.append(znode)
+
+	# Draw marching troops as dots interpolated along their route
+	for m in marching_troops:
+		var from_pos = zones[m["from_zone"]]["pos"] if m["from_zone"] >= 0 else zones[m["to_zone"]]["pos"]
+		var to_pos = zones[m["to_zone"]]["pos"]
+		var progress = 1.0 - (m["seconds_left"] / max(0.01, m["total_seconds"]))
+		progress = clamp(progress, 0.0, 1.0)
+		var march_pos = from_pos.lerp(to_pos, progress) + Vector2(0, 44)
+
+		var dot = ColorRect.new()
+		dot.size = Vector2(10, 10)
+		dot.position = march_pos - Vector2(5, 5)
+		dot.color = Color(0.5, 0.9, 1.0)
+		add_child(dot)
+		zone_nodes.append(dot)   # cleared alongside zone nodes next redraw
 
 func _make_zone_node(zone: Dictionary) -> Control:
 	var container = Control.new()
@@ -383,6 +426,30 @@ func _make_zone_node(zone: Dictionary) -> Control:
 		troop_lbl.position = Vector2(-12, 10)
 		container.add_child(troop_lbl)
 
+	# Attack warning indicator — pulsing icon + numeric countdown, shown on
+	# any zone with a pending attack so threats are visible at a glance.
+	for attack in pending_attacks:
+		if attack["zone_id"] != zone["id"]: continue
+		var warn_icon = Label.new()
+		warn_icon.text = "⚠"
+		warn_icon.add_theme_font_size_override("font_size", 18)
+		warn_icon.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+		warn_icon.position = Vector2(12, -34)
+		container.add_child(warn_icon)
+
+		# Pulse via a simple scale tween, restarts each redraw
+		var tween = create_tween().set_loops()
+		tween.tween_property(warn_icon, "scale", Vector2(1.3, 1.3), 0.5)
+		tween.tween_property(warn_icon, "scale", Vector2(1.0, 1.0), 0.5)
+
+		var countdown_lbl = Label.new()
+		countdown_lbl.text = "%ds" % int(ceil(attack["seconds_remaining"]))
+		countdown_lbl.add_theme_font_size_override("font_size", 10)
+		countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
+		countdown_lbl.position = Vector2(10, -16)
+		container.add_child(countdown_lbl)
+		break
+
 	# Click area
 	var btn = Button.new()
 	btn.flat = true
@@ -391,21 +458,11 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	btn.pressed.connect(_on_zone_clicked.bind(zone["id"]))
 	container.add_child(btn)
 
-	# Pending attack warning
-	for attack in pending_attacks:
-		if attack["zone_id"] == zone["id"]:
-			var warn = Label.new()
-			warn.text = "⚠%d" % attack["turns_until"]
-			warn.add_theme_font_size_override("font_size", 11)
-			warn.add_theme_color_override("font_color", Color(1, 0.3, 0.3))
-			warn.position = Vector2(-8, -36)
-			container.add_child(warn)
-
 	# Incoming troops marker
 	for m in marching_troops:
 		if m["to_zone"] == zone["id"]:
 			var march_lbl = Label.new()
-			march_lbl.text = "→%d" % m["turns_left"]
+			march_lbl.text = "→%ds" % int(ceil(m["seconds_left"]))
 			march_lbl.add_theme_font_size_override("font_size", 10)
 			march_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
 			march_lbl.position = Vector2(16, 16)
@@ -473,7 +530,7 @@ func _open_popup(zone: Dictionary) -> void:
 	var incoming = []
 	for m in marching_troops:
 		if m["to_zone"] == zone["id"]:
-			incoming.append("%s (%d turn%s)" % [m["troop_name"], m["turns_left"], "s" if m["turns_left"] != 1 else ""])
+			incoming.append("%s (%ds)" % [m["troop_name"], int(ceil(m["seconds_left"]))])
 	if incoming.size() > 0:
 		var incoming_lbl = Label.new()
 		incoming_lbl.text = "Incoming: " + ", ".join(incoming)
@@ -561,8 +618,8 @@ const TUTORIAL_HINTS = {
 		"body": "Troops take time to travel between zones based on distance. Keep your border zones defended \\u2014 reinforcements from far away won't always arrive in time.",
 	},
 	"end_turn": {
-		"title": "Ending Your Turn",
-		"body": "Ending a turn advances time \\u2014 resources accrue, marching troops get closer, and the wilds may move against you. Watch for attack warnings on your zones and make sure you're ready before they land.",
+		"title": "Time Flows on Its Own",
+		"body": "The map runs in real time now \\u2014 resources accrue, troops march, and the wilds may move against you continuously. Use the pause button if you need a moment to think, and the speed slider to fast-forward when things are quiet.",
 	},
 }
 
@@ -758,19 +815,19 @@ func _on_assign_troop(troop_id: String, zone_id: int) -> void:
 		_notify("%s is already stationed there." % troop_display_name)
 		return
 
-	# Calculate travel time based on distance
-	var travel_turns = 0
+	# Calculate travel time based on distance, in real seconds (at 1x speed)
+	var travel_seconds = 0.0
 	if from_zone_id >= 0:
 		var effective_speed = TRAVEL_SPEED
 		if PlayerInventory.unlocked_talents.get("combat_forced_march", false):
 			effective_speed *= 1.5
 		var dist = zones[from_zone_id]["pos"].distance_to(zones[zone_id]["pos"])
-		travel_turns = max(1, int(ceil(dist / effective_speed)))
+		travel_seconds = max(2.0, dist / effective_speed)
 	else:
-		travel_turns = 1  # unassigned troop, quick mobilization
+		travel_seconds = 2.0  # unassigned troop, quick mobilization
 
-	if travel_turns <= 1 and from_zone_id >= 0:
-		# Close enough — arrives same turn
+	if travel_seconds <= 2.0 and from_zone_id >= 0:
+		# Close enough — arrives almost immediately
 		zones[from_zone_id]["troops"].erase(troop_id)
 		zones[zone_id]["troops"].append(troop_id)
 		_notify("%s stationed at %s" % [troop_display_name, zones[zone_id]["name"]])
@@ -780,9 +837,9 @@ func _on_assign_troop(troop_id: String, zone_id: int) -> void:
 			zones[from_zone_id]["troops"].erase(troop_id)
 		marching_troops.append({
 			"troop_id": troop_id, "troop_name": troop_display_name, "from_zone": from_zone_id,
-			"to_zone": zone_id, "turns_left": travel_turns
+			"to_zone": zone_id, "seconds_left": travel_seconds, "total_seconds": travel_seconds,
 		})
-		_notify("%s marching to %s \u2014 arrives in %d turn(s)" % [troop_display_name, zones[zone_id]["name"], travel_turns])
+		_notify("%s marching to %s \\u2014 arrives in %ds" % [troop_display_name, zones[zone_id]["name"], int(travel_seconds)])
 
 	_close_popup()
 	_draw_map()
@@ -983,12 +1040,13 @@ func _get_best_building_level_in_range(zone_id: int, building_name: String) -> i
 	return best
 
 # Generates resources from Farm/Barracks each turn
-func _process_resource_generation() -> void:
-	var food_gain = 0
-	var gold_gain = 0
-	var farm_yield = 5 if PlayerInventory.unlocked_talents.get("economy_bountiful_harvest", false) else 3
-	var barracks_yield = 4 if PlayerInventory.unlocked_talents.get("economy_steady_coffers", false) else 2
+func _process_resource_generation(delta: float) -> void:
+	var farm_yield = 5.0 if PlayerInventory.unlocked_talents.get("economy_bountiful_harvest", false) else 3.0
+	var barracks_yield = 4.0 if PlayerInventory.unlocked_talents.get("economy_steady_coffers", false) else 2.0
 	var trade_routes = PlayerInventory.unlocked_talents.get("economy_trade_routes", false)
+
+	var food_gain = 0.0
+	var gold_gain = 0.0
 
 	for zone in zones:
 		if zone["owner"] != "player": continue
@@ -998,52 +1056,53 @@ func _process_resource_generation() -> void:
 			food_gain += farm_yield
 		if has_barracks:
 			gold_gain += barracks_yield
-		# Trade Routes: even zones without Farm/Barracks contribute a small trickle
 		if trade_routes and not has_farm and not has_barracks:
-			gold_gain += 1
+			gold_gain += 1.0
 
+	# Converted from "per old turn" to "per second" — divide by the old turn length.
 	if food_gain > 0:
-		PlayerInventory.resources["food"] += food_gain
+		PlayerInventory.resources["food"] += (food_gain / SECONDS_PER_OLD_TURN) * delta
 	if gold_gain > 0:
-		PlayerInventory.resources["gold"] += gold_gain
+		PlayerInventory.resources["gold"] += (gold_gain / SECONDS_PER_OLD_TURN) * delta
 
 # -------------------------------------------------------
-# Turn System
+# Real-Time Clock
 # -------------------------------------------------------
-func _on_end_turn() -> void:
-	_close_popup()
-	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["end_turn"]:
-		_show_map_tutorial_popup("end_turn")
-	turn += 1
-	_process_marching_troops()
-	_process_enemy_expansion()
-	_process_resource_generation()
-	_process_pending_attacks()
-	_maybe_spawn_attack()
-	PlayerInventory.map_turn = turn
+func _process(delta: float) -> void:
+	if is_paused or mandatory_battle_queue.size() > 0:
+		return   # frozen during pause or while a forced battle is pending
+
+	var sim_delta = delta * time_speed
+	elapsed_seconds += sim_delta
+	PlayerInventory.map_elapsed_seconds = elapsed_seconds
+
+	_process_marching_troops(sim_delta)
+	_process_resource_generation(sim_delta)
+	_process_attack_countdowns(sim_delta)
+
+	attack_roll_timer -= sim_delta
+	if attack_roll_timer <= 0:
+		attack_roll_timer = ATTACK_ROLL_INTERVAL
+		_maybe_spawn_attack()
+
 	_refresh_hud()
 	_draw_map()
 
-func _process_marching_troops() -> void:
+func _process_marching_troops(delta: float) -> void:
 	var arrived = []
 	for m in marching_troops:
-		m["turns_left"] -= 1
-		if m["turns_left"] <= 0:
+		m["seconds_left"] -= delta
+		if m["seconds_left"] <= 0:
 			zones[m["to_zone"]]["troops"].append(m["troop_id"])
 			_notify("%s arrived at %s" % [m["troop_name"], zones[m["to_zone"]]["name"]])
 			arrived.append(m)
 	for a in arrived:
 		marching_troops.erase(a)
 
-func _process_enemy_expansion() -> void:
-	# The wilds don't expand — neutral zones stay neutral until conquered
-	# Only zones the player loses revert to neutral
-	pass
-
 func _maybe_spawn_attack() -> void:
 	var diff_settings = PlayerInventory.difficulty_settings
 	var attack_chance = diff_settings.get("attack_frequency", 0.6) * 0.25
-	var warning = int(diff_settings.get("warning_turns", 3))
+	var warning_turns = int(diff_settings.get("warning_turns", 3))
 	var max_simultaneous = int(diff_settings.get("max_simultaneous_attacks", 1))
 
 	if pending_attacks.size() >= max_simultaneous: return
@@ -1066,24 +1125,26 @@ func _maybe_spawn_attack() -> void:
 
 	var target_id = targets[randi() % targets.size()]
 	var force = diff_settings.get("force_size", 1.0)
-	var effective_warning = warning + get_watchtower_bonus(target_id)
+	var effective_warning_turns = warning_turns + get_watchtower_bonus(target_id)
+	var effective_warning_seconds = effective_warning_turns * SECONDS_PER_OLD_TURN
 	pending_attacks.append({
 		"zone_id": target_id,
-		"turns_until": effective_warning,
+		"seconds_remaining": effective_warning_seconds,
+		"total_seconds": effective_warning_seconds,
 		"force_size": force,
 	})
-	_notify("⚠ Creatures from the wilds will attack %s in %d turns!" % [zones[target_id]["name"], effective_warning])
+	_notify("⚠ Creatures from the wilds will attack %s in %ds!" % [zones[target_id]["name"], int(effective_warning_seconds)])
 
-	# Nightmare/Hard can roll a second attack same turn
+	# Nightmare/Hard can roll a second attack at the same time
 	if pending_attacks.size() < max_simultaneous and randf() < attack_chance * 0.5:
 		_maybe_spawn_attack()
 
-func _process_pending_attacks() -> void:
+func _process_attack_countdowns(delta: float) -> void:
 	var remaining = []
 	var triggered = []
 	for attack in pending_attacks:
-		attack["turns_until"] -= 1
-		if attack["turns_until"] <= 0:
+		attack["seconds_remaining"] -= delta
+		if attack["seconds_remaining"] <= 0:
 			triggered.append(attack)
 		else:
 			remaining.append(attack)
@@ -1101,6 +1162,9 @@ func _launch_next_mandatory_battle() -> void:
 	PlayerInventory.current_battle_zone = attack["zone_id"]
 	PlayerInventory.current_attack_force = attack["force_size"]
 	PlayerInventory.conquering_zone = false
+	# Roster is snapshotted NOW, at the moment the attack actually lands —
+	# not when it was first announced — so troops that marched in partway
+	# through the warning countdown are present and able to help defend.
 	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
 	PlayerInventory.set_battle_zone_buffs(
 		get_best_forge_level(attack["zone_id"]), get_best_shrine_level(attack["zone_id"]))
@@ -1111,8 +1175,11 @@ func _launch_next_mandatory_battle() -> void:
 # HUD
 # -------------------------------------------------------
 func _refresh_hud() -> void:
-	if hud_turn:
-		hud_turn.text = "Turn %d" % turn
+	if hud_time:
+		var total_secs = int(elapsed_seconds)
+		var mins = total_secs / 60
+		var secs = total_secs % 60
+		hud_time.text = ("⏸ " if is_paused else "") + "Day %d, %02d:%02d" % [(mins / 60) + 1, mins % 60, secs]
 	if hud_diff:
 		var col = {"Easy": Color(0.3,0.9,0.3), "Normal": Color(0.4,0.7,1.0),
 				   "Hard": Color(1.0,0.65,0.1), "Nightmare": Color(0.9,0.2,0.2)}
@@ -1120,7 +1187,16 @@ func _refresh_hud() -> void:
 		hud_diff.add_theme_color_override("font_color",
 			col.get(PlayerInventory.difficulty, Color.WHITE))
 	if hud_resources:
-		hud_resources.text = "🌾%d 🪙%d" % [PlayerInventory.resources.get("food", 0), PlayerInventory.resources.get("gold", 0)]
+		hud_resources.text = "🌾%d 🪙%d" % [int(PlayerInventory.resources.get("food", 0)), int(PlayerInventory.resources.get("gold", 0))]
+
+func _on_pause_pressed() -> void:
+	is_paused = not is_paused
+	pause_btn.text = "▶" if is_paused else "⏸"
+	_refresh_hud()
+
+func _on_speed_changed(value: float) -> void:
+	time_speed = value
+	speed_label.text = "%.1fx" % value
 
 func _notify(msg: String) -> void:
 	if notification_label:

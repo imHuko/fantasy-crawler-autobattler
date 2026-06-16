@@ -71,7 +71,7 @@ func _start_run() -> void:
 	current_room_index = 0
 	rooms = _generate_rooms()
 
-	biome_label.text = BIOME_NAMES[current_biome] + "  |  Stage " + str(PlayerInventory.current_stage)
+	biome_label.text = BIOME_NAMES[current_biome] + "  |  " + PlayerInventory.dungeon_tier + "  |  Stage " + str(PlayerInventory.current_stage)
 	biome_label.add_theme_color_override("font_color", BIOME_COLORS[current_biome])
 
 	_refresh_map()
@@ -79,7 +79,9 @@ func _start_run() -> void:
 	_log("You enter " + BIOME_NAMES[current_biome] + ". Good luck.")
 
 func _generate_rooms() -> Array:
-	var count = randi_range(8, 12)
+	var count_range = {"Quick": [5, 7], "Standard": [8, 12], "Deep Delve": [14, 18]}
+	var range_for_tier = count_range.get(PlayerInventory.dungeon_tier, [8, 12])
+	var count = randi_range(range_for_tier[0], range_for_tier[1])
 	var result = []
 
 	# First room always combat, last always boss
@@ -166,6 +168,8 @@ func _load_treasure_room() -> void:
 	room_content.add_child(title)
 
 	var diff = clamp(PlayerInventory.current_stage + randi_range(0, 2), 1, 10)
+	if PlayerInventory.dungeon_tier == "Deep Delve":
+		diff = clamp(diff + 2, 1, 10)
 	var gear = GearGenerator.generate(current_biome, diff)
 	run_gear_collected.append(gear)
 	PlayerInventory.add_gear(gear)
@@ -231,6 +235,13 @@ func _generate_enemy(is_boss: bool, difficulty: int) -> Dictionary:
 		base_atk = int(base_atk * 1.8)
 		base_def = int(base_def * 1.5)
 
+	# Dungeon tier scaling — Quick is gentler, Deep Delve is meaningfully harder,
+	# matching the same multipliers used in the Action Dungeon for consistency.
+	var tier_mult = {"Quick": 0.8, "Standard": 1.0, "Deep Delve": 1.4}.get(PlayerInventory.dungeon_tier, 1.0)
+	base_hp = int(base_hp * tier_mult)
+	base_atk = int(base_atk * tier_mult)
+	base_def = int(base_def * tier_mult)
+
 	var enemy_names = {
 		"crypt":        ["Skeleton", "Ghoul", "Wraith", "Lich"],
 		"forest_ruins": ["Goblin Scout", "Stone Golem", "Vine Horror", "Treant"],
@@ -289,6 +300,8 @@ func _do_combat(enemy: Dictionary, fight_btn: Button) -> void:
 
 		# Drop gear on combat win
 		var diff = clamp(PlayerInventory.current_stage + (2 if is_boss else 0), 1, 10)
+		if PlayerInventory.dungeon_tier == "Deep Delve":
+			diff = clamp(diff + 2, 1, 10)
 		var gear = GearGenerator.generate(current_biome, diff)
 		run_gear_collected.append(gear)
 		PlayerInventory.add_gear(gear)

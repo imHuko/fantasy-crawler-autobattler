@@ -17,7 +17,7 @@ func save_game() -> void:
 		"max_buildings_per_zone": PlayerInventory.max_buildings_per_zone,
 		"resources": PlayerInventory.resources,
 		"map_generated": PlayerInventory.map_generated,
-		"map_turn": PlayerInventory.map_turn,
+		"map_elapsed_seconds": PlayerInventory.map_elapsed_seconds,
 		"map_zones": _serialize_zones(PlayerInventory.map_zones),
 		"map_connections": PlayerInventory.map_connections,
 		"play_tutorial": PlayerInventory.play_tutorial,
@@ -26,6 +26,7 @@ func save_game() -> void:
 		"map_seed": PlayerInventory.map_seed,
 		"difficulty": PlayerInventory.difficulty,
 		"difficulty_settings": PlayerInventory.difficulty_settings,
+		"dungeon_tier": PlayerInventory.dungeon_tier,
 		"tutorial_complete": PlayerInventory.tutorial_complete,
 		"gear": [],
 		"troops": [],
@@ -108,6 +109,7 @@ func load_game() -> void:
 	PlayerInventory.map_seed = data.get("map_seed", 0)
 	PlayerInventory.difficulty = data.get("difficulty", "Normal")
 	PlayerInventory.difficulty_settings = data.get("difficulty_settings", PlayerInventory.difficulty_settings)
+	PlayerInventory.dungeon_tier = data.get("dungeon_tier", "Standard")
 	PlayerInventory.tutorial_complete = data.get("tutorial_complete", false)
 
 	# Load hero
@@ -138,7 +140,7 @@ func load_game() -> void:
 				PlayerInventory.resources[key] = data["resources"][key]
 
 	PlayerInventory.map_generated = data.get("map_generated", false)
-	PlayerInventory.map_turn = data.get("map_turn", 1)
+	PlayerInventory.map_elapsed_seconds = data.get("map_elapsed_seconds", 0.0)
 	if data.has("map_zones"):
 		PlayerInventory.map_zones = _deserialize_zones(data["map_zones"])
 	if data.has("map_connections"):
@@ -183,7 +185,7 @@ func new_game() -> void:
 	PlayerInventory.map_generated = false
 	PlayerInventory.map_zones = []
 	PlayerInventory.map_connections = []
-	PlayerInventory.map_turn = 1
+	PlayerInventory.map_elapsed_seconds = 0.0
 	PlayerInventory.map_tutorial_seen = {
 		"intro": false, "conquer": false, "build": false,
 		"move_troops": false, "end_turn": false,
