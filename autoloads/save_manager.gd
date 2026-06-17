@@ -30,24 +30,7 @@ func save_game() -> void:
 		"tutorial_complete": PlayerInventory.tutorial_complete,
 		"gear": [],
 		"troops": [],
-		"hero": null,
 	}
-
-	if PlayerInventory.hero:
-		var h = PlayerInventory.hero
-		var h_data = {
-			"id": h.troop_id, "name": h.troop_name, "type": h.troop_type,
-			"base_stats": h.base_stats, "equipped": {},
-		}
-		for slot_key in h.equipped_gear:
-			var gear = h.equipped_gear[slot_key]
-			if gear:
-				h_data["equipped"][slot_key] = {
-					"name": gear.item_name, "rarity": gear.rarity, "slot": gear.slot,
-					"quality": gear.quality, "stats": gear.stats,
-					"stat_ranges": gear.stat_ranges, "set_name": gear.set_name,
-				}
-		data["hero"] = h_data
 
 	# Save gear
 	for gear in PlayerInventory.gear_inventory:
@@ -56,6 +39,7 @@ func save_game() -> void:
 			"rarity": gear.rarity,
 			"slot": gear.slot,
 			"quality": gear.quality,
+			"item_level": gear.item_level,
 			"stats": gear.stats,
 			"stat_ranges": gear.stat_ranges,
 			"set_name": gear.set_name,
@@ -68,6 +52,8 @@ func save_game() -> void:
 			"name": troop.troop_name,
 			"type": troop.troop_type,
 			"base_stats": troop.base_stats,
+			"is_hero": troop.is_hero,
+			"current_hp": troop.current_hp,
 			"equipped": {},
 		}
 		for slot_key in troop.equipped_gear:
@@ -77,7 +63,10 @@ func save_game() -> void:
 					"name": gear.item_name,
 					"rarity": gear.rarity,
 					"slot": gear.slot,
+					"quality": gear.quality,
+					"item_level": gear.item_level,
 					"stats": gear.stats,
+					"stat_ranges": gear.stat_ranges,
 					"set_name": gear.set_name,
 				}
 		data["troops"].append(t_data)
@@ -112,21 +101,6 @@ func load_game() -> void:
 	PlayerInventory.dungeon_tier = data.get("dungeon_tier", "Standard")
 	PlayerInventory.tutorial_complete = data.get("tutorial_complete", false)
 
-	# Load hero
-	if data.get("hero") != null:
-		var h_data = data["hero"]
-		var h = TroopData.new()
-		h.is_hero = true
-		if h_data.has("id") and h_data["id"] != "":
-			h.troop_id = h_data["id"]
-		h.troop_name = h_data.get("name", "Hero")
-		h.troop_type = int(h_data.get("type", 0))
-		h.base_stats = h_data.get("base_stats", {"hp":120,"attack":16,"defense":8,"speed":4})
-		for slot_key in h_data.get("equipped", {}):
-			h.equipped_gear[slot_key] = _dict_to_gear(h_data["equipped"][slot_key])
-		PlayerInventory.hero = h
-	else:
-		PlayerInventory.ensure_hero_exists()
 	if data.has("talents"):
 		for key in data["talents"]:
 			if PlayerInventory.talents.has(key):
@@ -166,6 +140,8 @@ func load_game() -> void:
 		troop.troop_name = t["name"]
 		troop.troop_type = int(t["type"])
 		troop.base_stats = t["base_stats"]
+		troop.is_hero = t.get("is_hero", false)
+		troop.current_hp = int(t.get("current_hp", -1))
 		for slot_key in t.get("equipped", {}):
 			var gear = _dict_to_gear(t["equipped"][slot_key])
 			troop.equipped_gear[slot_key] = gear
@@ -194,19 +170,15 @@ func new_game() -> void:
 	PlayerInventory.unlocked_talents = {}
 	PlayerInventory.max_buildings_per_zone = 2
 
-	# Starting troop — just the Knight. A second unit is earned via the tutorial dungeon.
-	var knight = TroopData.new()
-	knight.troop_name = "Knight"
-	knight.troop_type = TroopData.TroopType.KNIGHT
-	knight.base_stats = { "hp": 200, "attack": 15, "defense": 20, "speed": 2 }
-	PlayerInventory.troop_roster.append(knight)
-
-	# Dedicated dungeon hero — separate from the troop roster, own gear loadout
-	PlayerInventory.hero = TroopData.new()
-	PlayerInventory.hero.is_hero = true
-	PlayerInventory.hero.troop_name = "Hero"
-	PlayerInventory.hero.troop_type = TroopData.TroopType.KNIGHT
-	PlayerInventory.hero.base_stats = { "hp": 120, "attack": 16, "defense": 8, "speed": 4 }
+	# Starting troop — just the Hero, who is now a normal roster member
+	# usable on the map (stationed, marched, fights in defense battles)
+	# AND in the action dungeon. A second unit is earned via the tutorial.
+	var hero = TroopData.new()
+	hero.is_hero = true
+	hero.troop_name = "Hero"
+	hero.troop_type = TroopData.TroopType.KNIGHT
+	hero.base_stats = { "hp": 160, "attack": 16, "defense": 12, "speed": 3 }
+	PlayerInventory.troop_roster.append(hero)
 
 	# Starting gear — a few commons to get going
 	for i in range(3):
@@ -287,6 +259,7 @@ func _dict_to_gear(d: Dictionary) -> GearItem:
 	gear.rarity      = int(d.get("rarity", 0))
 	gear.slot        = int(d.get("slot", 0))
 	gear.quality     = int(d.get("quality", 0))
+	gear.item_level  = int(d.get("item_level", 5))   # default for saves predating item level
 	gear.stats       = d.get("stats", {})
 	gear.stat_ranges = d.get("stat_ranges", {})
 	gear.set_name    = d.get("set_name", "")
@@ -312,5 +285,15 @@ func _deserialize_zones(zones_data: Array) -> Array:
 	for z in zones_data:
 		var zone = z.duplicate(true)
 		zone["pos"] = Vector2(z["pos"]["x"], z["pos"]["y"])
+		# JSON has no int/float distinction — every number becomes a
+		# float on load. id and connections are used as array indices
+		# elsewhere, where a stray float can cause silent lookup bugs,
+		# so cast them back explicitly.
+		zone["id"] = int(zone.get("id", 0))
+		zone["enemy_strength"] = int(zone.get("enemy_strength", 0))
+		var fixed_connections = []
+		for c in zone.get("connections", []):
+			fixed_connections.append(int(c))
+		zone["connections"] = fixed_connections
 		result.append(zone)
 	return result

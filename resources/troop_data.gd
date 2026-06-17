@@ -6,13 +6,18 @@ enum TroopType { KNIGHT, ARCHER, MAGE, HEALER, ROGUE }
 @export var troop_name: String = ""
 @export var troop_type: TroopType = TroopType.KNIGHT
 @export var troop_id: String = ""   # unique identifier, independent of display name
-@export var is_hero: bool = false   # true only for PlayerInventory.hero, set at creation
+@export var is_hero: bool = false   # true for the player's one Hero character — usable on the map, in defense battles, and in the action dungeon
 
 func _init() -> void:
 	if troop_id == "":
 		troop_id = str(Time.get_ticks_usec()) + "_" + str(randi())
 @export var base_stats: Dictionary = {}
 # e.g. { "hp": 100, "attack": 10, "defense": 5, "speed": 3 }
+
+# Persists HP across battles rather than always starting full. -1 means
+# "not yet set" (brand new troop) — treated as full HP the first time
+# it's actually read via get_current_hp().
+@export var current_hp: int = -1
 
 # Gear slots: keyed by slot name, value is a GearItem or null
 var equipped_gear: Dictionary = {
@@ -48,6 +53,32 @@ func get_effective_stats() -> Dictionary:
 		effective["attack"] = effective.get("attack", 0) + 8
 
 	return effective
+
+# Current max HP given equipped gear and talents right now. Changes
+# whenever gear changes — current_hp is an absolute value, not a % of
+# this, so swapping gear doesn't change how wounded a troop reads as.
+func get_max_hp() -> int:
+	return get_effective_stats().get("hp", 100)
+
+# Returns current HP, clamped to whatever max HP actually is right now
+# (handles gear being unequipped after healing, etc). Brand new troops
+# (current_hp == -1) read as full HP without needing special-casing
+# everywhere else that calls this.
+func get_current_hp() -> int:
+	var max_hp = get_max_hp()
+	if current_hp < 0:
+		return max_hp
+	return min(current_hp, max_hp)
+
+func get_missing_hp() -> int:
+	return get_max_hp() - get_current_hp()
+
+# Heals up to `amount` HP, clamped to max. Returns how much HP was
+# actually restored, since that's what determines the real food cost.
+func heal(amount: int) -> int:
+	var before = get_current_hp()
+	current_hp = min(before + amount, get_max_hp())
+	return current_hp - before
 
 # Returns a list of set names currently equipped (for set bonus checking)
 func get_equipped_set_names() -> Array:

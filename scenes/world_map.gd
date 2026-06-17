@@ -58,6 +58,11 @@ var is_paused: bool = false
 
 # UI
 var zone_nodes: Array = []
+var map_camera: Camera2D = null
+var is_panning: bool = false
+const PAN_SPEED = 400.0   # arrow-key pan speed, pixels/sec
+const CAMERA_MARGIN = 80.0   # how far past the map edge the camera is allowed to drift
+var marching_dot_nodes: Array = []
 var connection_lines: Node2D
 var hud_time: Label
 var hud_diff: Label
@@ -68,6 +73,8 @@ var speed_slider: HSlider
 var speed_label: Label
 
 func _ready() -> void:
+	_setup_camera()
+
 	if PlayerInventory.map_generated:
 		_load_map_state()
 	else:
@@ -96,6 +103,20 @@ func _load_map_state() -> void:
 	zones = PlayerInventory.map_zones
 	connections = PlayerInventory.map_connections
 	elapsed_seconds = PlayerInventory.map_elapsed_seconds
+
+# Sets up a Camera2D so the player can pan around the map — middle-mouse
+# drag, or arrow keys. Limits are clamped to the actual map bounds (plus
+# a small margin) so panning can't drift off into empty space far past
+# where any zone or future scenery actually exists.
+func _setup_camera() -> void:
+	map_camera = Camera2D.new()
+	map_camera.position = Vector2(MAP_W / 2.0, MAP_H / 2.0)
+	map_camera.limit_left = -CAMERA_MARGIN
+	map_camera.limit_top = -CAMERA_MARGIN
+	map_camera.limit_right = MAP_W + CAMERA_MARGIN
+	map_camera.limit_bottom = MAP_H + CAMERA_MARGIN
+	map_camera.enabled = true
+	add_child(map_camera)
 
 func _save_map_state() -> void:
 	PlayerInventory.map_zones = zones
@@ -208,7 +229,7 @@ func _generate_map() -> void:
 
 		var zone = _make_zone(zone_id, ztype, pos, owner, zname)
 		zone["dist_from_start"] = dist
-		zone["enemy_strength"] = int(dist / 80.0)
+		zone["enemy_strength"] = int(dist / 60.0)
 		zones.append(zone)
 		used_positions.append(pos)
 
@@ -253,7 +274,8 @@ func _make_zone(id: int, ztype: String, pos: Vector2, owner: String, zname: Stri
 func _build_ui() -> void:
 	var bg = ColorRect.new()
 	bg.color = Color(0.07, 0.08, 0.10)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.position = Vector2(-CAMERA_MARGIN, -CAMERA_MARGIN)
+	bg.size = Vector2(MAP_W + CAMERA_MARGIN * 2, MAP_H + CAMERA_MARGIN * 2)
 	add_child(bg)
 
 	# Draw connection lines first (behind zones)
@@ -336,31 +358,42 @@ func _build_ui() -> void:
 		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
 	hbox.add_child(mgmt_btn)
 
+var zone_dynamic_refs: Dictionary = {}   # zone_id -> {warn_icon, countdown_lbl, troop_lbl, march_lbl, circle}
+
 func _draw_map() -> void:
-	# Clear old zone nodes
-	for zn in zone_nodes:
-		if is_instance_valid(zn): zn.queue_free()
-	zone_nodes.clear()
+	# Connections and marching dots are cheap, non-interactive visuals —
+	# safe to fully rebuild every redraw without affecting clickability.
 	for c in connection_lines.get_children():
 		c.queue_free()
 
-	# Draw connections
 	for pair in connections:
 		var z1 = zones[pair[0]]
 		var z2 = zones[pair[1]]
 		var line = Line2D.new()
 		line.points = [z1["pos"] + Vector2(0, 44), z2["pos"] + Vector2(0, 44)]
 		line.width = 2.0
-		line.default_color = Color(0.3, 0.3, 0.4, 0.7)
+		line.default_color = Color(0.0, 0.0, 0.0, 0.8)
 		connection_lines.add_child(line)
 
-	# Draw zones
-	for zone in zones:
-		var znode = _make_zone_node(zone)
-		add_child(znode)
-		zone_nodes.append(znode)
+	# Zone nodes (which contain the actual clickable buttons) are built
+	# ONCE and then updated in place on every subsequent redraw. Rebuilding
+	# them from scratch every cycle meant clicks landed on a button that
+	# had already been destroyed and replaced, making the map effectively
+	# unclickable while the clock was running.
+	if zone_nodes.is_empty():
+		for zone in zones:
+			var znode = _make_zone_node(zone)
+			add_child(znode)
+			zone_nodes.append(znode)
+	else:
+		for zone in zones:
+			_update_zone_node(zone)
 
-	# Draw marching troops as dots interpolated along their route
+	# Marching dots are cheap and non-interactive — fine to fully rebuild.
+	for d in marching_dot_nodes:
+		if is_instance_valid(d): d.queue_free()
+	marching_dot_nodes.clear()
+
 	for m in marching_troops:
 		var from_pos = zones[m["from_zone"]]["pos"] if m["from_zone"] >= 0 else zones[m["to_zone"]]["pos"]
 		var to_pos = zones[m["to_zone"]]["pos"]
@@ -373,24 +406,24 @@ func _draw_map() -> void:
 		dot.position = march_pos - Vector2(5, 5)
 		dot.color = Color(0.5, 0.9, 1.0)
 		add_child(dot)
-		zone_nodes.append(dot)   # cleared alongside zone nodes next redraw
+		marching_dot_nodes.append(dot)
 
 func _make_zone_node(zone: Dictionary) -> Control:
 	var container = Control.new()
 	container.position = zone["pos"] + Vector2(0, 44)
 	container.custom_minimum_size = Vector2(64, 64)
 
+	var refs = {}
+
 	# Zone circle background
 	var circle = ColorRect.new()
 	circle.size = Vector2(44, 44)
 	circle.position = Vector2(-22, -22)
 	circle.color = OWNER_COLORS[zone["owner"]].darkened(0.4)
-
-	# Highlight if selected
 	if zone["id"] == selected_zone_id:
 		circle.color = Color(1, 1, 0, 0.3)
-
 	container.add_child(circle)
+	refs["circle"] = circle
 
 	# Zone type icon
 	var icon = Label.new()
@@ -406,6 +439,7 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	dot.position = Vector2(14, -22)
 	dot.color = OWNER_COLORS[zone["owner"]]
 	container.add_child(dot)
+	refs["owner_dot"] = dot
 
 	# Zone name
 	var name_lbl = Label.new()
@@ -417,40 +451,39 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	container.add_child(name_lbl)
 
-	# Troop count
-	if zone["troops"].size() > 0:
-		var troop_lbl = Label.new()
-		troop_lbl.text = "⚔%d" % zone["troops"].size()
-		troop_lbl.add_theme_font_size_override("font_size", 9)
-		troop_lbl.add_theme_color_override("font_color", Color(0.6, 0.9, 1.0))
-		troop_lbl.position = Vector2(-12, 10)
-		container.add_child(troop_lbl)
+	# Troop count (created hidden if empty, toggled visible/updated later)
+	var troop_lbl = Label.new()
+	troop_lbl.add_theme_font_size_override("font_size", 9)
+	troop_lbl.add_theme_color_override("font_color", Color(0.6, 0.9, 1.0))
+	troop_lbl.position = Vector2(-12, 10)
+	troop_lbl.visible = zone["troops"].size() > 0
+	troop_lbl.text = "⚔%d" % zone["troops"].size()
+	container.add_child(troop_lbl)
+	refs["troop_lbl"] = troop_lbl
 
-	# Attack warning indicator — pulsing icon + numeric countdown, shown on
-	# any zone with a pending attack so threats are visible at a glance.
-	for attack in pending_attacks:
-		if attack["zone_id"] != zone["id"]: continue
-		var warn_icon = Label.new()
-		warn_icon.text = "⚠"
-		warn_icon.add_theme_font_size_override("font_size", 18)
-		warn_icon.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-		warn_icon.position = Vector2(12, -34)
-		container.add_child(warn_icon)
+	# Attack warning indicator — pulsing icon + numeric countdown
+	var warn_icon = Label.new()
+	warn_icon.text = "⚠"
+	warn_icon.add_theme_font_size_override("font_size", 18)
+	warn_icon.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	warn_icon.position = Vector2(12, -34)
+	warn_icon.visible = false
+	container.add_child(warn_icon)
+	refs["warn_icon"] = warn_icon
 
-		# Pulse via a simple scale tween, restarts each redraw
-		var tween = create_tween().set_loops()
-		tween.tween_property(warn_icon, "scale", Vector2(1.3, 1.3), 0.5)
-		tween.tween_property(warn_icon, "scale", Vector2(1.0, 1.0), 0.5)
+	var tween = create_tween().set_loops()
+	tween.tween_property(warn_icon, "scale", Vector2(1.3, 1.3), 0.5)
+	tween.tween_property(warn_icon, "scale", Vector2(1.0, 1.0), 0.5)
 
-		var countdown_lbl = Label.new()
-		countdown_lbl.text = "%ds" % int(ceil(attack["seconds_remaining"]))
-		countdown_lbl.add_theme_font_size_override("font_size", 10)
-		countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
-		countdown_lbl.position = Vector2(10, -16)
-		container.add_child(countdown_lbl)
-		break
+	var countdown_lbl = Label.new()
+	countdown_lbl.add_theme_font_size_override("font_size", 10)
+	countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
+	countdown_lbl.position = Vector2(10, -16)
+	countdown_lbl.visible = false
+	container.add_child(countdown_lbl)
+	refs["countdown_lbl"] = countdown_lbl
 
-	# Click area
+	# Click area — built once, never destroyed on redraw
 	var btn = Button.new()
 	btn.flat = true
 	btn.size = Vector2(64, 64)
@@ -459,16 +492,59 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	container.add_child(btn)
 
 	# Incoming troops marker
+	var march_lbl = Label.new()
+	march_lbl.add_theme_font_size_override("font_size", 10)
+	march_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
+	march_lbl.position = Vector2(16, 16)
+	march_lbl.visible = false
+	container.add_child(march_lbl)
+	refs["march_lbl"] = march_lbl
+
+	zone_dynamic_refs[zone["id"]] = refs
+	return container
+
+# Updates only the parts of a zone node that can change between redraws
+# (ownership color, troop count, attack countdown, incoming march timer)
+# without touching the button or destroying/recreating anything — this is
+# what keeps zones clickable while the map clock is running.
+func _update_zone_node(zone: Dictionary) -> void:
+	var refs = zone_dynamic_refs.get(zone["id"])
+	if refs == null: return
+
+	if is_instance_valid(refs.get("circle")):
+		refs["circle"].color = Color(1, 1, 0, 0.3) if zone["id"] == selected_zone_id else OWNER_COLORS[zone["owner"]].darkened(0.4)
+	if is_instance_valid(refs.get("owner_dot")):
+		refs["owner_dot"].color = OWNER_COLORS[zone["owner"]]
+
+	if is_instance_valid(refs.get("troop_lbl")):
+		var has_troops = zone["troops"].size() > 0
+		refs["troop_lbl"].visible = has_troops
+		if has_troops:
+			refs["troop_lbl"].text = "⚔%d" % zone["troops"].size()
+
+	var pending_attack = null
+	for attack in pending_attacks:
+		if attack["zone_id"] == zone["id"]:
+			pending_attack = attack
+			break
+
+	if is_instance_valid(refs.get("warn_icon")):
+		refs["warn_icon"].visible = pending_attack != null
+	if is_instance_valid(refs.get("countdown_lbl")):
+		refs["countdown_lbl"].visible = pending_attack != null
+		if pending_attack != null:
+			refs["countdown_lbl"].text = "%ds" % int(ceil(pending_attack["seconds_remaining"]))
+
+	var incoming_march = null
 	for m in marching_troops:
 		if m["to_zone"] == zone["id"]:
-			var march_lbl = Label.new()
-			march_lbl.text = "→%ds" % int(ceil(m["seconds_left"]))
-			march_lbl.add_theme_font_size_override("font_size", 10)
-			march_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
-			march_lbl.position = Vector2(16, 16)
-			container.add_child(march_lbl)
+			incoming_march = m
+			break
 
-	return container
+	if is_instance_valid(refs.get("march_lbl")):
+		refs["march_lbl"].visible = incoming_march != null
+		if incoming_march != null:
+			refs["march_lbl"].text = "→%ds" % int(ceil(incoming_march["seconds_left"]))
 
 # -------------------------------------------------------
 # Zone Popup
@@ -482,9 +558,12 @@ func _on_zone_clicked(zone_id: int) -> void:
 func _open_popup(zone: Dictionary) -> void:
 	popup_panel = PanelContainer.new()
 
-	# Position popup — keep on screen
+	# Position popup — keep on screen. Height isn't known until the
+	# popup's content is built, so clamp against a generous estimate
+	# rather than the exact final height.
+	const ESTIMATED_POPUP_HEIGHT = 260.0
 	var px = min(zone["pos"].x + 50, MAP_W - 280)
-	var py = max(zone["pos"].y + 44, 60)
+	var py = clamp(zone["pos"].y + 44, 60, MAP_H - ESTIMATED_POPUP_HEIGHT)
 	popup_panel.position = Vector2(px, py)
 	popup_panel.custom_minimum_size = Vector2(260, 0)
 	add_child(popup_panel)
@@ -562,10 +641,20 @@ func _open_popup(zone: Dictionary) -> void:
 		_add_popup_btn(vbox, "Move Troops Here", Color(0.4, 0.8, 1.0), _on_move_troops.bind(zone["id"]))
 		_add_popup_btn(vbox, "Build Here", Color(0.85, 0.75, 0.4), _on_build.bind(zone["id"]))
 		var explore_tier = _get_explore_tier(zone["id"])
-		_add_popup_btn(vbox, "Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9), func():
-			PlayerInventory.dungeon_tier = explore_tier
-			SaveManager.save_game()
-			get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn"))
+		if zone["troops"].is_empty():
+			var no_troop_hint = Label.new()
+			no_troop_hint.text = "Station a troop here to Explore (%s)" % explore_tier
+			no_troop_hint.add_theme_font_size_override("font_size", 11)
+			no_troop_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+			no_troop_hint.autowrap_mode = TextServer.AUTOWRAP_WORD
+			vbox.add_child(no_troop_hint)
+		elif zone["troops"].size() == 1:
+			var only_troop_id = zone["troops"][0]
+			_add_popup_btn(vbox, "Explore as %s  (%s)" % [_get_troop_name_by_id(only_troop_id), explore_tier],
+				Color(0.65, 0.3, 0.9), _on_explore.bind(only_troop_id, explore_tier))
+		else:
+			_add_popup_btn(vbox, "Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9),
+				_open_explore_troop_picker.bind(zone["id"], explore_tier))
 	elif zone["owner"] == "neutral":
 		var adj = _is_adjacent_to_player(zone["id"]) or zone["id"] == 0
 		if adj:
@@ -593,6 +682,63 @@ func _get_explore_tier(zone_id: int) -> String:
 		return "Standard"
 	else:
 		return "Deep Delve"
+
+func _on_explore(troop_id: String, tier: String) -> void:
+	PlayerInventory.dungeon_tier = tier
+	PlayerInventory.dungeon_troop_id = troop_id
+	SaveManager.save_game()
+	get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn")
+
+# Shown when more than one troop is stationed at a zone, so the player
+# picks which one actually plays this dungeon run — each class plays
+# differently, so this is a real choice rather than a formality.
+func _open_explore_troop_picker(zone_id: int, tier: String) -> void:
+	_close_popup()
+
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
+
+	var bg = ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.7)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(bg)
+
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	overlay.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	panel.add_child(vbox)
+
+	var title = Label.new()
+	title.text = "Explore as which troop?"
+	title.add_theme_font_size_override("font_size", 16)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	for troop_id in zones[zone_id]["troops"]:
+		var troop_btn = Button.new()
+		var troop_name = _get_troop_name_by_id(troop_id)
+		var troop_type = _get_troop_type_by_id(troop_id)
+		troop_btn.text = "%s  [%s]" % [troop_name, troop_type]
+		troop_btn.custom_minimum_size = Vector2(220, 36)
+		troop_btn.pressed.connect(func():
+			overlay.queue_free()
+			_on_explore(troop_id, tier))
+		vbox.add_child(troop_btn)
+
+	var cancel_btn = Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.custom_minimum_size = Vector2(220, 32)
+	cancel_btn.pressed.connect(func(): overlay.queue_free())
+	vbox.add_child(cancel_btn)
+
+func _get_troop_type_by_id(troop_id: String) -> String:
+	for troop in PlayerInventory.troop_roster:
+		if troop.troop_id == troop_id:
+			return troop.get_type_name()
+	return "?"
 
 func _add_popup_btn(parent: VBoxContainer, text: String, col: Color, callback: Callable) -> void:
 	var btn = Button.new()
@@ -736,8 +882,8 @@ func _on_conquer(zone_id: int) -> void:
 			get_best_forge_level(staging_zone_id), get_best_shrine_level(staging_zone_id))
 
 	# Always triggers a battle — zone has guards based on distance
-	PlayerInventory.current_battle_zone = zone_id
-	var conquest_force = zones[zone_id]["enemy_strength"] * 0.3
+	PlayerInventory.current_battle_zone = int(zone_id)
+	var conquest_force = zones[zone_id]["enemy_strength"] * 0.4
 	if PlayerInventory.unlocked_talents.get("diplomatic_tongue", false):
 		conquest_force *= 0.8
 	PlayerInventory.current_attack_force = max(0.5, conquest_force)
@@ -1080,6 +1226,15 @@ func _process_resource_generation(delta: float) -> void:
 # Real-Time Clock
 # -------------------------------------------------------
 func _process(delta: float) -> void:
+	_process_camera_pan(delta)
+
+	# Countdown resolution always runs, even while a previous mandatory
+	# battle is already queued up and waiting to launch — otherwise a
+	# second pending attack's timer could silently stall instead of
+	# ever resolving into an actual battle.
+	if not is_paused:
+		_process_attack_countdowns(delta * time_speed)
+
 	if is_paused or mandatory_battle_queue.size() > 0:
 		return   # frozen during pause or while a forced battle is pending
 
@@ -1089,7 +1244,6 @@ func _process(delta: float) -> void:
 
 	_process_marching_troops(sim_delta)
 	_process_resource_generation(sim_delta)
-	_process_attack_countdowns(sim_delta)
 
 	attack_roll_timer -= sim_delta
 	if attack_roll_timer <= 0:
@@ -1098,6 +1252,22 @@ func _process(delta: float) -> void:
 
 	_refresh_hud()
 	_draw_map()
+
+# Arrow-key panning, works even while the map is paused since looking
+# around shouldn't require the clock to be running.
+func _process_camera_pan(delta: float) -> void:
+	if not map_camera: return
+	var dir = Vector2.ZERO
+	if Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_A):
+		dir.x -= 1
+	if Input.is_key_pressed(KEY_RIGHT) or Input.is_key_pressed(KEY_D):
+		dir.x += 1
+	if Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_W):
+		dir.y -= 1
+	if Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_S):
+		dir.y += 1
+	if dir != Vector2.ZERO:
+		map_camera.position += dir.normalized() * PAN_SPEED * delta
 
 func _process_marching_troops(delta: float) -> void:
 	var arrived = []
@@ -1109,6 +1279,41 @@ func _process_marching_troops(delta: float) -> void:
 			arrived.append(m)
 	for a in arrived:
 		marching_troops.erase(a)
+
+# Called by the Admin Panel to force one attack attempt right now,
+# ignoring the normal random chance and max-simultaneous cooldown.
+# Reuses the exact same targeting rule as the real attack system —
+# a player-owned zone adjacent to a neutral one — so testing reflects
+# genuine attack behavior. Returns a status string for the panel to show.
+func force_admin_attack() -> String:
+	var targets = []
+	for zone in zones:
+		if zone["owner"] != "player": continue
+		var already_pending = false
+		for pa in pending_attacks:
+			if pa["zone_id"] == zone["id"]: already_pending = true
+		if already_pending: continue
+		for conn_id in zone["connections"]:
+			if zones[conn_id]["owner"] == "neutral":
+				targets.append(zone["id"])
+				break
+
+	if targets.is_empty():
+		return "No valid target zones found (need a player-owned zone adjacent to a neutral one, not already under attack)."
+
+	var target_id = targets[randi() % targets.size()]
+	var diff_settings = PlayerInventory.difficulty_settings
+	var force = diff_settings.get("force_size", 1.0)
+	var warning_seconds = 3.0   # short, for fast testing rather than the real warning_turns delay
+
+	pending_attacks.append({
+		"zone_id": target_id,
+		"seconds_remaining": warning_seconds,
+		"total_seconds": warning_seconds,
+		"force_size": force,
+	})
+	_notify("⚠ [Admin] Forced attack on %s in %ds!" % [zones[target_id]["name"], int(warning_seconds)])
+	return "Forced attack queued on %s." % zones[target_id]["name"]
 
 func _maybe_spawn_attack() -> void:
 	var diff_settings = PlayerInventory.difficulty_settings
@@ -1170,7 +1375,7 @@ func _launch_next_mandatory_battle() -> void:
 	var attack = mandatory_battle_queue[0]
 	var zone = zones[attack["zone_id"]]
 	_notify("⚔ %s is under attack from the wilds! You must defend it now." % zone["name"])
-	PlayerInventory.current_battle_zone = attack["zone_id"]
+	PlayerInventory.current_battle_zone = int(attack["zone_id"])
 	PlayerInventory.current_attack_force = attack["force_size"]
 	PlayerInventory.conquering_zone = false
 	# Roster is snapshotted NOW, at the moment the attack actually lands —
@@ -1218,10 +1423,14 @@ func _notify(msg: String) -> void:
 				notification_label.text = "")
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_RIGHT:
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			_close_popup()
 			selected_zone_id = -1
 			_draw_map()
+		elif event.button_index == MOUSE_BUTTON_MIDDLE:
+			is_panning = event.pressed
+	if event is InputEventMouseMotion and is_panning and map_camera:
+		map_camera.position -= event.relative
 	if event is InputEventKey and event.pressed and event.keycode == KEY_SPACE:
 		_on_pause_pressed()

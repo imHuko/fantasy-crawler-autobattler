@@ -1,481 +1,1150 @@
-extends Control
+extends Node2D
 
 # -------------------------------------------------------
-# Dungeon Scene — procedural room map, click through rooms
-# Room types: combat, treasure, shop, rest
+# Defense Scene — real-time auto-battler wave defense
+# Place troops on the battlefield, they fight automatically
+# Enemies walk from right to left toward your base
 # -------------------------------------------------------
 
-const BIOME_COLORS = {
-	"crypt":        Color(0.45, 0.20, 0.55),
-	"forest_ruins": Color(0.20, 0.50, 0.25),
-	"dragon_lair":  Color(0.70, 0.25, 0.15),
+const FIELD_W = 800
+const FIELD_H = 500
+const BASE_X  = 60
+const SPAWN_X = FIELD_W - 20
+
+const C_BG       = Color(0.10, 0.12, 0.08)
+const C_BASE     = Color(0.20, 0.40, 0.80)
+const C_GROUND   = Color(0.15, 0.18, 0.12)
+const C_TROOP_K  = Color(0.30, 0.60, 1.00)   # Knight - blue
+const C_TROOP_A  = Color(0.20, 0.80, 0.30)   # Archer - green
+const C_TROOP_M  = Color(0.80, 0.30, 0.90)   # Mage - purple
+const C_TROOP_H  = Color(1.00, 0.80, 0.20)   # Healer - gold
+const C_TROOP_R  = Color(0.85, 0.15, 0.35)   # Rogue - crimson
+const C_ENEMY    = Color(0.85, 0.25, 0.20)
+const C_PROJ_T   = Color(0.60, 0.90, 1.00)
+const C_PROJ_E   = Color(1.00, 0.50, 0.10)
+const C_HEAL     = Color(0.40, 1.00, 0.40)
+
+const TROOP_COLORS = {
+	"KNIGHT": C_TROOP_K, "ARCHER": C_TROOP_A,
+	"MAGE":   C_TROOP_M, "HEALER": C_TROOP_H,
+	"ROGUE":  C_TROOP_R,
 }
 
-const BIOME_NAMES = {
-	"crypt":        "The Crypt",
-	"forest_ruins": "Forest Ruins",
-	"dragon_lair":  "Dragon's Lair",
-}
+const PLACE_COOLDOWN  = 0.5    # prevent double-placing
+const KNIGHT_AGGRO_BONUS = 60.0
 
-const ROOM_TYPE_COLORS = {
-	"combat":   Color(0.85, 0.25, 0.25),
-	"treasure": Color(0.90, 0.75, 0.10),
-	"shop":     Color(0.25, 0.70, 0.85),
-	"rest":     Color(0.30, 0.80, 0.40),
-	"boss":     Color(1.00, 0.10, 0.10),
-}
+var battle_active: bool = false
+var _all_enemies_spawned: bool = true
+var game_over: bool = false
+var base_hp: int = 20
+var base_max_hp: int = 20
 
-const ROOM_ICONS = {
-	"combat":   "⚔ Combat",
-	"treasure": "★ Treasure",
-	"shop":     "$ Shop",
-	"rest":     "♥ Rest",
-	"boss":     "☠ BOSS",
-}
+# Zone context — set by world map before launching this scene
+var battle_zone_id: int = -1
+var battle_started: bool = false   # true once player presses Begin Battle
+var begin_battle_btn: Button = null
+var is_conquering: bool = false
+var attack_force_mult: float = 1.0
+var battle_title: String = "Defend the Base"
 
-var current_biome: String = ""
-var rooms: Array = []
-var current_room_index: int = 0
-var run_gear_collected: Array = []
-var hero_hp: int = 100
-var hero_max_hp: int = 100
+# Troops placed on field: {data:TroopData, pos, hp, max_hp, attack_t, heal_t, rect, type_name}
+var placed_troops: Array = []
+# Enemies on field: {pos, hp, max_hp, attack, speed, rect, hp_bar}
+var enemies: Array = []
+# Projectiles: {pos, dir, damage, speed, is_troop, rect}
+var projectiles: Array = []
 
-# UI refs
-var biome_label: Label
-var room_map: VBoxContainer
-var room_panel: PanelContainer
-var room_content: VBoxContainer
-var hero_hp_label: Label
-var log_label: Label
-var continue_btn: Button
-var end_run_btn: Button
+# Roster slots UI
+var roster_slots: Array = []    # {troop_data, btn, placed}
+var selected_roster_idx: int = -1
+var place_cooldown: float = 0.0
+
+# UI nodes
+var field_node: Node2D
+var hud_wave: Label
+var hud_base_hp: Label
+var hud_timer: Label
+var hud_status: Label
+var base_rect: ColorRect
+var base_hp_bar: ColorRect
 
 func _ready() -> void:
+	_load_battle_context()
+	_plan_wave()
 	_build_ui()
-	_start_run()
+	_build_field()
+	_build_roster_ui()
+	_refresh_hud()
+	_show_wave_preview()
+
+func _load_battle_context() -> void:
+	battle_zone_id = PlayerInventory.current_battle_zone
+	is_conquering = PlayerInventory.conquering_zone
+	attack_force_mult = PlayerInventory.current_attack_force
+
+	battle_title = "Conquer Zone" if is_conquering else "Defend the Base"
+
+	# Scale base HP by force multiplier
+	base_max_hp = int(20 * max(0.5, attack_force_mult))
+	base_hp = base_max_hp
 
 # -------------------------------------------------------
-# Run Setup
+# Build UI
 # -------------------------------------------------------
+func _build_ui() -> void:
+	var bg = ColorRect.new()
+	bg.color = Color(0.06, 0.06, 0.08)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
 
-func _start_run() -> void:
-	# Pick biome based on stage
-	var stage = PlayerInventory.current_stage
-	var biomes = ["crypt"]
-	if stage >= 2: biomes.append("forest_ruins")
-	if stage >= 5: biomes.append("dragon_lair")
-	current_biome = biomes[randi() % biomes.size()]
+	var hud = CanvasLayer.new()
+	add_child(hud)
 
-	run_gear_collected.clear()
-	hero_hp = hero_max_hp
-	current_room_index = 0
-	rooms = _generate_rooms()
+	# Top bar
+	var top_bar = PanelContainer.new()
+	top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	top_bar.size.y = 48
+	hud.add_child(top_bar)
 
-	biome_label.text = BIOME_NAMES[current_biome] + "  |  " + PlayerInventory.dungeon_tier + "  |  Stage " + str(PlayerInventory.current_stage)
-	biome_label.add_theme_color_override("font_color", BIOME_COLORS[current_biome])
+	var top_hbox = HBoxContainer.new()
+	top_hbox.add_theme_constant_override("separation", 20)
+	top_bar.add_child(top_hbox)
 
-	_refresh_map()
-	_load_room(0)
-	_log("You enter " + BIOME_NAMES[current_biome] + ". Good luck.")
+	hud_wave = Label.new()
+	hud_wave.add_theme_font_size_override("font_size", 15)
+	hud_wave.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	top_hbox.add_child(hud_wave)
 
-func _generate_rooms() -> Array:
-	var count_range = {"Quick": [5, 7], "Standard": [8, 12], "Deep Delve": [14, 18]}
-	var range_for_tier = count_range.get(PlayerInventory.dungeon_tier, [8, 12])
-	var count = randi_range(range_for_tier[0], range_for_tier[1])
+	hud_timer = Label.new()
+	hud_timer.add_theme_font_size_override("font_size", 15)
+	hud_timer.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
+	top_hbox.add_child(hud_timer)
+
+	hud_base_hp = Label.new()
+	hud_base_hp.add_theme_font_size_override("font_size", 15)
+	hud_base_hp.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
+	top_hbox.add_child(hud_base_hp)
+
+	if PlayerInventory.current_battle_forge_level > 0 or PlayerInventory.current_battle_shrine_level > 0:
+		var buff_lbl = Label.new()
+		var parts = []
+		if PlayerInventory.current_battle_forge_level > 0:
+			parts.append("Forge +%d%% ATK" % (PlayerInventory.current_battle_forge_level * 5))
+		if PlayerInventory.current_battle_shrine_level > 0:
+			parts.append("Shrine +%d%% HP" % (PlayerInventory.current_battle_shrine_level * 5))
+		buff_lbl.text = "  ".join(parts)
+		buff_lbl.add_theme_font_size_override("font_size", 12)
+		buff_lbl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+		top_hbox.add_child(buff_lbl)
+
+	hud_status = Label.new()
+	hud_status.add_theme_font_size_override("font_size", 13)
+	hud_status.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	hud_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_hbox.add_child(hud_status)
+
+	var scout_btn = Button.new()
+	scout_btn.text = "👁 Scout"
+	scout_btn.custom_minimum_size = Vector2(80, 32)
+	scout_btn.tooltip_text = "Review the incoming enemy composition"
+	scout_btn.pressed.connect(_show_wave_preview)
+	top_hbox.add_child(scout_btn)
+
+	begin_battle_btn = Button.new()
+	begin_battle_btn.text = "⚔ Begin Battle"
+	begin_battle_btn.custom_minimum_size = Vector2(140, 32)
+	begin_battle_btn.add_theme_color_override("font_color", Color(1, 0.6, 0.3))
+	begin_battle_btn.pressed.connect(_on_begin_battle_pressed)
+	top_hbox.add_child(begin_battle_btn)
+
+	var back_btn = Button.new()
+	back_btn.text = "Retreat"
+	back_btn.pressed.connect(_on_retreat)
+	top_hbox.add_child(back_btn)
+
+	# Bottom roster panel
+	var bottom = PanelContainer.new()
+	bottom.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	bottom.size.y = 110
+	bottom.position.y = -110
+	hud.add_child(bottom)
+
+	var roster_vbox = VBoxContainer.new()
+	bottom.add_child(roster_vbox)
+
+	var roster_label = Label.new()
+	roster_label.text = "TROOPS  (click to select, then click battlefield to place)"
+	roster_label.add_theme_font_size_override("font_size", 11)
+	roster_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	roster_vbox.add_child(roster_label)
+
+	var roster_hbox = HBoxContainer.new()
+	roster_hbox.add_theme_constant_override("separation", 6)
+	roster_vbox.add_child(roster_hbox)
+
+	# Build a slot button for each troop available to this battle
+	var available_troops = _get_battle_roster()
+	for i in range(available_troops.size()):
+		var troop: TroopData = available_troops[i]
+		var eff = troop.get_effective_stats()
+		var col = TROOP_COLORS.get(troop.get_type_name(), Color.WHITE)
+
+		var btn = Button.new()
+		btn.custom_minimum_size = Vector2(130, 72)
+		btn.text = "%s\n[%s]\nHP:%d ATK:%d\nDEF:%d SPD:%d" % [
+			troop.troop_name, troop.get_type_name(),
+			eff.get("hp",0), eff.get("attack",0),
+			eff.get("defense",0), eff.get("speed",0)
+		]
+		btn.add_theme_color_override("font_color", col)
+		btn.add_theme_font_size_override("font_size", 11)
+		btn.pressed.connect(_on_roster_selected.bind(i))
+		roster_hbox.add_child(btn)
+		roster_slots.append({"troop": troop, "btn": btn, "placed": false})
+
+	if available_troops.is_empty():
+		var warn = Label.new()
+		warn.text = "No troops stationed here! You'll have to fight with whatever you brought \\u2014 nothing."
+		warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
+		roster_hbox.add_child(warn)
+
+# Returns the troops eligible for this battle.
+# If a zone is set, only troops stationed at that zone (by name) can be placed.
+# Falls back to the full roster for battles with no zone context (e.g. quick dungeon test).
+func _get_battle_roster() -> Array:
+	if battle_zone_id < 0:
+		return PlayerInventory.troop_roster.duplicate()
+
+	var zone_troop_ids = PlayerInventory.get_zone_troop_names(battle_zone_id)
+	if zone_troop_ids.is_empty():
+		return []
+
 	var result = []
-
-	# First room always combat, last always boss
-	result.append("combat")
-
-	# Middle rooms weighted random
-	var weights = { "combat": 50, "treasure": 20, "shop": 15, "rest": 15 }
-	for i in range(count - 2):
-		result.append(_weighted_pick(weights))
-
-	result.append("boss")
+	for troop in PlayerInventory.troop_roster:
+		if troop.troop_id in zone_troop_ids:
+			result.append(troop)
 	return result
 
-func _weighted_pick(weights: Dictionary) -> String:
+func _build_field() -> void:
+	field_node = Node2D.new()
+	field_node.position = Vector2(0, 52)   # below top HUD bar
+	add_child(field_node)
+
+	# Ground
+	var ground = ColorRect.new()
+	ground.color = C_GROUND
+	ground.position = Vector2(0, 0)
+	ground.size = Vector2(FIELD_W, FIELD_H - 110)
+	field_node.add_child(ground)
+
+	# Base
+	base_rect = ColorRect.new()
+	base_rect.color = C_BASE
+	base_rect.size = Vector2(40, FIELD_H - 110)
+	base_rect.position = Vector2(BASE_X - 20, 0)
+	field_node.add_child(base_rect)
+
+	var base_label = Label.new()
+	base_label.text = "BASE"
+	base_label.add_theme_font_size_override("font_size", 11)
+	base_label.add_theme_color_override("font_color", Color.WHITE)
+	base_label.position = Vector2(BASE_X - 18, 10)
+	field_node.add_child(base_label)
+
+	# Base HP bar bg
+	var bar_bg = ColorRect.new()
+	bar_bg.color = Color(0.3, 0.1, 0.1)
+	bar_bg.size = Vector2(40, 10)
+	bar_bg.position = Vector2(BASE_X - 20, FIELD_H - 120)
+	field_node.add_child(bar_bg)
+
+	# Base HP bar
+	base_hp_bar = ColorRect.new()
+	base_hp_bar.color = Color(0.3, 0.6, 1.0)
+	base_hp_bar.size = Vector2(40, 10)
+	base_hp_bar.position = Vector2(BASE_X - 20, FIELD_H - 120)
+	field_node.add_child(base_hp_bar)
+
+	# Click to place troops
+	var click_area = ColorRect.new()
+	click_area.color = Color(0, 0, 0, 0)
+	click_area.size = Vector2(FIELD_W, FIELD_H - 110)
+	click_area.position = Vector2(0, 0)
+	click_area.mouse_filter = Control.MOUSE_FILTER_STOP
+	field_node.add_child(click_area)
+
+func _build_roster_ui() -> void:
+	pass  # already built in _build_ui
+
+func _input(event: InputEvent) -> void:
+	if game_over: return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if selected_roster_idx >= 0 and place_cooldown <= 0:
+			var click_pos = event.position - field_node.position
+			if click_pos.x > BASE_X + 30 and click_pos.x < FIELD_W - 60 \
+			and click_pos.y > 10 and click_pos.y < FIELD_H - 120:
+				_place_troop(selected_roster_idx, click_pos)
+
+# -------------------------------------------------------
+# Troop placement
+# -------------------------------------------------------
+func _on_roster_selected(idx: int) -> void:
+	if roster_slots[idx]["placed"]:
+		_set_status("That troop is already on the field!")
+		return
+	selected_roster_idx = idx
+	for i in range(roster_slots.size()):
+		var col = TROOP_COLORS.get(roster_slots[i]["troop"].get_type_name(), Color.WHITE)
+		if i == idx:
+			roster_slots[i]["btn"].add_theme_color_override("font_color", Color(1,1,0))
+		else:
+			roster_slots[i]["btn"].add_theme_color_override("font_color", col)
+	_set_status("Click the battlefield to place " + roster_slots[idx]["troop"].troop_name)
+
+func _place_troop(idx: int, pos: Vector2) -> void:
+	var slot = roster_slots[idx]
+	if slot["placed"]: return
+
+	var troop: TroopData = slot["troop"]
+	var eff = troop.get_effective_stats()
+	var type_name = troop.get_type_name()
+	var col = TROOP_COLORS.get(type_name, Color.WHITE)
+	var sz = 30.0
+
+	# Sprite (procedural shape-based placeholder, swap for real art later)
+	var unit_type_map = {
+		"KNIGHT": UnitSprite.UnitType.KNIGHT, "ARCHER": UnitSprite.UnitType.ARCHER,
+		"MAGE": UnitSprite.UnitType.MAGE, "HEALER": UnitSprite.UnitType.HEALER,
+		"ROGUE": UnitSprite.UnitType.ROGUE,
+	}
+	var rect = UnitSprite.new()
+	rect.setup(unit_type_map.get(type_name, UnitSprite.UnitType.KNIGHT), col, sz)
+	rect.position = pos - Vector2(sz/2, sz/2)
+	field_node.add_child(rect)
+
+	# Name label
+	var lbl = Label.new()
+	lbl.text = troop.troop_name.left(8)
+	lbl.add_theme_font_size_override("font_size", 9)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.position = pos - Vector2(20, sz/2 + 14)
+	field_node.add_child(lbl)
+
+	# HP bar bg
+	var hpbg = ColorRect.new()
+	hpbg.color = Color(0.3, 0.1, 0.1)
+	hpbg.size = Vector2(sz, 5)
+	hpbg.position = pos - Vector2(sz/2, sz/2 + 7)
+	field_node.add_child(hpbg)
+
+	# HP bar
+	var hpbar = ColorRect.new()
+	hpbar.color = Color(0.3, 0.9, 0.3)
+	hpbar.size = Vector2(sz, 5)
+	hpbar.position = pos - Vector2(sz/2, sz/2 + 7)
+	field_node.add_child(hpbar)
+
+	var max_hp = eff.get("hp", 100)
+	var attack_val = eff.get("attack", 10)
+	var spell_power_pct = eff.get("spell_power", 0.0)   # % bonus to Mage damage / Healer heal
+	var lifesteal_pct = eff.get("lifesteal", 0.0)         # % of damage dealt returned as self-heal
+	var thorns_val = eff.get("thorns", 0.0)               # flat damage reflected on melee hits taken
+	var move_speed_bonus = eff.get("move_speed", 0.0)     # bonus to movement, matters most for melee
+
+	# Apply zone Forge/Shrine buffs — 5% per level
+	var forge_lvl = PlayerInventory.current_battle_forge_level
+	var shrine_lvl = PlayerInventory.current_battle_shrine_level
+	if forge_lvl > 0:
+		attack_val = int(attack_val * (1.0 + forge_lvl * 0.05))
+	if shrine_lvl > 0:
+		max_hp = int(max_hp * (1.0 + shrine_lvl * 0.05))
+
+	var attack_speed = max(0.5, 2.5 - eff.get("speed", 3) * 0.15)
+
+	placed_troops.append({
+		"troop": troop, "pos": pos,
+		"hp": max_hp, "max_hp": max_hp,
+		"attack": attack_val,
+		"defense": eff.get("defense", 5),
+		"spell_power": spell_power_pct,
+		"lifesteal": lifesteal_pct,
+		"thorns": thorns_val,
+		"move_speed_bonus": move_speed_bonus,
+		"type": type_name,
+		"attack_t": attack_speed,
+		"attack_interval": attack_speed,
+		"heal_t": 3.0,
+		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "label": lbl,
+		"sz": sz,
+	})
+
+	slot["placed"] = true
+	slot["btn"].add_theme_color_override("font_color", Color(0.4, 0.4, 0.4))
+	slot["btn"].text = slot["btn"].text + "\n[ON FIELD]"
+	selected_roster_idx = -1
+	place_cooldown = PLACE_COOLDOWN
+	_set_status(troop.troop_name + " placed!")
+
+# -------------------------------------------------------
+# Wave spawning
+# -------------------------------------------------------
+var _enemies_pending_spawn: int = 0
+
+# -------------------------------------------------------
+# Enemy archetypes — each plays meaningfully differently rather than
+# every enemy being the same stat profile with a different number.
+# -------------------------------------------------------
+const ENEMY_ARCHETYPES = {
+	"MELEE":   { "hp_mult": 1.0,  "dmg_mult": 1.0,  "speed_mult": 1.0,  "color": Color(0.7, 0.25, 0.25), "symbol": "⚔", "label": "Melee" },
+	"RANGED":  { "hp_mult": 0.75, "dmg_mult": 0.9,  "speed_mult": 0.9,  "color": Color(0.25, 0.6, 0.3), "symbol": "➹", "label": "Ranged" },
+	"ROGUE":   { "hp_mult": 0.6,  "dmg_mult": 1.3,  "speed_mult": 1.6,  "color": Color(0.55, 0.2, 0.65), "symbol": "✦", "label": "Bypasser" },
+	"TANK":    { "hp_mult": 2.6,  "dmg_mult": 0.55, "speed_mult": 0.55, "color": Color(0.4, 0.4, 0.45), "symbol": "▣", "label": "Tank" },
+	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2), "symbol": "✪", "label": "Buffer" },
+	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 2.5,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
+}
+const RANGED_ATTACK_RANGE = 260.0
+const CHARGER_BURST_RANGE = 50.0
+const BUFFER_AURA_RANGE = 180.0
+const BUFFER_BUFF_INTERVAL = 4.0
+const BUFFER_DMG_BOOST_PCT = 0.35
+const BUFFER_DMG_BOOST_DURATION = 3.0
+
+# Which archetypes can appear at a given stage, and their relative spawn
+# weight. Early stages are mostly plain melee; more complex types are
+# introduced gradually so the player isn't hit with everything at once.
+func _get_archetype_weights(stage: int) -> Dictionary:
+	if stage <= 1:
+		return {"MELEE": 100}
+	elif stage <= 2:
+		return {"MELEE": 70, "RANGED": 30}
+	elif stage <= 3:
+		return {"MELEE": 55, "RANGED": 25, "ROGUE": 20}
+	elif stage <= 4:
+		return {"MELEE": 40, "RANGED": 20, "ROGUE": 20, "TANK": 20}
+	elif stage <= 6:
+		return {"MELEE": 30, "RANGED": 20, "ROGUE": 20, "TANK": 20, "CHARGER": 10}
+	else:
+		return {"MELEE": 22, "RANGED": 18, "ROGUE": 18, "TANK": 18, "CHARGER": 14, "BUFFER": 10}
+
+func _roll_archetype(stage: int) -> String:
+	var weights = _get_archetype_weights(stage)
 	var total = 0
 	for w in weights.values(): total += w
 	var roll = randi() % total
 	var cumulative = 0
-	for key in weights:
-		cumulative += weights[key]
+	for archetype in weights:
+		cumulative += weights[archetype]
 		if roll < cumulative:
-			return key
-	return "combat"
+			return archetype
+	return "MELEE"
 
-# -------------------------------------------------------
-# Room Loading
-# -------------------------------------------------------
+var planned_wave: Array = []   # pre-rolled archetype list for this battle, set by _plan_wave()
 
-func _load_room(index: int) -> void:
-	current_room_index = index
-	_refresh_map()
+# Rolls the full wave composition once, before the player places any
+# troops, so it can be shown in a preview panel. Spawning later just
+# consumes this same list rather than rolling fresh per-enemy, so what
+# the player sees in the preview is exactly what they'll actually fight.
+func _plan_wave() -> void:
+	var stage = PlayerInventory.current_stage
+	var base_count = 6 + stage
+	var count = max(5, int(base_count * attack_force_mult))
+	if is_conquering:
+		count = max(4, int(count * 0.7))   # conquest fights are a bit smaller, but never trivial
 
-	# Clear room content
-	for child in room_content.get_children():
-		child.queue_free()
-	continue_btn.visible = false
+	planned_wave.clear()
+	for i in range(count):
+		var is_boss = (i == count - 1) and count >= 4
+		planned_wave.append("BOSS" if is_boss else _roll_archetype(stage))
 
-	var room_type = rooms[index]
-	var is_last = (index == rooms.size() - 1)
+func _get_wave_composition_counts() -> Dictionary:
+	var counts = {}
+	for archetype in planned_wave:
+		counts[archetype] = counts.get(archetype, 0) + 1
+	return counts
 
-	match room_type:
-		"combat", "boss":
-			_load_combat_room(room_type)
-		"treasure":
-			_load_treasure_room()
-		"shop":
-			_load_shop_room()
-		"rest":
-			_load_rest_room()
+# Shows the enemy wave composition before the player places troops, so
+# picking a roster is an informed decision rather than a guess. Closing
+# this just dismisses it — troop placement and Begin Battle work exactly
+# as before underneath it.
+func _show_wave_preview() -> void:
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
 
-func _load_combat_room(room_type: String) -> void:
-	var is_boss = (room_type == "boss")
-	var difficulty = PlayerInventory.current_stage + (2 if is_boss else 0)
-	difficulty = clamp(difficulty, 1, 10)
+	var bg = ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.75)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(bg)
 
-	var enemy = _generate_enemy(is_boss, difficulty)
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	overlay.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 8)
+	vbox.custom_minimum_size = Vector2(260, 0)
+	panel.add_child(vbox)
 
 	var title = Label.new()
-	title.text = ("☠ BOSS: " if is_boss else "⚔ Enemy: ") + enemy["name"]
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", ROOM_TYPE_COLORS[room_type])
-	room_content.add_child(title)
-
-	var enemy_stats = Label.new()
-	enemy_stats.text = "HP: %d  |  ATK: %d  |  DEF: %d" % [enemy["hp"], enemy["attack"], enemy["defense"]]
-	enemy_stats.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-	room_content.add_child(enemy_stats)
+	title.text = "Incoming Forces"
+	title.add_theme_font_size_override("font_size", 18)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
 
 	var sep = HSeparator.new()
-	room_content.add_child(sep)
+	vbox.add_child(sep)
 
-	# Fight button
-	var fight_btn = Button.new()
-	fight_btn.text = "⚔  Fight!"
-	fight_btn.custom_minimum_size = Vector2(160, 40)
-	fight_btn.pressed.connect(_do_combat.bind(enemy, fight_btn))
-	room_content.add_child(fight_btn)
+	var counts = _get_wave_composition_counts()
+	# Show BOSS first if present, then the rest in a stable, readable order
+	var order = ["BOSS", "TANK", "MELEE", "RANGED", "ROGUE", "CHARGER", "BUFFER"]
+	for archetype in order:
+		if not counts.has(archetype): continue
+		var row = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		vbox.add_child(row)
 
-func _load_treasure_room() -> void:
-	var title = Label.new()
-	title.text = "★ Treasure Room"
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", ROOM_TYPE_COLORS["treasure"])
-	room_content.add_child(title)
+		var symbol_lbl = Label.new()
+		var color = Color(1, 0.3, 0.2) if archetype == "BOSS" else ENEMY_ARCHETYPES[archetype]["color"]
+		var symbol = "☠" if archetype == "BOSS" else ENEMY_ARCHETYPES[archetype]["symbol"]
+		symbol_lbl.text = symbol
+		symbol_lbl.add_theme_font_size_override("font_size", 16)
+		symbol_lbl.add_theme_color_override("font_color", color)
+		symbol_lbl.custom_minimum_size = Vector2(24, 0)
+		row.add_child(symbol_lbl)
 
-	var diff = clamp(PlayerInventory.current_stage + randi_range(0, 2), 1, 10)
-	if PlayerInventory.dungeon_tier == "Deep Delve":
-		diff = clamp(diff + 2, 1, 10)
-	var gear = GearGenerator.generate(current_biome, diff)
-	run_gear_collected.append(gear)
-	PlayerInventory.add_gear(gear)
+		var name_lbl = Label.new()
+		var display_name = "Boss" if archetype == "BOSS" else ENEMY_ARCHETYPES[archetype]["label"]
+		name_lbl.text = display_name
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_lbl)
 
-	var desc = Label.new()
-	desc.text = "You found:\n[%s] %s\n%s\nStats: %s" % [
-		gear.get_rarity_name(), gear.item_name,
-		gear.get_slot_name(), str(gear.stats)
-	]
-	desc.add_theme_color_override("font_color", _rarity_color(gear.get_rarity_name()))
-	desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	room_content.add_child(desc)
+		var count_lbl = Label.new()
+		count_lbl.text = "x%d" % counts[archetype]
+		count_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+		row.add_child(count_lbl)
 
-	_log("Found " + gear.item_name + "!")
-	continue_btn.visible = true
+	var sep2 = HSeparator.new()
+	vbox.add_child(sep2)
 
-func _load_shop_room() -> void:
-	var title = Label.new()
-	title.text = "$ Shop  (Coming soon — skip for now)"
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", ROOM_TYPE_COLORS["shop"])
-	room_content.add_child(title)
+	var close_btn = Button.new()
+	close_btn.text = "Got it"
+	close_btn.custom_minimum_size = Vector2(0, 32)
+	close_btn.pressed.connect(func(): overlay.queue_free())
+	vbox.add_child(close_btn)
 
-	var desc = Label.new()
-	desc.text = "The merchant nods. You browse but find nothing of interest today."
-	desc.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-	desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	room_content.add_child(desc)
+func _spawn_battle_force() -> void:
+	var stage = PlayerInventory.current_stage
+	_all_enemies_spawned = false
+	_enemies_pending_spawn = planned_wave.size()
 
-	_log("You visited the shop.")
-	continue_btn.visible = true
+	for i in range(planned_wave.size()):
+		var delay = i * 0.5
+		var archetype = planned_wave[i]
+		var t = get_tree().create_timer(delay)
+		t.timeout.connect(_on_enemy_spawn_timer.bind(stage, archetype))
 
-func _load_rest_room() -> void:
-	var title = Label.new()
-	title.text = "♥ Rest Site"
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", ROOM_TYPE_COLORS["rest"])
-	room_content.add_child(title)
+func _on_enemy_spawn_timer(stage: int, archetype: String) -> void:
+	_spawn_one_enemy(stage, archetype)
+	_enemies_pending_spawn -= 1
+	if _enemies_pending_spawn <= 0:
+		_all_enemies_spawned = true
 
-	var heal_amount = int(hero_max_hp * 0.30)
-	hero_hp = min(hero_hp + heal_amount, hero_max_hp)
-	_refresh_hero_hp()
+func _spawn_one_enemy(stage: int, archetype: String) -> void:
+	var is_boss = archetype == "BOSS"
+	var profile = ENEMY_ARCHETYPES["MELEE"] if is_boss else ENEMY_ARCHETYPES[archetype]
 
-	var desc = Label.new()
-	desc.text = "You rest by a campfire and recover %d HP.\nCurrent HP: %d / %d" % [heal_amount, hero_hp, hero_max_hp]
-	desc.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-	room_content.add_child(desc)
+	var sz = 50.0 if is_boss else 24.0
+	var max_hp = int((18 + stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult) * profile["hp_mult"])
+	var spd = (45.0 + stage * 4.0) * profile["speed_mult"]
+	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"])
 
-	_log("Rested and recovered %d HP." % heal_amount)
-	continue_btn.visible = true
+	var ey = randf_range(30, FIELD_H - 140)
+
+	var rect = UnitSprite.new()
+	var sprite_color = Color(1, 0.2, 0.1) if is_boss else profile["color"]
+	rect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
+		sprite_color, sz)
+	rect.position = Vector2(SPAWN_X - sz, ey - sz/2)
+	field_node.add_child(rect)
+
+	var type_lbl = Label.new()
+	type_lbl.text = "BOSS" if is_boss else profile["symbol"]
+	type_lbl.add_theme_font_size_override("font_size", 13 if is_boss else 12)
+	type_lbl.add_theme_color_override("font_color", Color(1, 1, 1))
+	type_lbl.position = Vector2(SPAWN_X - sz - 4, ey - sz/2 - 22)
+	field_node.add_child(type_lbl)
+
+	var hpbg = ColorRect.new()
+	hpbg.color = Color(0.3, 0.1, 0.1)
+	hpbg.size = Vector2(sz, 5)
+	hpbg.position = Vector2(SPAWN_X - sz, ey - sz/2 - 7)
+	field_node.add_child(hpbg)
+
+	var hpbar = ColorRect.new()
+	hpbar.color = Color(0.9, 0.2, 0.2)
+	hpbar.size = Vector2(sz, 5)
+	hpbar.position = Vector2(SPAWN_X - sz, ey - sz/2 - 7)
+	field_node.add_child(hpbar)
+
+	enemies.append({
+		"pos": Vector2(SPAWN_X - sz/2, ey),
+		"hp": max_hp, "max_hp": max_hp,
+		"attack": atk, "speed": spd,
+		"sz": sz, "is_boss": is_boss,
+		"enemy_type": "BOSS" if is_boss else archetype,
+		"attack_t": 1.5,
+		"buff_t": BUFFER_BUFF_INTERVAL,
+		"dmg_boost_t": 0.0,
+		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "type_lbl": type_lbl,
+	})
 
 # -------------------------------------------------------
-# Combat
+# Process
 # -------------------------------------------------------
+func _process(delta: float) -> void:
+	if game_over: return
+	place_cooldown -= delta
 
-func _generate_enemy(is_boss: bool, difficulty: int) -> Dictionary:
-	var base_hp     = 30 + difficulty * 12
-	var base_atk    = 5  + difficulty * 3
-	var base_def    = 2  + difficulty * 2
-
-	if is_boss:
-		base_hp  = int(base_hp  * 2.5)
-		base_atk = int(base_atk * 1.8)
-		base_def = int(base_def * 1.5)
-
-	# Dungeon tier scaling — Quick is gentler, Deep Delve is meaningfully harder,
-	# matching the same multipliers used in the Action Dungeon for consistency.
-	var tier_mult = {"Quick": 0.8, "Standard": 1.0, "Deep Delve": 1.4}.get(PlayerInventory.dungeon_tier, 1.0)
-	base_hp = int(base_hp * tier_mult)
-	base_atk = int(base_atk * tier_mult)
-	base_def = int(base_def * tier_mult)
-
-	var enemy_names = {
-		"crypt":        ["Skeleton", "Ghoul", "Wraith", "Lich"],
-		"forest_ruins": ["Goblin Scout", "Stone Golem", "Vine Horror", "Treant"],
-		"dragon_lair":  ["Fire Drake", "Kobold Warlord", "Lava Elemental", "Elder Dragon"],
-	}
-	var boss_names = {
-		"crypt":        "The Tomb King",
-		"forest_ruins": "The Ancient Guardian",
-		"dragon_lair":  "Ignarax the Destroyer",
-	}
-
-	var name_list = enemy_names.get(current_biome, enemy_names["crypt"])
-	var ename = boss_names[current_biome] if is_boss else name_list[randi() % name_list.size()]
-
-	return { "name": ename, "hp": base_hp, "attack": base_atk, "defense": base_def, "is_boss": is_boss }
-
-func _do_combat(enemy: Dictionary, fight_btn: Button) -> void:
-	fight_btn.disabled = true
-
-	# Get hero effective stats from first troop (player's hero stand-in for now)
-	var hero_atk = 20
-	var hero_def = 10
-	PlayerInventory.ensure_hero_exists()
-	var eff = PlayerInventory.hero.get_effective_stats()
-	hero_atk = eff.get("attack", 20)
-	hero_def = eff.get("defense", 10)
-
-	var enemy_hp = enemy["hp"]
-	var rounds = 0
-	var combat_log = []
-
-	while enemy_hp > 0 and hero_hp > 0 and rounds < 20:
-		rounds += 1
-		# Hero attacks
-		var hero_dmg = max(1, hero_atk - enemy["defense"] + randi_range(-3, 5))
-		enemy_hp -= hero_dmg
-		# Enemy attacks
-		var enemy_dmg = max(1, enemy["attack"] - hero_def + randi_range(-2, 4))
-		if enemy_hp > 0:
-			hero_hp -= enemy_dmg
-			hero_hp = max(0, hero_hp)
-		combat_log.append("Rnd %d: You deal %d dmg. Enemy deals %d dmg." % [rounds, hero_dmg, enemy_dmg])
-
-	_refresh_hero_hp()
-
-	# Show last 3 rounds
-	var shown = combat_log.slice(max(0, combat_log.size() - 3))
-	for line in shown:
-		_log(line)
-
-	if hero_hp <= 0:
-		_on_run_failed()
-	elif enemy_hp <= 0:
-		var is_boss = enemy.get("is_boss", false)
-		_log("Victory! " + enemy["name"] + " defeated.")
-
-		# Drop gear on combat win
-		var diff = clamp(PlayerInventory.current_stage + (2 if is_boss else 0), 1, 10)
-		if PlayerInventory.dungeon_tier == "Deep Delve":
-			diff = clamp(diff + 2, 1, 10)
-		var gear = GearGenerator.generate(current_biome, diff)
-		run_gear_collected.append(gear)
-		PlayerInventory.add_gear(gear)
-		_log("Dropped: [%s] %s" % [gear.get_rarity_name(), gear.item_name])
-
-		if is_boss:
-			_on_run_complete()
+	if not battle_active:
+		if battle_started:
+			# Player pressed Begin Battle — spawn the full force now
+			battle_active = true
+			battle_started = false
+			_spawn_battle_force()
+			_refresh_hud()
+			_set_status("Charge!")
+			if begin_battle_btn: begin_battle_btn.visible = false
 		else:
-			continue_btn.visible = true
+			hud_timer.text = "Place your troops, then press Begin Battle"
+	else:
+		hud_timer.text = "Battle in progress..."
 
-func _on_run_failed() -> void:
-	_log("You have been defeated... Run over.")
-	hero_hp = hero_max_hp  # Reset for next run
+	_process_enemies(delta)
+	_process_troops(delta)
+	_move_projectiles(delta)
+	_update_visuals()
 
-	var result_label = Label.new()
-	result_label.text = "DEFEATED\nYou collected %d gear items this run.\nReturning to management..." % run_gear_collected.size()
-	result_label.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
-	result_label.add_theme_font_size_override("font_size", 16)
-	room_content.add_child(result_label)
+	# Check battle won — all enemies cleared, including any still in spawn queue
+	if battle_active and enemies.is_empty() and _all_enemies_spawned:
+		_on_victory()
 
-	end_run_btn.text = "Back to Management"
-	end_run_btn.visible = true
+func _process_enemies(delta: float) -> void:
+	var new_enemies = []
+	for e in enemies:
+		if not is_instance_valid(e["rect"]):
+			continue
 
-func _on_run_complete() -> void:
+		var enemy_type = e.get("enemy_type", "MELEE")
+
+		if enemy_type == "BUFFER":
+			_process_buffer_enemy(e, delta)
+			new_enemies.append(e)
+			continue
+
+		if e.get("dmg_boost_t", 0.0) > 0.0:
+			e["dmg_boost_t"] -= delta
+
+		var target_troop = _find_enemy_target(e, enemy_type)
+
+		var attack_range = 0.0
+		var real_dist = INF
+		if target_troop:
+			if enemy_type == "RANGED":
+				attack_range = RANGED_ATTACK_RANGE
+			else:
+				attack_range = e["sz"] / 2 + target_troop["sz"] / 2 + 6
+			real_dist = e["pos"].distance_to(target_troop["pos"])
+
+		var effective_atk = e["attack"]
+		if e.get("dmg_boost_t", 0.0) > 0.0:
+			effective_atk = int(effective_atk * (1.0 + BUFFER_DMG_BOOST_PCT))
+
+		if target_troop and real_dist <= attack_range:
+			# In range — stop and fight (melee swing or ranged shot)
+			e["attack_t"] -= delta
+			if e["attack_t"] <= 0:
+				if enemy_type == "RANGED":
+					_fire_proj(e["pos"], target_troop["pos"], effective_atk, false)
+					e["attack_t"] = 1.4
+				elif enemy_type == "CHARGER":
+					# One big burst, then the charger detonates and is removed
+					_damage_troop(target_troop, effective_atk, e)
+					if is_instance_valid(e["rect"]): e["rect"].queue_free()
+					if is_instance_valid(e["hp_bar"]): e["hp_bar"].queue_free()
+					if is_instance_valid(e["hp_bar_bg"]): e["hp_bar_bg"].queue_free()
+					if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+					continue
+				else:
+					_damage_troop(target_troop, effective_atk, e)
+					e["attack_t"] = 1.2
+		elif target_troop:
+			# Move toward target troop
+			var dir = (target_troop["pos"] - e["pos"]).normalized()
+			e["pos"] += dir * e["speed"] * delta
+			# Keep enemy inside the field bounds
+			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
+			e["pos"].y = clamp(e["pos"].y, 10, FIELD_H - 130)
+		elif e["pos"].x <= BASE_X + 30:
+			# No troops left — attack base
+			e["attack_t"] -= delta
+			if e["attack_t"] <= 0:
+				_damage_base(effective_atk)
+				e["attack_t"] = 1.0
+		else:
+			# No troops — march toward base
+			e["pos"].x -= e["speed"] * delta
+
+		# Reached base
+		if e["pos"].x <= BASE_X:
+			_damage_base(effective_atk * 2)
+			if is_instance_valid(e["rect"]): e["rect"].queue_free()
+			if is_instance_valid(e["hp_bar"]): e["hp_bar"].queue_free()
+			if is_instance_valid(e["hp_bar_bg"]): e["hp_bar_bg"].queue_free()
+			if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+			continue
+
+		new_enemies.append(e)
+	enemies = new_enemies
+
+# Picks which troop an enemy should target. Most archetypes use the
+# standard Knight-aggro formula (nearest troop, with Knights pulling
+# extra attention). Rogue ignores that entirely and explicitly hunts
+# backline roles (Mage/Healer/Archer) regardless of distance, falling
+# back to nearest-any-troop only if no backline role is present.
+func _find_enemy_target(e: Dictionary, enemy_type: String) -> Dictionary:
+	if enemy_type == "ROGUE":
+		var backline_target = null
+		var backline_dist = INF
+		for t in placed_troops:
+			if t["hp"] <= 0: continue
+			if t["type"] in ["MAGE", "HEALER", "ARCHER"]:
+				var d = e["pos"].distance_to(t["pos"])
+				if d < backline_dist:
+					backline_dist = d
+					backline_target = t
+		if backline_target:
+			return backline_target
+		# No backline role on the field — fall back to nearest of anyone
+
+	var target_troop = null
+	var target_score = INF
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var d = e["pos"].distance_to(t["pos"])
+		var score = d - (KNIGHT_AGGRO_BONUS if t["type"] == "KNIGHT" else 0.0)
+		if score < target_score:
+			target_score = score
+			target_troop = t
+	return target_troop
+
+# Buffer enemy — doesn't attack troops at all. Periodically grants a
+# temporary damage boost to nearby allied enemies, making it a real
+# priority-kill target rather than just another body in the wave.
+func _process_buffer_enemy(e: Dictionary, delta: float) -> void:
+	# Drift slowly toward the action rather than standing frozen at spawn
+	if placed_troops.size() > 0:
+		var nearest_troop_dist = INF
+		for t in placed_troops:
+			if t["hp"] <= 0: continue
+			nearest_troop_dist = min(nearest_troop_dist, e["pos"].distance_to(t["pos"]))
+		if nearest_troop_dist > BUFFER_AURA_RANGE * 1.5:
+			e["pos"].x -= e["speed"] * delta * 0.6
+			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
+
+	e["buff_t"] -= delta
+	if e["buff_t"] <= 0:
+		e["buff_t"] = BUFFER_BUFF_INTERVAL
+		for other in enemies:
+			if other == e: continue
+			if e["pos"].distance_to(other["pos"]) <= BUFFER_AURA_RANGE:
+				other["dmg_boost_t"] = BUFFER_DMG_BOOST_DURATION
+
+func _process_troops(delta: float) -> void:
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+
+		match t["type"]:
+			"KNIGHT":
+				# Tank — melee, also taunts: enemies within range prefer to target knights
+				_melee_engage(t, delta, 120.0, 70.0, t["attack"], 1.0)
+			"ROGUE":
+				# Fast melee striker — short range but hits hard and fast, no taunt
+				_melee_engage(t, delta, 90.0, 95.0, int(t["attack"] * 1.3), 0.6)
+			"ARCHER":
+				# Ranged — shoots nearest enemy anywhere on the field, doesn't need to move
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var nearest = _nearest_enemy(t["pos"], 500)
+					if nearest:
+						_fire_proj(t["pos"], nearest["pos"], t["attack"], true, t)
+						t["attack_t"] = t["attack_interval"]
+			"MAGE":
+				# AoE — damages all enemies in a large radius.
+				# If nothing is in range, drifts slowly toward the action instead
+				# of staying frozen at its placement spot forever.
+				var in_range = false
+				for e in enemies:
+					if t["pos"].distance_to(e["pos"]) < 250:
+						in_range = true
+						break
+
+				if not in_range:
+					var target = _nearest_enemy_anywhere(t["pos"])
+					if not target.is_empty():
+						var dir = (target["pos"] - t["pos"]).normalized()
+						t["pos"] += dir * 40.0 * delta   # slow drift, much slower than melee
+						t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
+						t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var hit_any = false
+					var spell_dmg = int(t["attack"] * 0.7 * (1.0 + t.get("spell_power", 0.0)))
+					for e in enemies:
+						if t["pos"].distance_to(e["pos"]) < 250:
+							_damage_enemy(e, spell_dmg, t)
+							hit_any = true
+					if hit_any:
+						t["attack_t"] = t["attack_interval"] * 1.5
+					else:
+						t["attack_t"] = 0.2
+			"HEALER":
+				# Heals nearest wounded troop AND attacks nearby enemies, stays put
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var nearest = _nearest_enemy(t["pos"], 200)
+					if nearest:
+						_fire_proj(t["pos"], nearest["pos"], int(t["attack"] * 0.4), true, t)
+					t["attack_t"] = t["attack_interval"]
+				t["heal_t"] -= delta
+				if t["heal_t"] <= 0:
+					var target = _nearest_wounded_troop(t["pos"])
+					if target:
+						var heal = max(5, int(t["attack"] * 0.5 * (1.0 + t.get("spell_power", 0.0))))
+						target["hp"] = min(target["hp"] + heal, target["max_hp"])
+						_show_heal_effect(target["pos"])
+						_update_troop_hp_bar(target)
+					t["heal_t"] = 2.5
+
+func _fire_proj(from: Vector2, toward: Vector2, dmg: int, is_troop: bool, source: Dictionary = {}) -> void:
+	var dir = (toward - from).normalized()
+	var rect = ColorRect.new()
+	rect.size = Vector2(8, 8)
+	rect.color = C_PROJ_T if is_troop else C_PROJ_E
+	rect.position = from - Vector2(4, 4)
+	field_node.add_child(rect)
+	projectiles.append({"pos": Vector2(from.x, from.y), "dir": dir,
+		"damage": dmg, "is_troop": is_troop, "rect": rect, "source": source})
+
+func _move_projectiles(delta: float) -> void:
+	var new_projs = []
+	for p in projectiles:
+		if not is_instance_valid(p["rect"]): continue
+		p["pos"] += p["dir"] * 280.0 * delta
+
+		var oob = p["pos"].x < 0 or p["pos"].x > FIELD_W or p["pos"].y < 0 or p["pos"].y > FIELD_H
+		if oob:
+			p["rect"].queue_free()
+			continue
+
+		var hit = false
+		if p["is_troop"]:
+			for e in enemies:
+				if p["pos"].distance_to(e["pos"]) < e["sz"]/2 + 4:
+					_damage_enemy(e, p["damage"], p.get("source", {}))
+					p["rect"].queue_free()
+					hit = true
+					break
+		else:
+			for t in placed_troops:
+				if t["hp"] > 0 and p["pos"].distance_to(t["pos"]) < t["sz"]/2 + 4:
+					_damage_troop(t, p["damage"])
+					p["rect"].queue_free()
+					hit = true
+					break
+		if not hit:
+			new_projs.append(p)
+	projectiles = new_projs
+
+# -------------------------------------------------------
+# Damage helpers
+# -------------------------------------------------------
+func _damage_enemy(e: Dictionary, amount: int, source_troop: Dictionary = {}) -> void:
+	e["hp"] -= max(1, amount)
+
+	# Lifesteal — heals the attacking troop for a % of damage dealt.
+	# Inert on Healer since they don't call this function as the attacker
+	# (their heal logic is separate), so this naturally does nothing for them.
+	if not source_troop.is_empty():
+		var lifesteal_pct = source_troop.get("lifesteal", 0.0)
+		if lifesteal_pct > 0.0 and source_troop["hp"] > 0:
+			var healed = max(1, int(amount * lifesteal_pct))
+			source_troop["hp"] = min(source_troop["hp"] + healed, source_troop["max_hp"])
+			_update_troop_hp_bar(source_troop)
+
+	if e["hp"] <= 0:
+		e["hp"] = 0
+		if is_instance_valid(e["rect"]): e["rect"].queue_free()
+		if is_instance_valid(e["hp_bar"]): e["hp_bar"].queue_free()
+		if is_instance_valid(e["hp_bar_bg"]): e["hp_bar_bg"].queue_free()
+		if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+		enemies.erase(e)
+	else:
+		_update_enemy_hp_bar(e)
+
+func _damage_troop(t: Dictionary, amount: int, source_enemy: Dictionary = {}) -> void:
+	var reduced = max(1, amount - int(t["defense"] * 0.4))
+	t["hp"] -= reduced
+
+	# Thorns — reflects flat damage back to a melee attacker. Only passed
+	# in by the genuine melee-range hit, so ranged/projectile damage to a
+	# troop never triggers this — matches Thorns being melee-only.
+	var thorns_val = t.get("thorns", 0.0)
+	if thorns_val > 0.0 and not source_enemy.is_empty():
+		_damage_enemy(source_enemy, int(thorns_val))
+
+	if t["hp"] <= 0:
+		t["hp"] = 0
+		if is_instance_valid(t["rect"]) and t["rect"] is UnitSprite:
+			t["rect"].set_color(Color(0.3, 0.3, 0.3))
+	_update_troop_hp_bar(t)
+
+func _damage_base(amount: int) -> void:
+	base_hp -= amount
+	base_hp = max(0, base_hp)
+	_refresh_hud()
+	base_hp_bar.size.x = 40.0 * float(base_hp) / float(base_max_hp)
+	if base_hp <= 0:
+		_on_defeat()
+
+func _update_enemy_hp_bar(e: Dictionary) -> void:
+	if is_instance_valid(e["hp_bar"]):
+		e["hp_bar"].size.x = e["sz"] * float(e["hp"]) / float(e["max_hp"])
+
+func _update_troop_hp_bar(t: Dictionary) -> void:
+	if is_instance_valid(t["hp_bar"]):
+		var pct = float(t["hp"]) / float(t["max_hp"])
+		t["hp_bar"].size.x = t["sz"] * pct
+		t["hp_bar"].color = Color(0.9,0.2,0.2) if pct < 0.3 else (
+			Color(0.9,0.7,0.2) if pct < 0.6 else Color(0.3,0.9,0.3))
+
+func _show_heal_effect(pos: Vector2) -> void:
+	var lbl = Label.new()
+	lbl.text = "+HP"
+	lbl.add_theme_color_override("font_color", C_HEAL)
+	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.position = pos - Vector2(12, 30)
+	field_node.add_child(lbl)
+	get_tree().create_timer(0.6).timeout.connect(func(): if is_instance_valid(lbl): lbl.queue_free())
+
+# -------------------------------------------------------
+# Targeting helpers
+# -------------------------------------------------------
+func _nearest_enemy(from: Vector2, max_range: float) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = max_range
+	for e in enemies:
+		if e["hp"] <= 0: continue
+		var d = from.distance_to(e["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = e
+	return nearest
+
+# Unlike _nearest_enemy, this has no range cap — used so melee troops can
+# always see and walk toward a target even before it's in attack range.
+func _nearest_enemy_anywhere(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for e in enemies:
+		if e["hp"] <= 0: continue
+		var d = from.distance_to(e["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = e
+	return nearest
+
+# Shared logic for melee troops (Knight, Rogue): walk toward the nearest
+# enemy if out of range, attack if in range. Mirrors how enemies already
+# behave, so both sides actively close the distance and engage.
+func _melee_engage(t: Dictionary, delta: float, attack_range: float, move_speed: float,
+		dmg: int, attack_speed_mult: float) -> void:
+	var target = _nearest_enemy_anywhere(t["pos"])
+	if target.is_empty(): return
+
+	var dist = t["pos"].distance_to(target["pos"])
+	if dist <= attack_range:
+		t["attack_t"] -= delta
+		if t["attack_t"] <= 0:
+			_damage_enemy(target, dmg, t)
+			t["attack_t"] = t["attack_interval"] * attack_speed_mult
+	else:
+		var dir = (target["pos"] - t["pos"]).normalized()
+		# Move Speed stat boosts closing speed — most meaningful here on
+		# melee units, since this is the path that actually needs to close
+		# distance; ranged/stationary units rarely hit this branch at all.
+		var effective_speed = move_speed * (1.0 + t.get("move_speed_bonus", 0.0))
+		t["pos"] += dir * effective_speed * delta
+		# Keep troop inside the battlefield bounds
+		t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
+		t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+
+func _nearest_troop(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var d = from.distance_to(t["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = t
+	return nearest
+
+func _nearest_wounded_troop(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for t in placed_troops:
+		if t["hp"] <= 0 or t["hp"] >= t["max_hp"]: continue
+		var d = from.distance_to(t["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = t
+	return nearest
+
+# -------------------------------------------------------
+# Visuals
+# -------------------------------------------------------
+func _update_visuals() -> void:
+	for e in enemies:
+		if is_instance_valid(e["rect"]):
+			e["rect"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2)
+			# Detect an attack firing by watching for attack_t resetting to
+			# a high value — purely cosmetic, doesn't touch combat logic.
+			if e["rect"] is UnitSprite:
+				var prev = e.get("_prev_attack_t", 0.0)
+				if e["attack_t"] > prev + 0.3:
+					e["rect"].play_attack()
+				e["_prev_attack_t"] = e["attack_t"]
+				e["rect"].face(Vector2(-1, 0))   # enemies face left toward the base
+		if is_instance_valid(e["hp_bar"]):
+			e["hp_bar"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2 + 7)
+		if is_instance_valid(e["hp_bar_bg"]):
+			e["hp_bar_bg"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2 + 7)
+		if is_instance_valid(e.get("type_lbl")):
+			e["type_lbl"].position = e["pos"] - Vector2(e["sz"]/2 + 4, e["sz"]/2 + 22)
+
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var sz = t["sz"]
+		if is_instance_valid(t["rect"]):
+			t["rect"].position = t["pos"] - Vector2(sz/2, sz/2)
+			if t["rect"] is UnitSprite:
+				var prev = t.get("_prev_attack_t", 0.0)
+				if t["attack_t"] > prev + 0.3:
+					t["rect"].play_attack()
+				t["_prev_attack_t"] = t["attack_t"]
+				t["rect"].face(Vector2(1, 0))   # troops face right toward enemies
+		if is_instance_valid(t["hp_bar"]):
+			t["hp_bar"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
+		if is_instance_valid(t["hp_bar_bg"]):
+			t["hp_bar_bg"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
+		if t.has("label") and is_instance_valid(t["label"]):
+			t["label"].position = t["pos"] - Vector2(20, sz/2 + 14)
+
+# -------------------------------------------------------
+# HUD
+# -------------------------------------------------------
+func _refresh_hud() -> void:
+	if hud_wave:
+		hud_wave.text = battle_title
+	if hud_base_hp:
+		hud_base_hp.text = "Base HP: %d / %d" % [base_hp, base_max_hp]
+		var col = Color(0.9,0.2,0.2) if base_hp < base_max_hp * 0.3 else Color(0.4,0.7,1.0)
+		hud_base_hp.add_theme_color_override("font_color", col)
+
+func _set_status(msg: String) -> void:
+	if hud_status: hud_status.text = msg
+
+func _on_begin_battle_pressed() -> void:
+	if battle_active: return
+	battle_started = true
+	_set_status("Charge!")
+
+func _on_retreat() -> void:
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "retreat"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+
+func _on_return() -> void:
+	if battle_zone_id >= 0:
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+
+# -------------------------------------------------------
+# End states
+# -------------------------------------------------------
+func _on_victory() -> void:
+	game_over = true
 	PlayerInventory.current_stage += 1
-
-	# Unlock troop slot at stages 3, 5, 8
 	if PlayerInventory.current_stage in [3, 5, 8]:
 		PlayerInventory.unlock_troop_slot()
-		_log("New troop slot unlocked!")
 
-	var result_label = Label.new()
-	result_label.text = "RUN COMPLETE!\nStage %d cleared.\nGear collected: %d items.\nReturning to management..." % [
-		PlayerInventory.current_stage - 1,
-		run_gear_collected.size()
-	]
-	result_label.add_theme_color_override("font_color", Color(0.3, 0.9, 0.3))
-	result_label.add_theme_font_size_override("font_size", 16)
-	room_content.add_child(result_label)
+	# Report result to map
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "won"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
 
-	end_run_btn.text = "Back to Management"
-	end_run_btn.visible = true
+	SaveManager.save_game()
+	_show_end_screen(true)
 
-# -------------------------------------------------------
-# UI
-# -------------------------------------------------------
+func _on_defeat() -> void:
+	game_over = true
 
-func _refresh_map() -> void:
-	for child in room_map.get_children():
-		child.queue_free()
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "lost"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
 
-	var hbox = HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 2)
-	room_map.add_child(hbox)
+	SaveManager.save_game()
+	_show_end_screen(false)
 
-	for i in range(rooms.size()):
-		var room_type = rooms[i]
-		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(36, 36)
-		btn.text = str(i + 1)
-		btn.tooltip_text = ROOM_ICONS[room_type]
+func _show_end_screen(won: bool) -> void:
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
 
-		if i < current_room_index:
-			btn.add_theme_color_override("font_color", Color(0.4, 0.4, 0.4))
-		elif i == current_room_index:
-			btn.add_theme_color_override("font_color", Color(1, 1, 0))
-		else:
-			btn.add_theme_color_override("font_color", ROOM_TYPE_COLORS[room_type])
-
-		btn.disabled = true
-		hbox.add_child(btn)
-
-func _refresh_hero_hp() -> void:
-	hero_hp_label.text = "Hero HP: %d / %d" % [hero_hp, hero_max_hp]
-	if hero_hp < hero_max_hp * 0.3:
-		hero_hp_label.add_theme_color_override("font_color", Color(0.9, 0.2, 0.2))
-	elif hero_hp < hero_max_hp * 0.6:
-		hero_hp_label.add_theme_color_override("font_color", Color(0.9, 0.7, 0.2))
-	else:
-		hero_hp_label.add_theme_color_override("font_color", Color(0.3, 0.9, 0.3))
-
-func _log(msg: String) -> void:
-	log_label.text = msg + "\n" + log_label.text
-	# Keep last 6 lines
-	var lines = log_label.text.split("\n")
-	if lines.size() > 6:
-		lines = lines.slice(0, 6)
-	log_label.text = "\n".join(lines)
-
-func _rarity_color(rarity_name: String) -> Color:
-	match rarity_name:
-		"COMMON":    return Color(0.75, 0.75, 0.75)
-		"RARE":      return Color(0.25, 0.50, 1.00)
-		"EPIC":      return Color(0.65, 0.25, 0.90)
-		"LEGENDARY": return Color(1.00, 0.65, 0.10)
-	return Color.WHITE
-
-func _build_ui() -> void:
 	var bg = ColorRect.new()
-	bg.color = Color(0.08, 0.08, 0.12, 1)
+	bg.color = Color(0,0,0,0.75)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
+	overlay.add_child(bg)
 
-	var outer = VBoxContainer.new()
-	outer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	outer.add_theme_constant_override("separation", 6)
-	add_child(outer)
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	overlay.add_child(panel)
 
-	# Biome title
-	biome_label = Label.new()
-	biome_label.text = "Dungeon"
-	biome_label.add_theme_font_size_override("font_size", 20)
-	outer.add_child(biome_label)
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(vbox)
 
-	# Hero HP
-	hero_hp_label = Label.new()
-	hero_hp_label.text = "Hero HP: 100 / 100"
-	hero_hp_label.add_theme_font_size_override("font_size", 13)
-	outer.add_child(hero_hp_label)
+	var title = Label.new()
+	title.text = "VICTORY!" if won else "BASE DESTROYED"
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(0.3,0.9,0.3) if won else Color(0.9,0.2,0.2))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
 
-	# Room map (scrollable row of room buttons)
-	var map_scroll = ScrollContainer.new()
-	map_scroll.custom_minimum_size = Vector2(0, 50)
-	outer.add_child(map_scroll)
+	var sub = Label.new()
+	sub.text = "The battle is won!" if won else "Your base has fallen."
+	sub.add_theme_color_override("font_color", Color(0.8,0.8,0.8))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(sub)
 
-	room_map = VBoxContainer.new()
-	map_scroll.add_child(room_map)
-
-	var sep = HSeparator.new()
-	outer.add_child(sep)
-
-	# Room panel
-	room_panel = PanelContainer.new()
-	room_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	outer.add_child(room_panel)
-
-	room_content = VBoxContainer.new()
-	room_content.add_theme_constant_override("separation", 8)
-	room_panel.add_child(room_content)
-
-	# Continue / End Run buttons
-	continue_btn = Button.new()
-	continue_btn.text = "Continue >"
-	continue_btn.custom_minimum_size = Vector2(140, 38)
-	continue_btn.visible = false
-	continue_btn.pressed.connect(_on_continue)
-	outer.add_child(continue_btn)
-
-	end_run_btn = Button.new()
-	end_run_btn.text = "Back to Management"
-	end_run_btn.custom_minimum_size = Vector2(200, 38)
-	end_run_btn.visible = false
-	end_run_btn.pressed.connect(_on_end_run)
-	outer.add_child(end_run_btn)
-
-	# Combat log
-	var log_header = Label.new()
-	log_header.text = "— Log —"
-	log_header.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-	outer.add_child(log_header)
-
-	log_label = Label.new()
-	log_label.text = ""
-	log_label.add_theme_font_size_override("font_size", 11)
-	log_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	log_label.autowrap_mode = TextServer.AUTOWRAP_WORD
-	outer.add_child(log_label)
-
-func _on_continue() -> void:
-	continue_btn.visible = false
-	if current_room_index + 1 < rooms.size():
-		_load_room(current_room_index + 1)
-	else:
-		_on_run_complete()
-
-func _on_end_run() -> void:
-	get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+	var btn = Button.new()
+	btn.text = "Return to Map" if battle_zone_id >= 0 else "Back to Management"
+	btn.custom_minimum_size = Vector2(220, 44)
+	btn.pressed.connect(_on_return)
+	vbox.add_child(btn)

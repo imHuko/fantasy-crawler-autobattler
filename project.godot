@@ -20,6 +20,7 @@ config/icon="res://icon.svg"
 PlayerInventory="*uid://cewhaluufihh0"
 GearGenerator="*uid://b322eaoltpu55"
 SaveManager="*uid://b2v5ggfaybckn"
+AdminPanel="*uid://b3diep401blyh"
 
 [physics]
 

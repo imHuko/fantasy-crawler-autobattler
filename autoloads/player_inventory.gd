@@ -31,6 +31,7 @@ var conquering_zone: bool = false
 # Dungeon run tier — chosen on the dungeon picker screen each time, not
 # the same as the map's Easy/Normal/Hard/Nightmare difficulty above.
 var dungeon_tier: String = "Standard"   # "Quick", "Standard", "Deep Delve"
+var dungeon_troop_id: String = ""        # troop_id of whichever troop is being played this dungeon run
 
 # Resources — banked for spending (recruiting, rerolling, talents, etc).
 # Food and Gold are interchangeable for spending purposes — costs are
@@ -88,17 +89,15 @@ var map_tutorial_seen: Dictionary = {
 	"move_troops": false, "end_turn": false,
 }
 
-# Dungeon hero — a dedicated character separate from the troop roster,
-# with its own gear slots used only in dungeon runs.
-var hero: TroopData = null
-
-func ensure_hero_exists() -> void:
-	if hero == null:
-		hero = TroopData.new()
-		hero.is_hero = true
-		hero.troop_name = "Hero"
-		hero.troop_type = TroopData.TroopType.KNIGHT
-		hero.base_stats = { "hp": 120, "attack": 16, "defense": 8, "speed": 4 }
+# The Hero is now a regular member of troop_roster (flagged via
+# TroopData.is_hero) rather than a separate dedicated character — usable
+# on the map, in defense battles, and in the action dungeon, all as the
+# same single character.
+func get_hero() -> TroopData:
+	for troop in troop_roster:
+		if troop.is_hero:
+			return troop
+	return null
 
 # Snapshot of troop names eligible for the current/next battle.
 # Set by world_map right before launching defense_scene so the battle

@@ -173,6 +173,15 @@ func _build_ui() -> void:
 		get_tree().change_scene_to_file("res://scenes/talent_tree_screen.tscn"))
 	top_nav_hbox.add_child(talent_btn)
 
+	var admin_btn = Button.new()
+	admin_btn.text = "⚙ Admin"
+	admin_btn.custom_minimum_size = Vector2(100, 48)
+	admin_btn.add_theme_font_size_override("font_size", 15)
+	admin_btn.add_theme_color_override("font_color", Color(1, 0.7, 0.2))
+	admin_btn.tooltip_text = "Testing tools — resources, stage, talents, troop healing, jump to combat"
+	admin_btn.pressed.connect(func(): AdminPanel._toggle_panel())
+	top_nav_hbox.add_child(admin_btn)
+
 	# --- DUNGEON BUTTON ---
 	var dungeon_hbox = HBoxContainer.new()
 	dungeon_hbox.add_theme_constant_override("separation", 10)
@@ -185,6 +194,7 @@ func _build_ui() -> void:
 	action_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
 	action_btn.tooltip_text = "Top-down WASD action dungeon"
 	action_btn.pressed.connect(func():
+		PlayerInventory.dungeon_troop_id = ""   # standalone path always uses the Hero
 		SaveManager.save_game()
 		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/action_dungeon.tscn")
 		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))
@@ -205,19 +215,8 @@ func _populate_troops() -> void:
 		child.queue_free()
 	all_slot_buttons.clear()
 
-	PlayerInventory.ensure_hero_exists()
-	var hero_label = Label.new()
-	hero_label.text = "⚔ DUNGEON HERO  (used in dungeon runs only)"
-	hero_label.add_theme_font_size_override("font_size", 12)
-	hero_label.add_theme_color_override("font_color", Color(0.6, 0.9, 1.0))
-	troop_list.add_child(hero_label)
-	troop_list.add_child(_make_troop_card(PlayerInventory.hero))
-
-	var sep = HSeparator.new()
-	troop_list.add_child(sep)
-
 	var map_label = Label.new()
-	map_label.text = "🗺 MAP TROOPS  (stationed on the world map)"
+	map_label.text = "🗺 TROOPS  (stationed on the world map, fight in defense battles)"
 	map_label.add_theme_font_size_override("font_size", 12)
 	map_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
 	troop_list.add_child(map_label)
@@ -296,7 +295,8 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	vbox.add_child(header_hbox)
 
 	var header = Label.new()
-	header.text = troop.troop_name + "  [" + troop.get_type_name() + "]"
+	var hero_tag = "⚔ " if troop.is_hero else ""
+	header.text = hero_tag + troop.troop_name + "  [" + troop.get_type_name() + "]"
 	header.add_theme_font_size_override("font_size", 15)
 	header.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
 	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -323,6 +323,28 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	stats_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	stats_label.set_meta("troop", troop)
 	vbox.add_child(stats_label)
+
+	# HP row — shows current/max HP and lets the player spend food to
+	# heal missing HP at a 1 food : 1 HP rate. Wounds persist from
+	# defense battles until healed here.
+	var hp_hbox = HBoxContainer.new()
+	hp_hbox.add_theme_constant_override("separation", 8)
+	hp_hbox.name = "HPRow"
+	vbox.add_child(hp_hbox)
+
+	var hp_label = Label.new()
+	hp_label.name = "HPLabel"
+	hp_label.add_theme_font_size_override("font_size", 12)
+	hp_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hp_hbox.add_child(hp_label)
+
+	var heal_btn = Button.new()
+	heal_btn.name = "HealBtn"
+	heal_btn.add_theme_font_size_override("font_size", 11)
+	heal_btn.pressed.connect(_on_heal_troop_pressed.bind(troop, card))
+	hp_hbox.add_child(heal_btn)
+
+	_refresh_hp_row(hp_label, heal_btn, troop)
 
 	# Gear slot buttons
 	var slots_hbox = HBoxContainer.new()
@@ -467,6 +489,56 @@ func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
 			suggest_str = "\n  » " + " / ".join(suggestions)
 
 	return header + "\n" + slot_line + stat_lines + suggest_str
+
+func _refresh_hp_row(hp_label: Label, heal_btn: Button, troop: TroopData) -> void:
+	var current = troop.get_current_hp()
+	var max_hp = troop.get_max_hp()
+	var missing = troop.get_missing_hp()
+
+	hp_label.text = "HP: %d / %d" % [current, max_hp]
+	var hp_pct = float(current) / max(1, max_hp)
+	if hp_pct <= 0.15:
+		hp_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.25))
+	elif hp_pct <= 0.5:
+		hp_label.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+	else:
+		hp_label.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5))
+
+	if missing <= 0:
+		heal_btn.text = "Full HP"
+		heal_btn.disabled = true
+	else:
+		var food_available = PlayerInventory.resources.get("food", 0)
+		var food_cost = missing   # 1 food : 1 HP
+		heal_btn.text = "Heal (%d food)" % food_cost
+		heal_btn.disabled = food_available <= 0
+
+func _on_heal_troop_pressed(troop: TroopData, card: PanelContainer) -> void:
+	var missing = troop.get_missing_hp()
+	if missing <= 0:
+		return
+
+	var food_available = PlayerInventory.resources.get("food", 0)
+	if food_available <= 0:
+		_update_status("Not enough food to heal %s." % troop.troop_name)
+		return
+
+	# Spend whatever food is available, up to what's actually needed —
+	# lets the player partially heal if they don't have enough for a
+	# full heal, rather than requiring the full amount upfront.
+	var food_to_spend = min(missing, food_available)
+	var healed = troop.heal(food_to_spend)
+	PlayerInventory.resources["food"] -= healed
+
+	if healed >= missing:
+		_update_status("%s fully healed for %d food." % [troop.troop_name, healed])
+	else:
+		_update_status("%s healed %d HP for %d food (need more food for the rest)." % [troop.troop_name, healed, healed])
+
+	var hp_label = card.find_child("HPLabel", true, false)
+	var heal_btn = card.find_child("HealBtn", true, false)
+	if hp_label and heal_btn:
+		_refresh_hp_row(hp_label, heal_btn, troop)
 
 func _on_focus_troop_pressed(troop: TroopData) -> void:
 	focus_troop = null if focus_troop == troop else troop

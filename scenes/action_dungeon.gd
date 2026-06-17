@@ -13,6 +13,22 @@ const DOOR_W = 64
 const HERO_SPEED_BASE = 180.0
 const HERO_HP_BASE = 100
 const ATTACK_INTERVAL = 0.8
+
+# Per-class playstyle in the action dungeon. Whichever troop is brought
+# into the dungeon plays meaningfully differently rather than every run
+# feeling like the same generic melee character. Melee classes (Knight/
+# Rogue) get a short attack range that forces them to close distance —
+# technically still an auto-fire range check rather than true melee
+# collision, but tight enough to feel like melee in practice.
+const CLASS_PROFILES = {
+	"KNIGHT": { "hp_mult": 1.5,  "dmg_mult": 0.7, "interval_mult": 1.0, "range": 220.0, "self_heal": false },
+	"ARCHER": { "hp_mult": 1.0,  "dmg_mult": 0.75,"interval_mult": 0.6, "range": 99999.0, "self_heal": false },
+	"MAGE":   { "hp_mult": 0.85, "dmg_mult": 1.8, "interval_mult": 1.4, "range": 99999.0, "self_heal": false },
+	"ROGUE":  { "hp_mult": 0.7,  "dmg_mult": 1.6, "interval_mult": 0.8, "range": 220.0, "self_heal": false },
+	"HEALER": { "hp_mult": 0.8,  "dmg_mult": 0.5, "interval_mult": 1.0, "range": 99999.0, "self_heal": true },
+}
+const HEALER_SELF_HEAL_INTERVAL = 3.0   # seconds between passive self-heal ticks
+const HEALER_SELF_HEAL_PCT = 0.08       # % of max HP healed per tick
 const PROJECTILE_SPEED = 320.0
 const PROJ_DAMAGE = 8
 
@@ -59,6 +75,10 @@ var hero_attack: int = 12
 var hero_armor: int = 0
 var hero_crit_chance: float = 0.0
 var hero_crit_damage: int = 0
+var hero_attack_range: float = 99999.0
+var hero_attack_interval: float = ATTACK_INTERVAL
+var hero_self_heal: bool = false
+var self_heal_timer: float = HEALER_SELF_HEAL_INTERVAL
 var attack_timer: float = 0.0
 var invincible_timer: float = 0.0
 
@@ -89,15 +109,30 @@ func _ready() -> void:
 	_enter_room(0, "")
 
 func _load_hero_stats() -> void:
-	PlayerInventory.ensure_hero_exists()
-	var eff = PlayerInventory.hero.get_effective_stats()
-	hero_max_hp  = max(50,  eff.get("hp",      HERO_HP_BASE))
+	var troop = _get_dungeon_troop()
+	var eff = troop.get_effective_stats() if troop else {}
+	var profile = CLASS_PROFILES.get(troop.get_type_name(), CLASS_PROFILES["KNIGHT"]) if troop else CLASS_PROFILES["KNIGHT"]
+
+	hero_max_hp  = max(50,  int(eff.get("hp", HERO_HP_BASE) * profile["hp_mult"]))
 	hero_speed   = max(100, HERO_SPEED_BASE + eff.get("speed", 0) * 8.0)
-	hero_attack  = max(5,   eff.get("attack",  12))
+	hero_attack  = max(5,   int(eff.get("attack", 12) * profile["dmg_mult"]))
 	hero_armor   = eff.get("armor", 0)
 	hero_crit_chance = eff.get("crit_chance", 0.0)
 	hero_crit_damage = eff.get("crit_damage", 0)
+	hero_attack_range = profile["range"]
+	hero_attack_interval = ATTACK_INTERVAL * profile["interval_mult"]
+	hero_self_heal = profile["self_heal"]
 	hero_hp = hero_max_hp
+
+# Finds the troop the player selected to bring into this dungeon run,
+# via PlayerInventory.dungeon_troop_id. Falls back to the Hero if nothing
+# was explicitly selected (e.g. the tutorial dungeon path).
+func _get_dungeon_troop() -> TroopData:
+	if PlayerInventory.dungeon_troop_id != "":
+		for troop in PlayerInventory.troop_roster:
+			if troop.troop_id == PlayerInventory.dungeon_troop_id:
+				return troop
+	return PlayerInventory.get_hero()
 
 # -------------------------------------------------------
 # Room generation
@@ -327,7 +362,20 @@ func _process(delta: float) -> void:
 	_move_projectiles(delta)
 	_process_enemies(delta)
 	_check_door_transition()
+	_self_heal_tick(delta)
 	_update_visuals()
+
+# Healer's passive sustain — periodically heals a % of max HP. This is
+# Healer's actual strength in the dungeon despite being the weakest
+# attacker by far: outlasting a fight rather than winning it quickly.
+func _self_heal_tick(delta: float) -> void:
+	if not hero_self_heal or hero_hp <= 0: return
+	self_heal_timer -= delta
+	if self_heal_timer <= 0:
+		self_heal_timer = HEALER_SELF_HEAL_INTERVAL
+		var healed = max(1, int(hero_max_hp * HEALER_SELF_HEAL_PCT))
+		hero_hp = min(hero_hp + healed, hero_max_hp)
+		_refresh_hud()
 
 func _move_hero(delta: float) -> void:
 	var dir = Vector2.ZERO
@@ -375,8 +423,12 @@ func _attack_tick(delta: float) -> void:
 			nearest_dist = d
 			nearest = e
 
-	if nearest:
-		attack_timer = ATTACK_INTERVAL
+	# Melee classes (short hero_attack_range) simply can't fire until
+	# something is actually close — this is what makes Knight/Rogue feel
+	# like they need to close distance, even though it's still a range
+	# check rather than true melee collision under the hood.
+	if nearest and nearest_dist <= hero_attack_range:
+		attack_timer = hero_attack_interval
 		var dmg = hero_attack
 		if randf() < hero_crit_chance:
 			dmg = int(dmg * (1.0 + hero_crit_damage / 100.0))
