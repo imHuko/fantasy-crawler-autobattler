@@ -1,0 +1,242 @@
+extends Control
+
+# -------------------------------------------------------
+# Settings Screen — display options now, audio later. Persisted
+# separately from the game save (settings.cfg via ConfigFile), since
+# display preferences belong to the player/device, not to a specific
+# campaign save.
+# -------------------------------------------------------
+
+const CONFIG_PATH = "user://settings.cfg"
+
+const RESOLUTION_PRESETS = [
+	Vector2i(1280, 720),
+	Vector2i(1600, 900),
+	Vector2i(1920, 1080),
+]
+
+var width_field: LineEdit
+var height_field: LineEdit
+var fullscreen_check: CheckBox
+var confirm_dispose_check: CheckBox
+var status_label: Label
+var return_target: String = "res://scenes/world_map.tscn"
+
+func _ready() -> void:
+	# Remember which screen to return to, so Settings can be opened from
+	# anywhere without hardcoding a single "back" destination.
+	if PlayerInventory.settings_return_scene != "":
+		return_target = PlayerInventory.settings_return_scene
+
+	_build_ui()
+	_load_current_into_fields()
+
+func _build_ui() -> void:
+	var bg = ColorRect.new()
+	bg.color = Color(0.07, 0.08, 0.10)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+
+	var outer = VBoxContainer.new()
+	outer.set_anchors_preset(Control.PRESET_CENTER)
+	outer.custom_minimum_size = Vector2(420, 0)
+	outer.add_theme_constant_override("separation", 14)
+	add_child(outer)
+
+	var title = Label.new()
+	title.text = "Settings"
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outer.add_child(title)
+
+	outer.add_child(HSeparator.new())
+
+	# --- Display ---
+	var display_label = Label.new()
+	display_label.text = "Display"
+	display_label.add_theme_font_size_override("font_size", 16)
+	display_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	outer.add_child(display_label)
+
+	var preset_label = Label.new()
+	preset_label.text = "Presets:"
+	preset_label.add_theme_font_size_override("font_size", 12)
+	outer.add_child(preset_label)
+
+	var preset_hbox = HBoxContainer.new()
+	preset_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(preset_hbox)
+	for res in RESOLUTION_PRESETS:
+		var btn = Button.new()
+		btn.text = "%dx%d" % [res.x, res.y]
+		btn.custom_minimum_size = Vector2(0, 32)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.pressed.connect(_on_preset_pressed.bind(res))
+		preset_hbox.add_child(btn)
+
+	var custom_label = Label.new()
+	custom_label.text = "Custom resolution:"
+	custom_label.add_theme_font_size_override("font_size", 12)
+	outer.add_child(custom_label)
+
+	var custom_hbox = HBoxContainer.new()
+	custom_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(custom_hbox)
+
+	width_field = LineEdit.new()
+	width_field.placeholder_text = "Width"
+	width_field.custom_minimum_size = Vector2(100, 0)
+	custom_hbox.add_child(width_field)
+
+	var x_label = Label.new()
+	x_label.text = "x"
+	custom_hbox.add_child(x_label)
+
+	height_field = LineEdit.new()
+	height_field.placeholder_text = "Height"
+	height_field.custom_minimum_size = Vector2(100, 0)
+	custom_hbox.add_child(height_field)
+
+	var apply_custom_btn = Button.new()
+	apply_custom_btn.text = "Apply"
+	apply_custom_btn.pressed.connect(_on_apply_custom_resolution)
+	custom_hbox.add_child(apply_custom_btn)
+
+	var fullscreen_hbox = HBoxContainer.new()
+	fullscreen_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(fullscreen_hbox)
+
+	fullscreen_check = CheckBox.new()
+	fullscreen_check.toggled.connect(_on_fullscreen_toggled)
+	fullscreen_hbox.add_child(fullscreen_check)
+
+	var fullscreen_label = Label.new()
+	fullscreen_label.text = "Fullscreen"
+	fullscreen_hbox.add_child(fullscreen_label)
+
+	var hint = Label.new()
+	hint.text = "Tip: when windowed, you can also drag the window's edges or corners to resize freely."
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD
+	outer.add_child(hint)
+
+	outer.add_child(HSeparator.new())
+
+	# --- Gameplay ---
+	var gameplay_label = Label.new()
+	gameplay_label.text = "Gameplay"
+	gameplay_label.add_theme_font_size_override("font_size", 16)
+	gameplay_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	outer.add_child(gameplay_label)
+
+	var confirm_hbox = HBoxContainer.new()
+	confirm_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(confirm_hbox)
+
+	confirm_dispose_check = CheckBox.new()
+	confirm_dispose_check.button_pressed = PlayerInventory.confirm_before_disposing_gear
+	confirm_dispose_check.toggled.connect(_on_confirm_dispose_toggled)
+	confirm_hbox.add_child(confirm_dispose_check)
+
+	var confirm_label = Label.new()
+	confirm_label.text = "Always confirm before selling or salvaging gear"
+	confirm_hbox.add_child(confirm_label)
+
+	outer.add_child(HSeparator.new())
+
+	# --- Audio (placeholder for when sound is added) ---
+	var audio_label = Label.new()
+	audio_label.text = "Audio"
+	audio_label.add_theme_font_size_override("font_size", 16)
+	audio_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	outer.add_child(audio_label)
+
+	var audio_hint = Label.new()
+	audio_hint.text = "No sound in the game yet — volume controls will appear here once that's added."
+	audio_hint.add_theme_font_size_override("font_size", 11)
+	audio_hint.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+	audio_hint.autowrap_mode = TextServer.AUTOWRAP_WORD
+	outer.add_child(audio_hint)
+
+	outer.add_child(HSeparator.new())
+
+	status_label = Label.new()
+	status_label.text = ""
+	status_label.add_theme_font_size_override("font_size", 12)
+	status_label.add_theme_color_override("font_color", Color(0.6, 0.9, 0.6))
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	outer.add_child(status_label)
+
+	var back_btn = Button.new()
+	back_btn.text = "Back"
+	back_btn.custom_minimum_size = Vector2(0, 36)
+	back_btn.pressed.connect(_on_back_pressed)
+	outer.add_child(back_btn)
+
+func _load_current_into_fields() -> void:
+	var current_size = DisplayServer.window_get_size()
+	width_field.text = str(current_size.x)
+	height_field.text = str(current_size.y)
+	fullscreen_check.button_pressed = DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+
+func _on_preset_pressed(res: Vector2i) -> void:
+	_apply_resolution(res)
+	width_field.text = str(res.x)
+	height_field.text = str(res.y)
+
+func _on_apply_custom_resolution() -> void:
+	if not width_field.text.is_valid_int() or not height_field.text.is_valid_int():
+		_set_status("Width and height must both be whole numbers.")
+		return
+	var w = int(width_field.text)
+	var h = int(height_field.text)
+	if w < 640 or h < 480:
+		_set_status("Resolution must be at least 640x480.")
+		return
+	_apply_resolution(Vector2i(w, h))
+
+func _apply_resolution(res: Vector2i) -> void:
+	# Fullscreen ignores window size, so switch to windowed first if needed
+	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		fullscreen_check.button_pressed = false
+	DisplayServer.window_set_size(res)
+	_center_window()
+	_save_settings()
+	_set_status("Resolution set to %dx%d." % [res.x, res.y])
+
+func _on_fullscreen_toggled(is_on: bool) -> void:
+	if is_on:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		_set_status("Fullscreen enabled.")
+	else:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		_center_window()
+		_set_status("Windowed mode enabled.")
+	_save_settings()
+
+func _center_window() -> void:
+	var screen_size = DisplayServer.screen_get_size()
+	var window_size = DisplayServer.window_get_size()
+	DisplayServer.window_set_position((screen_size - window_size) / 2)
+
+func _on_confirm_dispose_toggled(is_on: bool) -> void:
+	PlayerInventory.confirm_before_disposing_gear = is_on
+	_save_settings()
+
+func _save_settings() -> void:
+	var config = ConfigFile.new()
+	config.set_value("display", "width", DisplayServer.window_get_size().x)
+	config.set_value("display", "height", DisplayServer.window_get_size().y)
+	config.set_value("display", "fullscreen", DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN)
+	config.set_value("gameplay", "confirm_before_disposing_gear", PlayerInventory.confirm_before_disposing_gear)
+	config.save(CONFIG_PATH)
+
+func _set_status(msg: String) -> void:
+	if status_label:
+		status_label.text = msg
+
+func _on_back_pressed() -> void:
+	get_tree().change_scene_to_file(return_target)

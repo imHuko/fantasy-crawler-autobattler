@@ -4,3 +4,6 @@
 
 [node name="DefenseScene" type="Node2D" unique_id=1906451244]
 script = ExtResource("1_def")
+
+[node name="TileMap" type="TileMap" parent="." unique_id=104527182]
+format = 2

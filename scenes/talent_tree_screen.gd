@@ -168,8 +168,37 @@ func _make_node_card(node_id: String) -> PanelContainer:
 		buy_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4) if can_buy else Color(0.5, 0.5, 0.5))
 		buy_btn.pressed.connect(_on_node_purchase.bind(node_id))
 		vbox.add_child(buy_btn)
+	elif node_id == "toggle_invasions":
+		# Special case: once unlocked, this node's "purchase" button is
+		# replaced by an ongoing on/off control rather than a one-time
+		# effect, since the whole point is flipping it repeatedly.
+		var can_toggle = PlayerInventory.difficulty_settings.get("invasions_toggleable", true)
+
+		var toggle_hbox = HBoxContainer.new()
+		toggle_hbox.add_theme_constant_override("separation", 8)
+		vbox.add_child(toggle_hbox)
+
+		var toggle_check = CheckBox.new()
+		toggle_check.button_pressed = PlayerInventory.invasions_enabled
+		toggle_check.disabled = not can_toggle
+		toggle_check.toggled.connect(_on_invasions_toggled)
+		toggle_hbox.add_child(toggle_check)
+
+		var toggle_label = Label.new()
+		toggle_label.add_theme_font_size_override("font_size", 11)
+		if can_toggle:
+			toggle_label.text = "Wilderness attacks enabled"
+		else:
+			toggle_label.text = "Locked ON \\u2014 this difficulty always has attacks"
+			toggle_label.add_theme_color_override("font_color", Color(0.9, 0.6, 0.3))
+		toggle_hbox.add_child(toggle_label)
 
 	return card
+
+func _on_invasions_toggled(is_on: bool) -> void:
+	PlayerInventory.invasions_enabled = is_on
+	SaveManager.save_game()
+	_set_status("Wilderness attacks %s." % ("enabled" if is_on else "disabled"))
 
 func _on_node_purchase(node_id: String) -> void:
 	if TalentTreeData.purchase(node_id):

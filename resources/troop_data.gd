@@ -36,11 +36,12 @@ func get_effective_stats() -> Dictionary:
 	for slot_key in equipped_gear:
 		var gear: GearItem = equipped_gear[slot_key]
 		if gear != null:
-			for stat in gear.stats:
+			var gear_stats = gear.get_effective_stats()   # includes upgrade level bonus
+			for stat in gear_stats:
 				if effective.has(stat):
-					effective[stat] += gear.stats[stat]
+					effective[stat] += gear_stats[stat]
 				else:
-					effective[stat] = gear.stats[stat]
+					effective[stat] = gear_stats[stat]
 
 	# Talent-granted flat bonuses, applied to all troops (and the hero, via
 	# the same TroopData class) after gear so they stack on top cleanly.

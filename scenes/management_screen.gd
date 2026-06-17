@@ -151,16 +151,27 @@ func _build_ui() -> void:
 		get_tree().change_scene_to_file("res://scenes/world_map.tscn"))
 	top_nav_hbox.add_child(map_btn)
 
-	var shop_btn = Button.new()
-	shop_btn.text = "🛒 Shop  (🌾%d 🪙%d)" % [PlayerInventory.resources.get("food", 0), PlayerInventory.resources.get("gold", 0)]
-	shop_btn.custom_minimum_size = Vector2(200, 48)
-	shop_btn.add_theme_font_size_override("font_size", 15)
-	shop_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	shop_btn.tooltip_text = "Spend Food and Gold on recruiting new units"
-	shop_btn.pressed.connect(func():
+	var recruit_btn = Button.new()
+	recruit_btn.text = "🪖 Recruit  (🌾%d 🪙%d)" % [PlayerInventory.resources.get("food", 0), PlayerInventory.resources.get("gold", 0)]
+	recruit_btn.custom_minimum_size = Vector2(200, 48)
+	recruit_btn.add_theme_font_size_override("font_size", 15)
+	recruit_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
+	recruit_btn.tooltip_text = "Spend Food and Gold on recruiting new units"
+	recruit_btn.pressed.connect(func():
 		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/shop_screen.tscn"))
-	top_nav_hbox.add_child(shop_btn)
+		get_tree().change_scene_to_file("res://scenes/recruit_screen.tscn"))
+	top_nav_hbox.add_child(recruit_btn)
+
+	var gear_shop_btn = Button.new()
+	gear_shop_btn.text = "🛒 Gear Shop"
+	gear_shop_btn.custom_minimum_size = Vector2(160, 48)
+	gear_shop_btn.add_theme_font_size_override("font_size", 15)
+	gear_shop_btn.add_theme_color_override("font_color", Color(0.7, 0.85, 0.9))
+	gear_shop_btn.tooltip_text = "Sell gear for Gold"
+	gear_shop_btn.pressed.connect(func():
+		SaveManager.save_game()
+		get_tree().change_scene_to_file("res://scenes/gear_shop_screen.tscn"))
+	top_nav_hbox.add_child(gear_shop_btn)
 
 	var talent_btn = Button.new()
 	talent_btn.text = "🌳 Talents"
@@ -451,13 +462,16 @@ func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
 	var item_lvl = gear.item_level if "item_level" in gear else 5
 	var budget_pct = gear.get_stat_budget_pct() if gear.has_method("get_stat_budget_pct") else 100
 	var header = "[%s] iLvl%d (%d%%) %s%s" % [gear.get_rarity_name()[0], item_lvl, budget_pct, gear.item_name, quality_suffix]
+	if gear.has_method("get_next_upgrade_cost") and gear.upgrade_level > 0:
+		header += "  +%d" % gear.upgrade_level
 	var slot_line = gear.get_slot_name()
 	if gear.set_name != "":
 		slot_line += " | Set: " + gear.set_name
 
 	var stat_lines = ""
+	var effective_stats = gear.get_effective_stats()
 	for stat in gear.stats:
-		var val = gear.stats[stat]
+		var val = effective_stats.get(stat, gear.stats[stat])
 		var stat_str = ""
 		if stat in PERCENT_STATS:
 			stat_str = "%s: %.0f%%" % [stat.replace("_", " "), val * 100]
@@ -724,14 +738,17 @@ func _show_compare(hover_gear: GearItem, override_troop: TroopData = null, overr
 	right_name.autowrap_mode = TextServer.AUTOWRAP_WORD
 	right_vbox.add_child(right_name)
 
-	# Stat diffs
+	# Stat diffs — compare effective (upgrade-adjusted) stats, since
+	# that's what's actually applied in combat, not the raw roll.
+	var equipped_eff = equipped.get_effective_stats()
+	var hover_eff = hover_gear.get_effective_stats()
 	var all_stats = []
-	for s in equipped.stats: if s not in all_stats: all_stats.append(s)
-	for s in hover_gear.stats: if s not in all_stats: all_stats.append(s)
+	for s in equipped_eff: if s not in all_stats: all_stats.append(s)
+	for s in hover_eff: if s not in all_stats: all_stats.append(s)
 
 	for stat in all_stats:
-		var old_val = equipped.stats.get(stat, 0)
-		var new_val = hover_gear.stats.get(stat, 0)
+		var old_val = equipped_eff.get(stat, 0)
+		var new_val = hover_eff.get(stat, 0)
 		var diff = new_val - old_val
 
 		var left_lbl = Label.new()

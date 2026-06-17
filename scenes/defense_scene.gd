@@ -1,705 +1,508 @@
 extends Node2D
 
 # -------------------------------------------------------
-# World Map — procedurally generated zone-based conquest
+# Defense Scene — real-time auto-battler wave defense
+# Place troops on the battlefield, they fight automatically
+# Enemies walk from right to left toward your base
 # -------------------------------------------------------
 
-const MAP_W = 900
-const MAP_H = 580
+const FIELD_W = 800
+const FIELD_H = 500
+const BASE_X  = 60
+const SPAWN_X = FIELD_W - 20
 
-const ZONE_TYPES = ["city", "forest", "dungeon", "ruins", "mountain"]
-const ZONE_TYPE_COLORS = {
-	"city":     Color(0.90, 0.80, 0.30),
-	"forest":   Color(0.25, 0.70, 0.30),
-	"dungeon":  Color(0.50, 0.20, 0.60),
-	"ruins":    Color(0.55, 0.45, 0.35),
-	"mountain": Color(0.60, 0.60, 0.65),
+const C_BG       = Color(0.10, 0.12, 0.08)
+const C_BASE     = Color(0.20, 0.40, 0.80)
+const C_GROUND   = Color(0.15, 0.18, 0.12)
+const C_TROOP_K  = Color(0.30, 0.60, 1.00)   # Knight - blue
+const C_TROOP_A  = Color(0.20, 0.80, 0.30)   # Archer - green
+const C_TROOP_M  = Color(0.80, 0.30, 0.90)   # Mage - purple
+const C_TROOP_H  = Color(1.00, 0.80, 0.20)   # Healer - gold
+const C_TROOP_R  = Color(0.85, 0.15, 0.35)   # Rogue - crimson
+const C_ENEMY    = Color(0.85, 0.25, 0.20)
+const C_PROJ_T   = Color(0.60, 0.90, 1.00)
+const C_PROJ_E   = Color(1.00, 0.50, 0.10)
+const C_HEAL     = Color(0.40, 1.00, 0.40)
+
+const TROOP_COLORS = {
+	"KNIGHT": C_TROOP_K, "ARCHER": C_TROOP_A,
+	"MAGE":   C_TROOP_M, "HEALER": C_TROOP_H,
+	"ROGUE":  C_TROOP_R,
 }
-const ZONE_TYPE_ICONS = {
-	"city":     "⬛",
-	"forest":   "▲",
-	"dungeon":  "●",
-	"ruins":    "◆",
-	"mountain": "▲",
-}
 
-const OWNER_COLORS = {
-	"player":  Color(0.30, 0.60, 1.00),
-	"neutral": Color(0.50, 0.50, 0.50),
-}
+const PLACE_COOLDOWN  = 0.5    # prevent double-placing
+const KNIGHT_AGGRO_BONUS = 60.0
 
-const ZONE_NAMES = [
-	"Ashveil", "Stonemark", "Duskhaven", "Ironfeld", "Crestmoor",
-	"Thornwall", "Embervast", "Greywatch", "Coldspire", "Mirewood",
-	"Ravensholm", "Dustgate", "Cinderpass", "Hallowfen", "Bleakhurst",
-	"Vaelmore", "Grimtide", "Sunderveil", "Brackmore", "Frostwall",
-	"Saltmere", "Ironveil", "Ashenford", "Grimhold", "Dreadmere",
-]
+var battle_active: bool = false
+var _all_enemies_spawned: bool = true
+var game_over: bool = false
+var base_hp: int = 20
+var base_max_hp: int = 20
 
-# Zone data structure
-# { id, name, type, pos, owner, troops, connections, buildings,
-#   dist_from_start, enemy_strength, troop_queue }
-const SECONDS_PER_OLD_TURN = 30.0
-const TRAVEL_SPEED = 120.0 / SECONDS_PER_OLD_TURN   # distance units per real second, base (1x)
-const ATTACK_ROLL_INTERVAL = SECONDS_PER_OLD_TURN   # how often a new attack is rolled, in real seconds at 1x
+# Zone context — set by world map before launching this scene
+var battle_zone_id: int = -1
+var battle_started: bool = false   # true once player presses Begin Battle
+var begin_battle_btn: Button = null
+var is_conquering: bool = false
+var attack_force_mult: float = 1.0
+var battle_title: String = "Defend the Base"
 
-var zones: Array = []
-var connections: Array = []   # pairs of zone ids
-var selected_zone_id: int = -1
-var popup_panel: Control = null
-var elapsed_seconds: float = 0.0   # total real-time elapsed on the map, replaces the old turn counter
-var attack_roll_timer: float = 0.0
-var pending_attacks: Array = []   # {zone_id, seconds_remaining, force_size}
-var marching_troops: Array = []   # {troop_id, troop_name, from_zone, to_zone, from_pos, to_pos, progress (0-1), total_seconds}
-var mandatory_battle_queue: Array = []   # attacks that have triggered and must be resolved before continuing
+# Troops placed on field: {data:TroopData, pos, hp, max_hp, attack_t, heal_t, rect, type_name}
+var placed_troops: Array = []
+# Enemies on field: {pos, hp, max_hp, attack, speed, rect, hp_bar}
+var enemies: Array = []
+# Projectiles: {pos, dir, damage, speed, is_troop, rect}
+var projectiles: Array = []
 
-var time_speed: float = 1.0   # 1x to 5x, set by the speed slider
-var is_paused: bool = false
+# Roster slots UI
+var roster_slots: Array = []    # {troop_data, btn, placed}
+var selected_roster_idx: int = -1
+var place_cooldown: float = 0.0
 
-# UI
-var zone_nodes: Array = []
-var map_camera: Camera2D = null
-var is_panning: bool = false
-const PAN_SPEED = 400.0   # arrow-key pan speed, pixels/sec
-const CAMERA_MARGIN = 80.0   # how far past the map edge the camera is allowed to drift
-var marching_dot_nodes: Array = []
-var connection_lines: Node2D
-var hud_time: Label
-var hud_diff: Label
-var hud_resources: Label
-var notification_label: Label
-var pause_btn: Button
-var speed_slider: HSlider
-var speed_label: Label
+# UI nodes
+var field_node: Node2D
+var hud_wave: Label
+var hud_base_hp: Label
+var hud_timer: Label
+var hud_status: Label
+var base_rect: ColorRect
+var base_hp_bar: ColorRect
 
 func _ready() -> void:
-	_setup_camera()
-
-	if PlayerInventory.map_generated:
-		_load_map_state()
-	else:
-		_generate_map()
-		_save_map_state()
-		PlayerInventory.map_generated = true
-
+	_load_battle_context()
+	_plan_wave()
 	_build_ui()
-	_apply_pending_battle_result()
-	_draw_map()
+	_build_field()
+	_spawn_battle_force()
+	_build_roster_ui()
 	_refresh_hud()
+	_show_wave_preview()
 
-	# If there are still mandatory battles queued (multiple simultaneous attacks),
-	# force the next one immediately — no map interaction allowed until resolved
-	if mandatory_battle_queue.size() > 0:
-		call_deferred("_launch_next_mandatory_battle")
-	elif PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["intro"]:
-		call_deferred("_show_map_tutorial_popup", "intro")
-		# Time-controls hint used to fire on the first End Turn click; now that
-		# time flows on its own, just show it a few seconds after the intro.
-		get_tree().create_timer(4.0).timeout.connect(func():
-			if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["end_turn"]:
-				_show_map_tutorial_popup("end_turn"))
+func _load_battle_context() -> void:
+	battle_zone_id = PlayerInventory.current_battle_zone
+	is_conquering = PlayerInventory.conquering_zone
+	attack_force_mult = PlayerInventory.current_attack_force
 
-func _load_map_state() -> void:
-	zones = PlayerInventory.map_zones
-	connections = PlayerInventory.map_connections
-	elapsed_seconds = PlayerInventory.map_elapsed_seconds
+	battle_title = "Conquer Zone" if is_conquering else "Defend the Base"
 
-# Sets up a Camera2D so the player can pan around the map — middle-mouse
-# drag, or arrow keys. Limits are clamped to the actual map bounds (plus
-# a small margin) so panning can't drift off into empty space far past
-# where any zone or future scenery actually exists.
-func _setup_camera() -> void:
-	map_camera = Camera2D.new()
-	map_camera.position = Vector2(MAP_W / 2.0, MAP_H / 2.0)
-	map_camera.limit_left = -CAMERA_MARGIN
-	map_camera.limit_top = -CAMERA_MARGIN
-	map_camera.limit_right = MAP_W + CAMERA_MARGIN
-	map_camera.limit_bottom = MAP_H + CAMERA_MARGIN
-	map_camera.enabled = true
-	add_child(map_camera)
-
-func _save_map_state() -> void:
-	PlayerInventory.map_zones = zones
-	PlayerInventory.map_connections = connections
-	PlayerInventory.map_elapsed_seconds = elapsed_seconds
-
-func _apply_pending_battle_result() -> void:
-	var result = PlayerInventory.last_battle_result
-	if result == "": return
-
-	var zone_id = PlayerInventory.last_battle_zone
-	var was_conquest = PlayerInventory.last_battle_was_conquest
-
-	if zone_id < 0 or zone_id >= zones.size():
-		PlayerInventory.last_battle_result = ""
-		return
-
-	if result == "won":
-		zones[zone_id]["owner"] = "player"
-		if was_conquest:
-			_notify("Victory! %s is now under your control." % zones[zone_id]["name"])
-		else:
-			_notify("%s successfully defended!" % zones[zone_id]["name"])
-	elif result == "lost":
-		if was_conquest:
-			_notify("The conquest of %s failed. The wilds remain in control." % zones[zone_id]["name"])
-			# Zone stays neutral, no further setback for a failed conquest attempt
-		else:
-			# Defending and lost — zone falls back to neutral, troops there are lost
-			zones[zone_id]["owner"] = "neutral"
-			zones[zone_id]["troops"].clear()
-			zones[zone_id]["buildings"].clear()
-			_notify("%s has fallen to the wilds! All stationed troops and buildings lost." % zones[zone_id]["name"])
-	elif result == "retreat":
-		if not was_conquest:
-			# Retreating from a defense = losing the zone too, but troops survive
-			zones[zone_id]["owner"] = "neutral"
-			_notify("You retreated from %s. The zone has fallen." % zones[zone_id]["name"])
-
-	# Clear any pending attack warnings for this zone since it's now resolved
-	var remaining_attacks = []
-	for pa in pending_attacks:
-		if pa["zone_id"] != zone_id:
-			remaining_attacks.append(pa)
-	pending_attacks = remaining_attacks
-
-	# Pop this battle from the mandatory queue if it was one
-	var remaining_queue = []
-	for mb in mandatory_battle_queue:
-		if mb["zone_id"] != zone_id:
-			remaining_queue.append(mb)
-	mandatory_battle_queue = remaining_queue
-
-	PlayerInventory.last_battle_result = ""
-	PlayerInventory.current_battle_zone = -1
-	PlayerInventory.conquering_zone = false
-	PlayerInventory.current_battle_zone_troop_names = []
-	PlayerInventory.current_battle_forge_level = 0
-	PlayerInventory.current_battle_shrine_level = 0
+	# Scale base HP by force multiplier
+	base_max_hp = int(20 * max(0.5, attack_force_mult))
+	base_hp = base_max_hp
 
 # -------------------------------------------------------
-# Map Generation
-# -------------------------------------------------------
-func _generate_map() -> void:
-	var rng = RandomNumberGenerator.new()
-	rng.seed = PlayerInventory.map_seed
-
-	var zone_count = PlayerInventory.difficulty_settings.get("zone_count", 13)
-
-	# Place starting zone left-center.
-	# If the player went through the tutorial, the city starts NEUTRAL —
-	# conquering it is the first thing they do on the real map, mirroring
-	# the tutorial dungeon's "fight to get something" lesson. Skipping the
-	# tutorial pre-owns the city as before so there's no forced detour.
-	var start_pos = Vector2(120, MAP_H / 2)
-	var start_owner = "neutral" if PlayerInventory.play_tutorial else "player"
-	zones.append(_make_zone(0, "city", start_pos, start_owner, "Your City"))
-	zones[0]["dist_from_start"] = 0
-	zones[0]["enemy_strength"] = 1   # always a gentle first fight
-
-	# Station all starting troops at the home city only if it's already owned.
-	# If neutral, troops wait off-map until the city is conquered (handled
-	# by _apply_pending_battle_result placing them there on victory).
-	if start_owner == "player":
-		for troop in PlayerInventory.troop_roster:
-			zones[0]["troops"].append(troop.troop_id)
-
-	# Generate remaining zones
-	var used_positions = [start_pos]
-	var attempts = 0
-	while zones.size() < zone_count and attempts < 500:
-		attempts += 1
-		var pos = Vector2(
-			rng.randf_range(80, MAP_W - 80),
-			rng.randf_range(60, MAP_H - 60)
-		)
-		# Ensure minimum spacing
-		var too_close = false
-		for up in used_positions:
-			if pos.distance_to(up) < 100:
-				too_close = true
-				break
-		if too_close: continue
-
-		var zone_id = zones.size()
-		var dist = pos.distance_to(start_pos)
-		var ztype = ZONE_TYPES[rng.randi() % ZONE_TYPES.size()]
-		var zname = ZONE_NAMES[zone_id % ZONE_NAMES.size()]
-		var owner = "neutral"
-
-		var zone = _make_zone(zone_id, ztype, pos, owner, zname)
-		zone["dist_from_start"] = dist
-		zone["enemy_strength"] = int(dist / 60.0)
-		zones.append(zone)
-		used_positions.append(pos)
-
-	# Connect zones — each zone connects to 2-3 nearest neighbors
-	for i in range(zones.size()):
-		var distances = []
-		for j in range(zones.size()):
-			if i == j: continue
-			distances.append({"id": j, "dist": zones[i]["pos"].distance_to(zones[j]["pos"])})
-		distances.sort_custom(func(a, b): return a["dist"] < b["dist"])
-
-		var connect_count = rng.randi_range(2, 3)
-		for k in range(min(connect_count, distances.size())):
-			var pair = [min(i, distances[k]["id"]), max(i, distances[k]["id"])]
-			if pair not in connections and distances[k]["dist"] < 280:
-				connections.append(pair)
-				zones[i]["connections"].append(distances[k]["id"])
-				zones[distances[k]["id"]]["connections"].append(i)
-
-	# Ensure start zone is connected to at least one other
-	if zones[0]["connections"].is_empty():
-		var nearest_id = 1
-		connections.append([0, 1])
-		zones[0]["connections"].append(1)
-		zones[1]["connections"].append(0)
-
-func _make_zone(id: int, ztype: String, pos: Vector2, owner: String, zname: String) -> Dictionary:
-	return {
-		"id": id, "name": zname, "type": ztype,
-		"pos": pos, "owner": owner,
-		"troops": [] if owner != "player" else [],
-		"connections": [],
-		"buildings": {},   # { "Forge": 2, "Watchtower": 1 } — building name -> level
-		"dist_from_start": 0,
-		"enemy_strength": 0,
-		"troop_queue": [],
-	}
-
-# -------------------------------------------------------
-# Draw Map
+# Build UI
 # -------------------------------------------------------
 func _build_ui() -> void:
 	var bg = ColorRect.new()
-	bg.color = Color(0.07, 0.08, 0.10)
-	bg.position = Vector2(-CAMERA_MARGIN, -CAMERA_MARGIN)
-	bg.size = Vector2(MAP_W + CAMERA_MARGIN * 2, MAP_H + CAMERA_MARGIN * 2)
+	bg.color = Color(0.06, 0.06, 0.08)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
-	# Draw connection lines first (behind zones)
-	connection_lines = Node2D.new()
-	add_child(connection_lines)
-
-	# Top HUD
 	var hud = CanvasLayer.new()
 	add_child(hud)
 
-	var top = PanelContainer.new()
-	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	top.size.y = 44
-	hud.add_child(top)
+	# Top bar
+	var top_bar = PanelContainer.new()
+	top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	top_bar.size.y = 48
+	hud.add_child(top_bar)
 
-	var hbox = HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 20)
-	top.add_child(hbox)
+	var top_hbox = HBoxContainer.new()
+	top_hbox.add_theme_constant_override("separation", 20)
+	top_bar.add_child(top_hbox)
 
-	var title = Label.new()
-	title.text = PlayerInventory.player_name + "'s Campaign"
-	title.add_theme_font_size_override("font_size", 15)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	hbox.add_child(title)
+	hud_wave = Label.new()
+	hud_wave.add_theme_font_size_override("font_size", 15)
+	hud_wave.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	top_hbox.add_child(hud_wave)
 
-	hud_time = Label.new()
-	hud_time.add_theme_font_size_override("font_size", 14)
-	hud_time.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
-	hbox.add_child(hud_time)
+	hud_timer = Label.new()
+	hud_timer.add_theme_font_size_override("font_size", 15)
+	hud_timer.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
+	top_hbox.add_child(hud_timer)
 
-	hud_diff = Label.new()
-	hud_diff.add_theme_font_size_override("font_size", 13)
-	hbox.add_child(hud_diff)
+	hud_base_hp = Label.new()
+	hud_base_hp.add_theme_font_size_override("font_size", 15)
+	hud_base_hp.add_theme_color_override("font_color", Color(0.4, 0.7, 1.0))
+	top_hbox.add_child(hud_base_hp)
 
-	hud_resources = Label.new()
-	hud_resources.add_theme_font_size_override("font_size", 13)
-	hud_resources.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	hbox.add_child(hud_resources)
+	if PlayerInventory.current_battle_forge_level > 0 or PlayerInventory.current_battle_shrine_level > 0:
+		var buff_lbl = Label.new()
+		var parts = []
+		if PlayerInventory.current_battle_forge_level > 0:
+			parts.append("Forge +%d%% ATK" % (PlayerInventory.current_battle_forge_level * 5))
+		if PlayerInventory.current_battle_shrine_level > 0:
+			parts.append("Shrine +%d%% HP" % (PlayerInventory.current_battle_shrine_level * 5))
+		buff_lbl.text = "  ".join(parts)
+		buff_lbl.add_theme_font_size_override("font_size", 12)
+		buff_lbl.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+		top_hbox.add_child(buff_lbl)
 
-	var spacer = Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hbox.add_child(spacer)
+	hud_status = Label.new()
+	hud_status.add_theme_font_size_override("font_size", 13)
+	hud_status.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	hud_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top_hbox.add_child(hud_status)
 
-	notification_label = Label.new()
-	notification_label.add_theme_font_size_override("font_size", 13)
-	notification_label.add_theme_color_override("font_color", Color(1, 0.5, 0.3))
-	hbox.add_child(notification_label)
+	var scout_btn = Button.new()
+	scout_btn.text = "👁 Scout"
+	scout_btn.custom_minimum_size = Vector2(80, 32)
+	scout_btn.tooltip_text = "Review the incoming enemy composition"
+	scout_btn.pressed.connect(_show_wave_preview)
+	top_hbox.add_child(scout_btn)
 
-	# Pause / speed controls — replace the old End Turn button now that
-	# time flows continuously instead of advancing on a click.
-	pause_btn = Button.new()
-	pause_btn.text = "⏸"
-	pause_btn.custom_minimum_size = Vector2(40, 32)
-	pause_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	pause_btn.pressed.connect(_on_pause_pressed)
-	hbox.add_child(pause_btn)
+	begin_battle_btn = Button.new()
+	begin_battle_btn.text = "⚔ Begin Battle"
+	begin_battle_btn.custom_minimum_size = Vector2(140, 32)
+	begin_battle_btn.add_theme_color_override("font_color", Color(1, 0.6, 0.3))
+	begin_battle_btn.pressed.connect(_on_begin_battle_pressed)
+	top_hbox.add_child(begin_battle_btn)
 
-	speed_label = Label.new()
-	speed_label.text = "1.0x"
-	speed_label.custom_minimum_size = Vector2(36, 0)
-	speed_label.add_theme_font_size_override("font_size", 12)
-	speed_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-	hbox.add_child(speed_label)
+	var back_btn = Button.new()
+	back_btn.text = "Retreat"
+	back_btn.pressed.connect(_on_retreat)
+	top_hbox.add_child(back_btn)
 
-	speed_slider = HSlider.new()
-	speed_slider.min_value = 1.0
-	speed_slider.max_value = 5.0
-	speed_slider.step = 0.5
-	speed_slider.value = time_speed
-	speed_slider.custom_minimum_size = Vector2(100, 0)
-	speed_slider.value_changed.connect(_on_speed_changed)
-	hbox.add_child(speed_slider)
+	# Bottom roster panel
+	var bottom = PanelContainer.new()
+	bottom.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	bottom.size.y = 110
+	bottom.position.y = -110
+	hud.add_child(bottom)
 
-	# Back to management
-	var mgmt_btn = Button.new()
-	mgmt_btn.text = "Management"
-	mgmt_btn.custom_minimum_size = Vector2(110, 32)
-	mgmt_btn.pressed.connect(func():
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
-	hbox.add_child(mgmt_btn)
+	var roster_vbox = VBoxContainer.new()
+	bottom.add_child(roster_vbox)
 
-var zone_dynamic_refs: Dictionary = {}   # zone_id -> {warn_icon, countdown_lbl, troop_lbl, march_lbl, circle}
+	var roster_label = Label.new()
+	roster_label.text = "TROOPS  (click to select, then click battlefield to place)"
+	roster_label.add_theme_font_size_override("font_size", 11)
+	roster_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	roster_vbox.add_child(roster_label)
 
-func _draw_map() -> void:
-	# Connections and marching dots are cheap, non-interactive visuals —
-	# safe to fully rebuild every redraw without affecting clickability.
-	for c in connection_lines.get_children():
-		c.queue_free()
+	var roster_hbox = HBoxContainer.new()
+	roster_hbox.add_theme_constant_override("separation", 6)
+	roster_vbox.add_child(roster_hbox)
 
-	for pair in connections:
-		var z1 = zones[pair[0]]
-		var z2 = zones[pair[1]]
-		var line = Line2D.new()
-		line.points = [z1["pos"] + Vector2(0, 44), z2["pos"] + Vector2(0, 44)]
-		line.width = 2.0
-		line.default_color = Color(0.0, 0.0, 0.0, 0.8)
-		connection_lines.add_child(line)
+	# Build a slot button for each troop available to this battle
+	var available_troops = _get_battle_roster()
+	for i in range(available_troops.size()):
+		var troop: TroopData = available_troops[i]
+		var eff = troop.get_effective_stats()
+		var col = TROOP_COLORS.get(troop.get_type_name(), Color.WHITE)
 
-	# Zone nodes (which contain the actual clickable buttons) are built
-	# ONCE and then updated in place on every subsequent redraw. Rebuilding
-	# them from scratch every cycle meant clicks landed on a button that
-	# had already been destroyed and replaced, making the map effectively
-	# unclickable while the clock was running.
-	if zone_nodes.is_empty():
-		for zone in zones:
-			var znode = _make_zone_node(zone)
-			add_child(znode)
-			zone_nodes.append(znode)
-	else:
-		for zone in zones:
-			_update_zone_node(zone)
+		var btn = Button.new()
+		btn.custom_minimum_size = Vector2(130, 72)
+		btn.text = "%s\n[%s]\nHP:%d ATK:%d\nDEF:%d SPD:%d" % [
+			troop.troop_name, troop.get_type_name(),
+			eff.get("hp",0), eff.get("attack",0),
+			eff.get("defense",0), eff.get("speed",0)
+		]
+		btn.add_theme_color_override("font_color", col)
+		btn.add_theme_font_size_override("font_size", 11)
+		btn.pressed.connect(_on_roster_selected.bind(i))
+		roster_hbox.add_child(btn)
+		roster_slots.append({"troop": troop, "btn": btn, "placed": false})
 
-	# Marching dots are cheap and non-interactive — fine to fully rebuild.
-	for d in marching_dot_nodes:
-		if is_instance_valid(d): d.queue_free()
-	marching_dot_nodes.clear()
+	if available_troops.is_empty():
+		var warn = Label.new()
+		warn.text = "No troops stationed here! You'll have to fight with whatever you brought \\u2014 nothing."
+		warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
+		roster_hbox.add_child(warn)
 
-	for m in marching_troops:
-		var from_pos = zones[m["from_zone"]]["pos"] if m["from_zone"] >= 0 else zones[m["to_zone"]]["pos"]
-		var to_pos = zones[m["to_zone"]]["pos"]
-		var progress = 1.0 - (m["seconds_left"] / max(0.01, m["total_seconds"]))
-		progress = clamp(progress, 0.0, 1.0)
-		var march_pos = from_pos.lerp(to_pos, progress) + Vector2(0, 44)
+# Returns the troops eligible for this battle.
+# If a zone is set, only troops stationed at that zone (by name) can be placed.
+# Falls back to the full roster for battles with no zone context (e.g. quick dungeon test).
+func _get_battle_roster() -> Array:
+	if battle_zone_id < 0:
+		return PlayerInventory.troop_roster.duplicate()
 
-		var dot = ColorRect.new()
-		dot.size = Vector2(10, 10)
-		dot.position = march_pos - Vector2(5, 5)
-		dot.color = Color(0.5, 0.9, 1.0)
-		add_child(dot)
-		marching_dot_nodes.append(dot)
+	var zone_troop_ids = PlayerInventory.get_zone_troop_names(battle_zone_id)
+	if zone_troop_ids.is_empty():
+		return []
 
-func _make_zone_node(zone: Dictionary) -> Control:
-	var container = Control.new()
-	container.position = zone["pos"] + Vector2(0, 44)
-	container.custom_minimum_size = Vector2(64, 64)
+	var result = []
+	for troop in PlayerInventory.troop_roster:
+		if troop.troop_id in zone_troop_ids:
+			result.append(troop)
+	return result
 
-	var refs = {}
+func _build_field() -> void:
+	field_node = Node2D.new()
+	field_node.position = Vector2(0, 52)   # below top HUD bar
+	add_child(field_node)
 
-	# Zone circle background
-	var circle = ColorRect.new()
-	circle.size = Vector2(44, 44)
-	circle.position = Vector2(-22, -22)
-	circle.color = OWNER_COLORS[zone["owner"]].darkened(0.4)
-	if zone["id"] == selected_zone_id:
-		circle.color = Color(1, 1, 0, 0.3)
-	container.add_child(circle)
-	refs["circle"] = circle
+	# Ground
+	var ground = ColorRect.new()
+	ground.color = C_GROUND
+	ground.position = Vector2(0, 0)
+	ground.size = Vector2(FIELD_W, FIELD_H - 110)
+	field_node.add_child(ground)
 
-	# Zone type icon
-	var icon = Label.new()
-	icon.text = ZONE_TYPE_ICONS[zone["type"]]
-	icon.add_theme_font_size_override("font_size", 20)
-	icon.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
-	icon.position = Vector2(-10, -16)
-	container.add_child(icon)
+	# Base
+	base_rect = ColorRect.new()
+	base_rect.color = C_BASE
+	base_rect.size = Vector2(40, FIELD_H - 110)
+	base_rect.position = Vector2(BASE_X - 20, 0)
+	field_node.add_child(base_rect)
 
-	# Owner indicator dot
-	var dot = ColorRect.new()
-	dot.size = Vector2(10, 10)
-	dot.position = Vector2(14, -22)
-	dot.color = OWNER_COLORS[zone["owner"]]
-	container.add_child(dot)
-	refs["owner_dot"] = dot
+	var base_label = Label.new()
+	base_label.text = "BASE"
+	base_label.add_theme_font_size_override("font_size", 11)
+	base_label.add_theme_color_override("font_color", Color.WHITE)
+	base_label.position = Vector2(BASE_X - 18, 10)
+	field_node.add_child(base_label)
 
-	# Zone name
-	var name_lbl = Label.new()
-	name_lbl.text = zone["name"]
-	name_lbl.add_theme_font_size_override("font_size", 10)
-	name_lbl.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
-	name_lbl.position = Vector2(-30, 24)
-	name_lbl.custom_minimum_size = Vector2(60, 0)
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	container.add_child(name_lbl)
+	# Base HP bar bg
+	var bar_bg = ColorRect.new()
+	bar_bg.color = Color(0.3, 0.1, 0.1)
+	bar_bg.size = Vector2(40, 10)
+	bar_bg.position = Vector2(BASE_X - 20, FIELD_H - 120)
+	field_node.add_child(bar_bg)
 
-	# Troop count (created hidden if empty, toggled visible/updated later)
-	var troop_lbl = Label.new()
-	troop_lbl.add_theme_font_size_override("font_size", 9)
-	troop_lbl.add_theme_color_override("font_color", Color(0.6, 0.9, 1.0))
-	troop_lbl.position = Vector2(-12, 10)
-	troop_lbl.visible = zone["troops"].size() > 0
-	troop_lbl.text = "⚔%d" % zone["troops"].size()
-	container.add_child(troop_lbl)
-	refs["troop_lbl"] = troop_lbl
+	# Base HP bar
+	base_hp_bar = ColorRect.new()
+	base_hp_bar.color = Color(0.3, 0.6, 1.0)
+	base_hp_bar.size = Vector2(40, 10)
+	base_hp_bar.position = Vector2(BASE_X - 20, FIELD_H - 120)
+	field_node.add_child(base_hp_bar)
 
-	# Attack warning indicator — pulsing icon + numeric countdown
-	var warn_icon = Label.new()
-	warn_icon.text = "⚠"
-	warn_icon.add_theme_font_size_override("font_size", 18)
-	warn_icon.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-	warn_icon.position = Vector2(12, -34)
-	warn_icon.visible = false
-	container.add_child(warn_icon)
-	refs["warn_icon"] = warn_icon
+	# Placement boundary — troops can only be placed left of this line,
+	# keeping the whole right half clear for the enemy approach and
+	# ensuring every placed troop stays visible on screen.
+	var placement_limit_x = FIELD_W / 2.0
+	var boundary_line = Line2D.new()
+	boundary_line.add_point(Vector2(placement_limit_x, 0))
+	boundary_line.add_point(Vector2(placement_limit_x, FIELD_H - 110))
+	boundary_line.width = 2.0
+	boundary_line.default_color = Color(1.0, 0.85, 0.3, 0.5)
+	field_node.add_child(boundary_line)
 
-	var tween = create_tween().set_loops()
-	tween.tween_property(warn_icon, "scale", Vector2(1.3, 1.3), 0.5)
-	tween.tween_property(warn_icon, "scale", Vector2(1.0, 1.0), 0.5)
+	var boundary_label = Label.new()
+	boundary_label.text = "Placement Limit"
+	boundary_label.add_theme_font_size_override("font_size", 10)
+	boundary_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3, 0.8))
+	boundary_label.position = Vector2(placement_limit_x - 70, 6)
+	field_node.add_child(boundary_label)
 
-	var countdown_lbl = Label.new()
-	countdown_lbl.add_theme_font_size_override("font_size", 10)
-	countdown_lbl.add_theme_color_override("font_color", Color(1.0, 0.6, 0.4))
-	countdown_lbl.position = Vector2(10, -16)
-	countdown_lbl.visible = false
-	container.add_child(countdown_lbl)
-	refs["countdown_lbl"] = countdown_lbl
+	# Click to place troops
+	var click_area = ColorRect.new()
+	click_area.color = Color(0, 0, 0, 0)
+	click_area.size = Vector2(FIELD_W, FIELD_H - 110)
+	click_area.position = Vector2(0, 0)
+	click_area.mouse_filter = Control.MOUSE_FILTER_STOP
+	field_node.add_child(click_area)
 
-	# Click area — built once, never destroyed on redraw
-	var btn = Button.new()
-	btn.flat = true
-	btn.size = Vector2(64, 64)
-	btn.position = Vector2(-32, -32)
-	btn.pressed.connect(_on_zone_clicked.bind(zone["id"]))
-	container.add_child(btn)
+func _build_roster_ui() -> void:
+	pass  # already built in _build_ui
 
-	# Incoming troops marker
-	var march_lbl = Label.new()
-	march_lbl.add_theme_font_size_override("font_size", 10)
-	march_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
-	march_lbl.position = Vector2(16, 16)
-	march_lbl.visible = false
-	container.add_child(march_lbl)
-	refs["march_lbl"] = march_lbl
-
-	zone_dynamic_refs[zone["id"]] = refs
-	return container
-
-# Updates only the parts of a zone node that can change between redraws
-# (ownership color, troop count, attack countdown, incoming march timer)
-# without touching the button or destroying/recreating anything — this is
-# what keeps zones clickable while the map clock is running.
-func _update_zone_node(zone: Dictionary) -> void:
-	var refs = zone_dynamic_refs.get(zone["id"])
-	if refs == null: return
-
-	if is_instance_valid(refs.get("circle")):
-		refs["circle"].color = Color(1, 1, 0, 0.3) if zone["id"] == selected_zone_id else OWNER_COLORS[zone["owner"]].darkened(0.4)
-	if is_instance_valid(refs.get("owner_dot")):
-		refs["owner_dot"].color = OWNER_COLORS[zone["owner"]]
-
-	if is_instance_valid(refs.get("troop_lbl")):
-		var has_troops = zone["troops"].size() > 0
-		refs["troop_lbl"].visible = has_troops
-		if has_troops:
-			refs["troop_lbl"].text = "⚔%d" % zone["troops"].size()
-
-	var pending_attack = null
-	for attack in pending_attacks:
-		if attack["zone_id"] == zone["id"]:
-			pending_attack = attack
-			break
-
-	if is_instance_valid(refs.get("warn_icon")):
-		refs["warn_icon"].visible = pending_attack != null
-	if is_instance_valid(refs.get("countdown_lbl")):
-		refs["countdown_lbl"].visible = pending_attack != null
-		if pending_attack != null:
-			refs["countdown_lbl"].text = "%ds" % int(ceil(pending_attack["seconds_remaining"]))
-
-	var incoming_march = null
-	for m in marching_troops:
-		if m["to_zone"] == zone["id"]:
-			incoming_march = m
-			break
-
-	if is_instance_valid(refs.get("march_lbl")):
-		refs["march_lbl"].visible = incoming_march != null
-		if incoming_march != null:
-			refs["march_lbl"].text = "→%ds" % int(ceil(incoming_march["seconds_left"]))
+func _input(event: InputEvent) -> void:
+	if game_over: return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if selected_roster_idx >= 0 and place_cooldown <= 0:
+			var click_pos = event.position - field_node.position
+			# Middle of the map is a hard boundary — troops can only be
+			# placed on your half, keeping them clear of the enemy
+			# approach and visible on screen before the battle starts.
+			var placement_limit_x = FIELD_W / 2.0
+			if click_pos.x > BASE_X + 30 and click_pos.x < placement_limit_x \
+			and click_pos.y > 10 and click_pos.y < FIELD_H - 120:
+				_place_troop(selected_roster_idx, click_pos)
 
 # -------------------------------------------------------
-# Zone Popup
+# Troop placement
 # -------------------------------------------------------
-func _on_zone_clicked(zone_id: int) -> void:
-	selected_zone_id = zone_id
-	_close_popup()
-	_draw_map()
-	_open_popup(zones[zone_id])
+func _on_roster_selected(idx: int) -> void:
+	if roster_slots[idx]["placed"]:
+		_set_status("That troop is already on the field!")
+		return
+	selected_roster_idx = idx
+	for i in range(roster_slots.size()):
+		var col = TROOP_COLORS.get(roster_slots[i]["troop"].get_type_name(), Color.WHITE)
+		if i == idx:
+			roster_slots[i]["btn"].add_theme_color_override("font_color", Color(1,1,0))
+		else:
+			roster_slots[i]["btn"].add_theme_color_override("font_color", col)
+	_set_status("Click the battlefield to place " + roster_slots[idx]["troop"].troop_name)
 
-func _open_popup(zone: Dictionary) -> void:
-	popup_panel = PanelContainer.new()
+func _place_troop(idx: int, pos: Vector2) -> void:
+	var slot = roster_slots[idx]
+	if slot["placed"]: return
 
-	# Position popup — keep on screen. Height isn't known until the
-	# popup's content is built, so clamp against a generous estimate
-	# rather than the exact final height.
-	const ESTIMATED_POPUP_HEIGHT = 260.0
-	var px = min(zone["pos"].x + 50, MAP_W - 280)
-	var py = clamp(zone["pos"].y + 44, 60, MAP_H - ESTIMATED_POPUP_HEIGHT)
-	popup_panel.position = Vector2(px, py)
-	popup_panel.custom_minimum_size = Vector2(260, 0)
-	add_child(popup_panel)
+	var troop: TroopData = slot["troop"]
+	var eff = troop.get_effective_stats()
+	var type_name = troop.get_type_name()
+	var col = TROOP_COLORS.get(type_name, Color.WHITE)
+	var sz = 30.0
 
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	popup_panel.add_child(vbox)
+	# Sprite (procedural shape-based placeholder, swap for real art later)
+	var unit_type_map = {
+		"KNIGHT": UnitSprite.UnitType.KNIGHT, "ARCHER": UnitSprite.UnitType.ARCHER,
+		"MAGE": UnitSprite.UnitType.MAGE, "HEALER": UnitSprite.UnitType.HEALER,
+		"ROGUE": UnitSprite.UnitType.ROGUE,
+	}
+	var rect = UnitSprite.new()
+	rect.setup(unit_type_map.get(type_name, UnitSprite.UnitType.KNIGHT), col, sz)
+	rect.position = pos - Vector2(sz/2, sz/2)
+	field_node.add_child(rect)
 
-	# Header
-	var header = Label.new()
-	header.text = "%s %s" % [ZONE_TYPE_ICONS[zone["type"]], zone["name"]]
-	header.add_theme_font_size_override("font_size", 16)
-	header.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
-	vbox.add_child(header)
+	# Name label
+	var lbl = Label.new()
+	lbl.text = troop.troop_name.left(8)
+	lbl.add_theme_font_size_override("font_size", 9)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.position = pos - Vector2(20, sz/2 + 14)
+	field_node.add_child(lbl)
 
-	var owner_lbl = Label.new()
-	owner_lbl.text = "Owner: %s" % zone["owner"].capitalize()
-	owner_lbl.add_theme_color_override("font_color", OWNER_COLORS[zone["owner"]])
-	owner_lbl.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(owner_lbl)
+	# HP bar bg
+	var hpbg = ColorRect.new()
+	hpbg.color = Color(0.3, 0.1, 0.1)
+	hpbg.size = Vector2(sz, 5)
+	hpbg.position = pos - Vector2(sz/2, sz/2 + 7)
+	field_node.add_child(hpbg)
 
-	var type_lbl = Label.new()
-	type_lbl.text = "Type: %s  |  Threat: %d" % [zone["type"].capitalize(), zone["enemy_strength"]]
-	type_lbl.add_theme_font_size_override("font_size", 11)
-	type_lbl.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	vbox.add_child(type_lbl)
+	# HP bar
+	var hpbar = ColorRect.new()
+	hpbar.color = Color(0.3, 0.9, 0.3)
+	hpbar.size = Vector2(sz, 5)
+	hpbar.position = pos - Vector2(sz/2, sz/2 + 7)
+	field_node.add_child(hpbar)
 
-	# Troops
-	var troop_lbl = Label.new()
-	if zone["troops"].is_empty():
-		troop_lbl.text = "Troops: None"
+	var max_hp = eff.get("hp", 100)
+	var attack_val = eff.get("attack", 10)
+	var spell_power_pct = eff.get("spell_power", 0.0)   # % bonus to Mage damage / Healer heal
+	var lifesteal_pct = eff.get("lifesteal", 0.0)         # % of damage dealt returned as self-heal
+	var thorns_val = eff.get("thorns", 0.0)               # flat damage reflected on melee hits taken
+	var move_speed_bonus = eff.get("move_speed", 0.0)     # bonus to movement, matters most for melee
+
+	# Carry over persisted HP from outside this battle, rather than
+	# always starting at full — wounded troops stay wounded until healed
+	# with food back at Management. Scaled proportionally so a Shrine's
+	# max HP buff (applied below) doesn't distort how wounded this reads.
+	var hp_pct_before_buffs = float(troop.get_current_hp()) / max(1, troop.get_max_hp())
+
+	# Apply zone Forge/Shrine buffs — 5% per level
+	var forge_lvl = PlayerInventory.current_battle_forge_level
+	var shrine_lvl = PlayerInventory.current_battle_shrine_level
+	if forge_lvl > 0:
+		attack_val = int(attack_val * (1.0 + forge_lvl * 0.05))
+	if shrine_lvl > 0:
+		max_hp = int(max_hp * (1.0 + shrine_lvl * 0.05))
+
+	var starting_hp = max(1, int(max_hp * hp_pct_before_buffs))
+
+	var attack_speed = max(0.5, 2.5 - eff.get("speed", 3) * 0.15)
+
+	placed_troops.append({
+		"troop": troop, "pos": pos,
+		"hp": starting_hp, "max_hp": max_hp,
+		"attack": attack_val,
+		"defense": eff.get("defense", 5),
+		"spell_power": spell_power_pct,
+		"lifesteal": lifesteal_pct,
+		"thorns": thorns_val,
+		"move_speed_bonus": move_speed_bonus,
+		"type": type_name,
+		"attack_t": attack_speed,
+		"attack_interval": attack_speed,
+		"heal_t": 3.0,
+		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "label": lbl,
+		"sz": sz,
+	})
+
+	slot["placed"] = true
+	slot["btn"].add_theme_color_override("font_color", Color(0.4, 0.4, 0.4))
+	slot["btn"].text = slot["btn"].text + "\n[ON FIELD]"
+	selected_roster_idx = -1
+	place_cooldown = PLACE_COOLDOWN
+	_set_status(troop.troop_name + " placed!")
+
+# -------------------------------------------------------
+# Wave spawning
+# -------------------------------------------------------
+var _enemies_pending_spawn: int = 0
+
+# -------------------------------------------------------
+# Enemy archetypes — each plays meaningfully differently rather than
+# every enemy being the same stat profile with a different number.
+# -------------------------------------------------------
+const ENEMY_ARCHETYPES = {
+	"MELEE":   { "hp_mult": 1.0,  "dmg_mult": 1.0,  "speed_mult": 1.0,  "color": Color(0.7, 0.25, 0.25), "symbol": "⚔", "label": "Melee" },
+	"RANGED":  { "hp_mult": 0.75, "dmg_mult": 0.9,  "speed_mult": 0.9,  "color": Color(0.25, 0.6, 0.3), "symbol": "➹", "label": "Ranged" },
+	"ROGUE":   { "hp_mult": 0.6,  "dmg_mult": 1.3,  "speed_mult": 1.6,  "color": Color(0.55, 0.2, 0.65), "symbol": "✦", "label": "Bypasser" },
+	"TANK":    { "hp_mult": 2.6,  "dmg_mult": 0.55, "speed_mult": 0.55, "color": Color(0.4, 0.4, 0.45), "symbol": "▣", "label": "Tank" },
+	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2), "symbol": "✪", "label": "Buffer" },
+	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 2.5,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
+}
+const RANGED_ATTACK_RANGE = 260.0
+const CHARGER_BURST_RANGE = 50.0
+const BUFFER_AURA_RANGE = 180.0
+const BUFFER_BUFF_INTERVAL = 4.0
+const BUFFER_DMG_BOOST_PCT = 0.35
+const BUFFER_DMG_BOOST_DURATION = 3.0
+
+# Which archetypes can appear at a given stage, and their relative spawn
+# weight. Early stages are mostly plain melee; more complex types are
+# introduced gradually so the player isn't hit with everything at once.
+func _get_archetype_weights(stage: int) -> Dictionary:
+	if stage <= 1:
+		return {"MELEE": 100}
+	elif stage <= 2:
+		return {"MELEE": 70, "RANGED": 30}
+	elif stage <= 3:
+		return {"MELEE": 55, "RANGED": 25, "ROGUE": 20}
+	elif stage <= 4:
+		return {"MELEE": 40, "RANGED": 20, "ROGUE": 20, "TANK": 20}
+	elif stage <= 6:
+		return {"MELEE": 30, "RANGED": 20, "ROGUE": 20, "TANK": 20, "CHARGER": 10}
 	else:
-		var names = []
-		for troop_id in zone["troops"]:
-			names.append(_get_troop_name_by_id(troop_id))
-		troop_lbl.text = "Troops: " + ", ".join(names)
-	troop_lbl.add_theme_font_size_override("font_size", 11)
-	troop_lbl.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
-	troop_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
-	vbox.add_child(troop_lbl)
+		return {"MELEE": 22, "RANGED": 18, "ROGUE": 18, "TANK": 18, "CHARGER": 14, "BUFFER": 10}
 
-	# Incoming troops
-	var incoming = []
-	for m in marching_troops:
-		if m["to_zone"] == zone["id"]:
-			incoming.append("%s (%ds)" % [m["troop_name"], int(ceil(m["seconds_left"]))])
-	if incoming.size() > 0:
-		var incoming_lbl = Label.new()
-		incoming_lbl.text = "Incoming: " + ", ".join(incoming)
-		incoming_lbl.add_theme_font_size_override("font_size", 10)
-		incoming_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
-		incoming_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
-		vbox.add_child(incoming_lbl)
+func _roll_archetype(stage: int) -> String:
+	var weights = _get_archetype_weights(stage)
+	var total = 0
+	for w in weights.values(): total += w
+	var roll = randi() % total
+	var cumulative = 0
+	for archetype in weights:
+		cumulative += weights[archetype]
+		if roll < cumulative:
+			return archetype
+	return "MELEE"
 
-	# Buildings
-	var build_lbl = Label.new()
-	var building_strs = []
-	for bname in zone["buildings"]:
-		var lvl = zone["buildings"][bname]
-		if BUILDINGS[bname].get("max_level", 1) > 1:
-			building_strs.append("%s Lv%d" % [bname, lvl])
-		else:
-			building_strs.append(bname)
-	build_lbl.text = "Buildings: " + (", ".join(building_strs) if not building_strs.is_empty() else "None")
-	build_lbl.text += "  (%d/%d slots)" % [zone["buildings"].size(), PlayerInventory.max_buildings_per_zone]
-	build_lbl.add_theme_font_size_override("font_size", 11)
-	build_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5))
-	vbox.add_child(build_lbl)
+var planned_wave: Array = []   # pre-rolled archetype list for this battle, set by _plan_wave()
 
-	var sep = HSeparator.new()
-	vbox.add_child(sep)
+# Rolls the full wave composition once, before the player places any
+# troops, so it can be shown in a preview panel. Spawning later just
+# consumes this same list rather than rolling fresh per-enemy, so what
+# the player sees in the preview is exactly what they'll actually fight.
+func _plan_wave() -> void:
+	var stage = PlayerInventory.current_stage
+	var base_count = 6 + stage
+	var count = max(5, int(base_count * attack_force_mult))
+	if is_conquering:
+		count = max(4, int(count * 0.7))   # conquest fights are a bit smaller, but never trivial
 
-	# Action buttons based on owner
-	if zone["owner"] == "player":
-		_add_popup_btn(vbox, "Move Troops Here", Color(0.4, 0.8, 1.0), _on_move_troops.bind(zone["id"]))
-		_add_popup_btn(vbox, "Build Here", Color(0.85, 0.75, 0.4), _on_build.bind(zone["id"]))
-		var explore_tier = _get_explore_tier(zone["id"])
-		if zone["troops"].is_empty():
-			var no_troop_hint = Label.new()
-			no_troop_hint.text = "Station a troop here to Explore (%s)" % explore_tier
-			no_troop_hint.add_theme_font_size_override("font_size", 11)
-			no_troop_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-			no_troop_hint.autowrap_mode = TextServer.AUTOWRAP_WORD
-			vbox.add_child(no_troop_hint)
-		elif zone["troops"].size() == 1:
-			var only_troop_id = zone["troops"][0]
-			_add_popup_btn(vbox, "Explore as %s  (%s)" % [_get_troop_name_by_id(only_troop_id), explore_tier],
-				Color(0.65, 0.3, 0.9), _on_explore.bind(only_troop_id, explore_tier))
-		else:
-			_add_popup_btn(vbox, "Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9),
-				_open_explore_troop_picker.bind(zone["id"], explore_tier))
-	elif zone["owner"] == "neutral":
-		var adj = _is_adjacent_to_player(zone["id"]) or zone["id"] == 0
-		if adj:
-			var threat_str = "Threat Level %d" % zone["enemy_strength"]
-			_add_popup_btn(vbox, "Conquer Zone  (%s)" % threat_str,
-				Color(0.4, 0.9, 0.4), _on_conquer.bind(zone["id"]))
-		else:
-			var hint = Label.new()
-			hint.text = "Must conquer adjacent zones first"
-			hint.add_theme_font_size_override("font_size", 11)
-			hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-			vbox.add_child(hint)
+	planned_wave.clear()
+	for i in range(count):
+		var is_boss = (i == count - 1) and count >= 4
+		planned_wave.append("BOSS" if is_boss else _roll_archetype(stage))
 
-	# Close button
-	var close_btn = Button.new()
-	close_btn.text = "Close"
-	close_btn.pressed.connect(_close_popup)
-	vbox.add_child(close_btn)
+func _get_wave_composition_counts() -> Dictionary:
+	var counts = {}
+	for archetype in planned_wave:
+		counts[archetype] = counts.get(archetype, 0) + 1
+	return counts
 
-func _get_explore_tier(zone_id: int) -> String:
-	var dist = zones[zone_id].get("dist_from_start", 0.0)
-	if dist < 220.0:
-		return "Quick"
-	elif dist < 480.0:
-		return "Standard"
-	else:
-		return "Deep Delve"
-
-func _on_explore(troop_id: String, tier: String) -> void:
-	PlayerInventory.dungeon_tier = tier
-	PlayerInventory.dungeon_troop_id = troop_id
-	SaveManager.save_game()
-	get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn")
-
-# Shown when more than one troop is stationed at a zone, so the player
-# picks which one actually plays this dungeon run — each class plays
-# differently, so this is a real choice rather than a formality.
-func _open_explore_troop_picker(zone_id: int, tier: String) -> void:
-	_close_popup()
-
+# Shows the enemy wave composition before the player places troops, so
+# picking a roster is an informed decision rather than a guess. Closing
+# this just dismisses it — troop placement and Begin Battle work exactly
+# as before underneath it.
+func _show_wave_preview() -> void:
 	var overlay = CanvasLayer.new()
 	add_child(overlay)
 
 	var bg = ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.7)
+	bg.color = Color(0, 0, 0, 0.75)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	overlay.add_child(bg)
 
@@ -708,723 +511,774 @@ func _open_explore_troop_picker(zone_id: int, tier: String) -> void:
 	overlay.add_child(panel)
 
 	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
+	vbox.add_theme_constant_override("separation", 8)
+	vbox.custom_minimum_size = Vector2(260, 0)
 	panel.add_child(vbox)
 
 	var title = Label.new()
-	title.text = "Explore as which troop?"
-	title.add_theme_font_size_override("font_size", 16)
+	title.text = "Incoming Forces"
+	title.add_theme_font_size_override("font_size", 18)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 
-	for troop_id in zones[zone_id]["troops"]:
-		var troop_btn = Button.new()
-		var troop_name = _get_troop_name_by_id(troop_id)
-		var troop_type = _get_troop_type_by_id(troop_id)
-		troop_btn.text = "%s  [%s]" % [troop_name, troop_type]
-		troop_btn.custom_minimum_size = Vector2(220, 36)
-		troop_btn.pressed.connect(func():
-			overlay.queue_free()
-			_on_explore(troop_id, tier))
-		vbox.add_child(troop_btn)
-
-	var cancel_btn = Button.new()
-	cancel_btn.text = "Cancel"
-	cancel_btn.custom_minimum_size = Vector2(220, 32)
-	cancel_btn.pressed.connect(func(): overlay.queue_free())
-	vbox.add_child(cancel_btn)
-
-func _get_troop_type_by_id(troop_id: String) -> String:
-	for troop in PlayerInventory.troop_roster:
-		if troop.troop_id == troop_id:
-			return troop.get_type_name()
-	return "?"
-
-func _add_popup_btn(parent: VBoxContainer, text: String, col: Color, callback: Callable) -> void:
-	var btn = Button.new()
-	btn.text = text
-	btn.custom_minimum_size = Vector2(0, 34)
-	btn.add_theme_color_override("font_color", col)
-	btn.pressed.connect(callback)
-	parent.add_child(btn)
-
-func _close_popup() -> void:
-	if popup_panel and is_instance_valid(popup_panel):
-		popup_panel.queue_free()
-		popup_panel = null
-
-# -------------------------------------------------------
-# Map Tutorial Popups
-# Short narrated hints shown once each, only when play_tutorial is on.
-# -------------------------------------------------------
-const TUTORIAL_HINTS = {
-	"intro": {
-		"title": "The World Map",
-		"body": "This is your campaign map. Your City sits unclaimed \\u2014 conquer it first to establish your base. From there, expand outward: build up zones, station troops, and push back the creatures of the wilds.",
-	},
-	"conquer": {
-		"title": "Conquering Zones",
-		"body": "Conquering a neutral zone always triggers a battle against its guards. Stronger zones lie further from your territory. You can only conquer zones adjacent to ground you already hold.",
-	},
-	"build": {
-		"title": "Building Up",
-		"body": "Each zone can hold up to 2 buildings. Watchtowers warn you of attacks earlier, Farms and Barracks generate resources, and Forges/Shrines buff troops stationed nearby. Choose wisely \\u2014 you can't build everything everywhere.",
-	},
-	"move_troops": {
-		"title": "Positioning Troops",
-		"body": "Troops take time to travel between zones based on distance. Keep your border zones defended \\u2014 reinforcements from far away won't always arrive in time.",
-	},
-	"end_turn": {
-		"title": "Time Flows on Its Own",
-		"body": "The map runs in real time now \\u2014 resources accrue, troops march, and the wilds may move against you continuously. Use the pause button if you need a moment to think, and the speed slider to fast-forward when things are quiet.",
-	},
-}
-
-func _show_map_tutorial_popup(hint_key: String) -> void:
-	if PlayerInventory.map_tutorial_seen.get(hint_key, true):
-		return
-	PlayerInventory.map_tutorial_seen[hint_key] = true
-
-	var hint = TUTORIAL_HINTS[hint_key]
-
-	var overlay = CanvasLayer.new()
-	add_child(overlay)
-
-	var bg = ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.6)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.add_child(bg)
-
-	var panel = PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.custom_minimum_size = Vector2(380, 0)
-	overlay.add_child(panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 12)
-	panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = hint["title"]
-	title.add_theme_font_size_override("font_size", 18)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	vbox.add_child(title)
-
-	var body = Label.new()
-	body.text = hint["body"]
-	body.add_theme_font_size_override("font_size", 13)
-	body.add_theme_color_override("font_color", Color(0.85, 0.85, 0.85))
-	body.autowrap_mode = TextServer.AUTOWRAP_WORD
-	vbox.add_child(body)
-
-	var btn = Button.new()
-	btn.text = "Got it"
-	btn.custom_minimum_size = Vector2(0, 38)
-	btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
-	btn.pressed.connect(func(): overlay.queue_free())
-	vbox.add_child(btn)
-
-# -------------------------------------------------------
-# Zone Actions
-# -------------------------------------------------------
-func _is_adjacent_to_player(zone_id: int) -> bool:
-	for conn in zones[zone_id]["connections"]:
-		if zones[conn]["owner"] == "player":
-			return true
-	return false
-
-func _on_battle_won(zone_id: int) -> void:
-	zones[zone_id]["owner"] = "player"
-	_notify("Conquered %s!" % zones[zone_id]["name"])
-	_draw_map()
-
-func _on_battle_lost(zone_id: int) -> void:
-	# If defending — zone reverts to neutral
-	if not PlayerInventory.conquering_zone:
-		zones[zone_id]["owner"] = "neutral"
-		_notify("%s was lost to the wilds!" % zones[zone_id]["name"])
-	_draw_map()
-
-func _on_conquer(zone_id: int) -> void:
-	_close_popup()
-
-	var any_zone_owned = false
-	for z in zones:
-		if z["owner"] == "player":
-			any_zone_owned = true
-			break
-
-	var staging_troop_ids: Array
-
-	if not any_zone_owned and zone_id == 0:
-		# First-ever conquest, no territory yet — use the full roster directly.
-		staging_troop_ids = []
-		for troop in PlayerInventory.troop_roster:
-			staging_troop_ids.append(troop.troop_id)
-	else:
-		# Conquering uses troops from the nearest adjacent zone you already own,
-		# since the target zone itself has no player troops stationed yet.
-		if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["conquer"]:
-			_show_map_tutorial_popup("conquer")
-
-		var staging_zone_id = -1
-		for conn_id in zones[zone_id]["connections"]:
-			if zones[conn_id]["owner"] == "player":
-				staging_zone_id = conn_id
-				break
-
-		if staging_zone_id == -1:
-			_notify("You must own an adjacent zone to launch a conquest from.")
-			return
-
-		staging_troop_ids = zones[staging_zone_id]["troops"]
-		PlayerInventory.set_battle_zone_buffs(
-			get_best_forge_level(staging_zone_id), get_best_shrine_level(staging_zone_id))
-
-	# Always triggers a battle — zone has guards based on distance
-	PlayerInventory.current_battle_zone = zone_id
-	var conquest_force = zones[zone_id]["enemy_strength"] * 0.4
-	if PlayerInventory.unlocked_talents.get("diplomatic_tongue", false):
-		conquest_force *= 0.8
-	PlayerInventory.current_attack_force = max(0.5, conquest_force)
-	PlayerInventory.conquering_zone = true
-	PlayerInventory.set_battle_roster_from_zone_troops(staging_troop_ids)
-	SaveManager.save_game()
-	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
-
-
-
-func _on_move_troops(zone_id: int) -> void:
-	_close_popup()
-	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["move_troops"]:
-		_show_map_tutorial_popup("move_troops")
-	_open_move_troops_panel(zone_id)
-
-func _on_build(zone_id: int) -> void:
-	_close_popup()
-	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["build"]:
-		_show_map_tutorial_popup("build")
-	_open_build_panel(zone_id)
-
-# -------------------------------------------------------
-# Move Troops Panel
-# -------------------------------------------------------
-func _open_move_troops_panel(target_zone_id: int) -> void:
-	popup_panel = PanelContainer.new()
-	popup_panel.position = Vector2(MAP_W / 2 - 160, MAP_H / 2 - 100)
-	popup_panel.custom_minimum_size = Vector2(320, 0)
-	add_child(popup_panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	popup_panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = "Move Troops to " + zones[target_zone_id]["name"]
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	vbox.add_child(title)
-
-	var hint = Label.new()
-	hint.text = "Select troops from your roster to station here."
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
-	vbox.add_child(hint)
-
-	for i in range(PlayerInventory.troop_roster.size()):
-		var troop = PlayerInventory.troop_roster[i]
-		var already_here = troop.troop_id in zones[target_zone_id]["troops"]
-
-		var btn = Button.new()
-		btn.text = "%s [%s]%s" % [
-			troop.troop_name,
-			troop.get_type_name(),
-			" ✓ HERE" if already_here else ""
-		]
-		btn.add_theme_font_size_override("font_size", 12)
-		btn.add_theme_color_override("font_color",
-			Color(0.4, 1.0, 0.4) if already_here else Color(0.8, 0.8, 0.8))
-		btn.pressed.connect(_on_assign_troop.bind(troop.troop_id, target_zone_id))
-		vbox.add_child(btn)
-
-	var close_btn = Button.new()
-	close_btn.text = "Done"
-	close_btn.pressed.connect(_close_popup)
-	vbox.add_child(close_btn)
-
-func _on_assign_troop(troop_id: String, zone_id: int) -> void:
-	var troop_display_name = _get_troop_name_by_id(troop_id)
-
-	# Find which zone this troop is currently in (if any)
-	var from_zone_id = -1
-	for z in zones:
-		if troop_id in z["troops"]:
-			from_zone_id = z["id"]
-			break
-
-	# Cancel any existing march for this troop
-	for m in marching_troops.duplicate():
-		if m["troop_id"] == troop_id:
-			marching_troops.erase(m)
-
-	if from_zone_id == zone_id:
-		_close_popup()
-		_notify("%s is already stationed there." % troop_display_name)
-		return
-
-	# Calculate travel time based on distance, in real seconds (at 1x speed)
-	var travel_seconds = 0.0
-	if from_zone_id >= 0:
-		var effective_speed = TRAVEL_SPEED
-		if PlayerInventory.unlocked_talents.get("combat_forced_march", false):
-			effective_speed *= 1.5
-		var dist = zones[from_zone_id]["pos"].distance_to(zones[zone_id]["pos"])
-		travel_seconds = max(2.0, dist / effective_speed)
-	else:
-		travel_seconds = 2.0  # unassigned troop, quick mobilization
-
-	if travel_seconds <= 2.0 and from_zone_id >= 0:
-		# Close enough — arrives almost immediately
-		zones[from_zone_id]["troops"].erase(troop_id)
-		zones[zone_id]["troops"].append(troop_id)
-		_notify("%s stationed at %s" % [troop_display_name, zones[zone_id]["name"]])
-	else:
-		# Remove from origin immediately (troop is "marching")
-		if from_zone_id >= 0:
-			zones[from_zone_id]["troops"].erase(troop_id)
-		marching_troops.append({
-			"troop_id": troop_id, "troop_name": troop_display_name, "from_zone": from_zone_id,
-			"to_zone": zone_id, "seconds_left": travel_seconds, "total_seconds": travel_seconds,
-		})
-		_notify("%s marching to %s \\u2014 arrives in %ds" % [troop_display_name, zones[zone_id]["name"], int(travel_seconds)])
-
-	_close_popup()
-	_draw_map()
-
-func _get_troop_name_by_id(troop_id: String) -> String:
-	for troop in PlayerInventory.troop_roster:
-		if troop.troop_id == troop_id:
-			return troop.troop_name
-	return "Unknown Unit"
-
-# -------------------------------------------------------
-# Build Panel
-# -------------------------------------------------------
-const BUILDINGS = {
-	"Watchtower": {
-		"desc": "Extends attack warning by +1 turn for this zone and its neighbors.",
-		"cost": 30, "max_level": 1,
-	},
-	"Barracks": {
-		"desc": "Unlocks an additional troop slot. Generates a trickle of Gold each turn.",
-		"cost": 45, "max_level": 1,
-	},
-	"Farm": {
-		"desc": "Generates Food each turn.",
-		"cost": 30, "max_level": 1,
-	},
-	"Forge": {
-		"desc": "Troops stationed here or in adjacent zones gain bonus attack. +5% per level.",
-		"cost": 45, "max_level": 4,
-	},
-	"Shrine": {
-		"desc": "Troops stationed here or in adjacent zones gain bonus HP. +5% per level.",
-		"cost": 45, "max_level": 4,
-	},
-}
-
-func _open_build_panel(zone_id: int) -> void:
-	popup_panel = PanelContainer.new()
-	popup_panel.position = Vector2(MAP_W / 2 - 170, MAP_H / 2 - 140)
-	popup_panel.custom_minimum_size = Vector2(340, 0)
-	add_child(popup_panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	popup_panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = "Build in " + zones[zone_id]["name"]
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	vbox.add_child(title)
-
-	var slots_used = zones[zone_id]["buildings"].size()
-	var slots_max = PlayerInventory.max_buildings_per_zone
-	var slot_lbl = Label.new()
-	slot_lbl.text = "Building slots: %d / %d" % [slots_used, slots_max]
-	slot_lbl.add_theme_font_size_override("font_size", 11)
-	slot_lbl.add_theme_color_override("font_color",
-		Color(0.9, 0.5, 0.3) if slots_used >= slots_max else Color(0.6, 0.6, 0.6))
-	vbox.add_child(slot_lbl)
-
 	var sep = HSeparator.new()
 	vbox.add_child(sep)
 
-	for bname in BUILDINGS:
-		var b = BUILDINGS[bname]
-		var current_level = zones[zone_id]["buildings"].get(bname, 0)
-		var max_level = b.get("max_level", 1)
-		var at_max = current_level >= max_level
-		var zone_full = slots_used >= slots_max and current_level == 0
-		var effective_cost = _get_building_cost(bname)
-		var cant_afford = not PlayerInventory.can_afford({"food": 0, "gold": effective_cost})
+	var counts = _get_wave_composition_counts()
+	# Show BOSS first if present, then the rest in a stable, readable order
+	var order = ["BOSS", "TANK", "MELEE", "RANGED", "ROGUE", "CHARGER", "BUFFER"]
+	for archetype in order:
+		if not counts.has(archetype): continue
+		var row = HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		vbox.add_child(row)
 
-		var hbox = HBoxContainer.new()
-		vbox.add_child(hbox)
+		var symbol_lbl = Label.new()
+		var color = Color(1, 0.3, 0.2) if archetype == "BOSS" else ENEMY_ARCHETYPES[archetype]["color"]
+		var symbol = "☠" if archetype == "BOSS" else ENEMY_ARCHETYPES[archetype]["symbol"]
+		symbol_lbl.text = symbol
+		symbol_lbl.add_theme_font_size_override("font_size", 16)
+		symbol_lbl.add_theme_color_override("font_color", color)
+		symbol_lbl.custom_minimum_size = Vector2(24, 0)
+		row.add_child(symbol_lbl)
 
-		var btn = Button.new()
-		var btn_text = bname
-		if max_level > 1:
-			btn_text += " (Lv%d/%d)" % [current_level, max_level]
-		if at_max:
-			btn_text += " ✓ MAX"
-		elif zone_full:
-			btn_text += " (zone full)"
-		else:
-			var action = "Upgrade" if current_level > 0 else "Build"
-			btn_text += "  [%s \\u2014 %d 🌾🪙]" % [action, effective_cost]
-			if cant_afford:
-				btn_text += " (can't afford)"
+		var name_lbl = Label.new()
+		var display_name = "Boss" if archetype == "BOSS" else ENEMY_ARCHETYPES[archetype]["label"]
+		name_lbl.text = display_name
+		name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_lbl)
 
-		btn.text = btn_text
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.add_theme_font_size_override("font_size", 12)
-		btn.disabled = at_max or zone_full or cant_afford
-		btn.add_theme_color_override("font_color",
-			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if (zone_full or cant_afford) else Color(0.85, 0.75, 0.4)))
-		btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
-		hbox.add_child(btn)
+		var count_lbl = Label.new()
+		count_lbl.text = "x%d" % counts[archetype]
+		count_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+		row.add_child(count_lbl)
 
-		var desc = Label.new()
-		desc.text = b["desc"]
-		desc.add_theme_font_size_override("font_size", 10)
-		desc.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-		desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-		vbox.add_child(desc)
+	var sep2 = HSeparator.new()
+	vbox.add_child(sep2)
 
 	var close_btn = Button.new()
-	close_btn.text = "Cancel"
-	close_btn.pressed.connect(_close_popup)
+	close_btn.text = "Got it"
+	close_btn.custom_minimum_size = Vector2(0, 32)
+	close_btn.pressed.connect(func(): overlay.queue_free())
 	vbox.add_child(close_btn)
 
-func _on_build_selected(building_name: String, zone_id: int) -> void:
-	var zone = zones[zone_id]
-	var current_level = zone["buildings"].get(building_name, 0)
-	var max_level = BUILDINGS[building_name].get("max_level", 1)
-	var is_new_building = current_level == 0
+# Which horizontal band of the enemy zone each archetype starts in,
+# front-to-back relative to the player's line. Tank/Melee hold the
+# front since they're built to engage directly. Bypasser/Charger sit in
+# the middle — their whole identity is about reaching a specific target
+# rather than holding a position, so starting them mid-field telegraphs
+# the threat instead of burying it at the very back where it'd be
+# invisible until it's already past your troops. Ranged/Buffer hold the
+# back since they want distance from the front line.
+const ARCHETYPE_BAND = {
+	"TANK": 0, "MELEE": 0, "BOSS": 0,
+	"ROGUE": 1, "CHARGER": 1,
+	"RANGED": 2, "BUFFER": 2,
+}
 
-	if is_new_building and zone["buildings"].size() >= PlayerInventory.max_buildings_per_zone:
-		_notify("This zone's building slots are full!")
-		_close_popup()
-		return
+func _spawn_battle_force() -> void:
+	var stage = PlayerInventory.current_stage
+	_all_enemies_spawned = true
+	_enemies_pending_spawn = 0
 
-	if current_level >= max_level:
-		_close_popup()
-		return
+	# Enemies occupy the right half of the field, mirroring the player's
+	# placement boundary on the left — both sides fully visible before
+	# the battle starts, instead of trickling in one at a time once it does.
+	var enemy_zone_left = FIELD_W / 2.0 + 20.0
+	var enemy_zone_right = FIELD_W - 40.0
+	var zone_width = enemy_zone_right - enemy_zone_left
+	var count = planned_wave.size()
 
-	var cost = _get_building_cost(building_name)
-	if not PlayerInventory.can_afford({"food": 0, "gold": cost}):
-		_notify("Not enough resources \\u2014 need %d combined Food+Gold." % cost)
-		_close_popup()
-		return
+	for i in range(count):
+		var archetype = planned_wave[i]
+		var band = ARCHETYPE_BAND.get(archetype, 1)
+		var band_left = enemy_zone_left + zone_width * (band / 3.0)
+		var band_right = enemy_zone_left + zone_width * ((band + 1) / 3.0)
+		var ex = randf_range(band_left, band_right)
+		var ey = randf_range(30, FIELD_H - 140)
+		_spawn_one_enemy(stage, archetype, Vector2(ex, ey))
 
-	PlayerInventory.spend_resources({"food": 0, "gold": cost})
-	zone["buildings"][building_name] = current_level + 1
+func _spawn_one_enemy(stage: int, archetype: String, spawn_pos: Vector2) -> void:
+	var is_boss = archetype == "BOSS"
+	var profile = ENEMY_ARCHETYPES["MELEE"] if is_boss else ENEMY_ARCHETYPES[archetype]
 
-	if building_name == "Barracks" and current_level == 0:
-		PlayerInventory.unlock_troop_slot()
+	var sz = 50.0 if is_boss else 24.0
+	var max_hp = int((18 + stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult) * profile["hp_mult"])
+	var spd = (45.0 + stage * 4.0) * profile["speed_mult"]
+	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"])
 
-	_close_popup()
-	_draw_map()
-	_refresh_hud()
+	var ex = spawn_pos.x
+	var ey = spawn_pos.y
 
-	if current_level == 0:
-		_notify("Built %s in %s!" % [building_name, zone["name"]])
-	else:
-		_notify("Upgraded %s to Lv%d in %s!" % [building_name, current_level + 1, zone["name"]])
+	var rect = UnitSprite.new()
+	var sprite_color = Color(1, 0.2, 0.1) if is_boss else profile["color"]
+	rect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
+		sprite_color, sz)
+	rect.position = Vector2(ex - sz/2, ey - sz/2)
+	field_node.add_child(rect)
 
-# Returns the resource cost to build/upgrade a building, with the
-# Efficient Construction talent discount applied (-25%, minimum 10).
-func _get_building_cost(building_name: String) -> int:
-	var base_cost = BUILDINGS[building_name]["cost"]
-	if PlayerInventory.unlocked_talents.get("buildings_efficient_construction", false):
-		return max(10, int(base_cost * 0.75))
-	return base_cost
+	var type_lbl = Label.new()
+	type_lbl.text = "BOSS" if is_boss else profile["symbol"]
+	type_lbl.add_theme_font_size_override("font_size", 13 if is_boss else 12)
+	type_lbl.add_theme_color_override("font_color", Color(1, 1, 1))
+	type_lbl.position = Vector2(ex - sz/2 - 4, ey - sz/2 - 22)
+	field_node.add_child(type_lbl)
 
-# -------------------------------------------------------
-# Building Effects
-# -------------------------------------------------------
+	var hpbg = ColorRect.new()
+	hpbg.color = Color(0.3, 0.1, 0.1)
+	hpbg.size = Vector2(sz, 5)
+	hpbg.position = Vector2(ex - sz/2, ey - sz/2 - 7)
+	field_node.add_child(hpbg)
 
-# Returns the warning-time bonus for a zone from its own Watchtower
-# plus any adjacent zone's Watchtower. Reinforced Towers talent makes
-# each contributing Watchtower worth +2 turns instead of +1.
-func get_watchtower_bonus(zone_id: int) -> int:
-	var per_tower = 2 if PlayerInventory.unlocked_talents.get("buildings_reinforced_towers", false) else 1
-	var bonus = 0
-	if zones[zone_id]["buildings"].has("Watchtower"):
-		bonus = per_tower
-	for conn_id in zones[zone_id]["connections"]:
-		if zones[conn_id]["buildings"].has("Watchtower"):
-			bonus = max(bonus, per_tower)
-	return bonus
+	var hpbar = ColorRect.new()
+	hpbar.color = Color(0.9, 0.2, 0.2)
+	hpbar.size = Vector2(sz, 5)
+	hpbar.position = Vector2(ex - sz/2, ey - sz/2 - 7)
+	field_node.add_child(hpbar)
 
-# Returns the best Forge level affecting this zone. Normally only itself
-# or directly adjacent zones count; the Wider Reach talent extends this
-# to zones up to 2 connections away.
-func get_best_forge_level(zone_id: int) -> int:
-	return _get_best_building_level_in_range(zone_id, "Forge")
-
-# Returns the best Shrine level affecting this zone (same range rules as Forge)
-func get_best_shrine_level(zone_id: int) -> int:
-	return _get_best_building_level_in_range(zone_id, "Shrine")
-
-func _get_best_building_level_in_range(zone_id: int, building_name: String) -> int:
-	var wider_reach = PlayerInventory.unlocked_talents.get("buildings_wider_reach", false)
-	var best = zones[zone_id]["buildings"].get(building_name, 0)
-
-	# Range 1: directly adjacent zones (always applies)
-	for conn_id in zones[zone_id]["connections"]:
-		best = max(best, zones[conn_id]["buildings"].get(building_name, 0))
-
-	# Range 2: zones adjacent to those adjacent zones (only with the talent)
-	if wider_reach:
-		for conn_id in zones[zone_id]["connections"]:
-			for conn2_id in zones[conn_id]["connections"]:
-				if conn2_id == zone_id: continue
-				best = max(best, zones[conn2_id]["buildings"].get(building_name, 0))
-
-	return best
-
-# Generates resources from Farm/Barracks each turn
-func _process_resource_generation(delta: float) -> void:
-	var farm_yield = 5.0 if PlayerInventory.unlocked_talents.get("economy_bountiful_harvest", false) else 3.0
-	var barracks_yield = 4.0 if PlayerInventory.unlocked_talents.get("economy_steady_coffers", false) else 2.0
-	var trade_routes = PlayerInventory.unlocked_talents.get("economy_trade_routes", false)
-
-	var food_gain = 0.0
-	var gold_gain = 0.0
-
-	for zone in zones:
-		if zone["owner"] != "player": continue
-		var has_farm = zone["buildings"].has("Farm")
-		var has_barracks = zone["buildings"].has("Barracks")
-		if has_farm:
-			food_gain += farm_yield
-		if has_barracks:
-			gold_gain += barracks_yield
-		if trade_routes and not has_farm and not has_barracks:
-			gold_gain += 1.0
-
-	# Converted from "per old turn" to "per second" — divide by the old turn length.
-	if food_gain > 0:
-		PlayerInventory.resources["food"] += (food_gain / SECONDS_PER_OLD_TURN) * delta
-	if gold_gain > 0:
-		PlayerInventory.resources["gold"] += (gold_gain / SECONDS_PER_OLD_TURN) * delta
+	enemies.append({
+		"pos": Vector2(ex, ey),
+		"hp": max_hp, "max_hp": max_hp,
+		"attack": atk, "speed": spd,
+		"sz": sz, "is_boss": is_boss,
+		"enemy_type": "BOSS" if is_boss else archetype,
+		"attack_t": 1.5,
+		"buff_t": BUFFER_BUFF_INTERVAL,
+		"dmg_boost_t": 0.0,
+		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "type_lbl": type_lbl,
+	})
 
 # -------------------------------------------------------
-# Real-Time Clock
+# Process
 # -------------------------------------------------------
 func _process(delta: float) -> void:
-	_process_camera_pan(delta)
+	if game_over: return
+	place_cooldown -= delta
 
-	if is_paused or mandatory_battle_queue.size() > 0:
-		return   # frozen during pause or while a forced battle is pending
-
-	var sim_delta = delta * time_speed
-	elapsed_seconds += sim_delta
-	PlayerInventory.map_elapsed_seconds = elapsed_seconds
-
-	_process_marching_troops(sim_delta)
-	_process_resource_generation(sim_delta)
-	_process_attack_countdowns(sim_delta)
-
-	attack_roll_timer -= sim_delta
-	if attack_roll_timer <= 0:
-		attack_roll_timer = ATTACK_ROLL_INTERVAL
-		_maybe_spawn_attack()
-
-	_refresh_hud()
-	_draw_map()
-
-# Arrow-key panning, works even while the map is paused since looking
-# around shouldn't require the clock to be running.
-func _process_camera_pan(delta: float) -> void:
-	if not map_camera: return
-	var dir = Vector2.ZERO
-	if Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_A):
-		dir.x -= 1
-	if Input.is_key_pressed(KEY_RIGHT) or Input.is_key_pressed(KEY_D):
-		dir.x += 1
-	if Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_W):
-		dir.y -= 1
-	if Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_S):
-		dir.y += 1
-	if dir != Vector2.ZERO:
-		map_camera.position += dir.normalized() * PAN_SPEED * delta
-
-func _process_marching_troops(delta: float) -> void:
-	var arrived = []
-	for m in marching_troops:
-		m["seconds_left"] -= delta
-		if m["seconds_left"] <= 0:
-			zones[m["to_zone"]]["troops"].append(m["troop_id"])
-			_notify("%s arrived at %s" % [m["troop_name"], zones[m["to_zone"]]["name"]])
-			arrived.append(m)
-	for a in arrived:
-		marching_troops.erase(a)
-
-# Called by the Admin Panel to force one attack attempt right now,
-# ignoring the normal random chance and max-simultaneous cooldown.
-# Reuses the exact same targeting rule as the real attack system —
-# a player-owned zone adjacent to a neutral one — so testing reflects
-# genuine attack behavior. Returns a status string for the panel to show.
-func force_admin_attack() -> String:
-	var targets = []
-	for zone in zones:
-		if zone["owner"] != "player": continue
-		var already_pending = false
-		for pa in pending_attacks:
-			if pa["zone_id"] == zone["id"]: already_pending = true
-		if already_pending: continue
-		for conn_id in zone["connections"]:
-			if zones[conn_id]["owner"] == "neutral":
-				targets.append(zone["id"])
-				break
-
-	if targets.is_empty():
-		return "No valid target zones found (need a player-owned zone adjacent to a neutral one, not already under attack)."
-
-	var target_id = targets[randi() % targets.size()]
-	var diff_settings = PlayerInventory.difficulty_settings
-	var force = diff_settings.get("force_size", 1.0)
-	var warning_seconds = 3.0   # short, for fast testing rather than the real warning_turns delay
-
-	pending_attacks.append({
-		"zone_id": target_id,
-		"seconds_remaining": warning_seconds,
-		"total_seconds": warning_seconds,
-		"force_size": force,
-	})
-	_notify("⚠ [Admin] Forced attack on %s in %ds!" % [zones[target_id]["name"], int(warning_seconds)])
-	return "Forced attack queued on %s." % zones[target_id]["name"]
-
-func _maybe_spawn_attack() -> void:
-	var diff_settings = PlayerInventory.difficulty_settings
-	var attack_chance = diff_settings.get("attack_frequency", 0.6) * 0.25
-	var warning_turns = int(diff_settings.get("warning_turns", 3))
-	var max_simultaneous = int(diff_settings.get("max_simultaneous_attacks", 1))
-
-	if pending_attacks.size() >= max_simultaneous: return
-	if randf() > attack_chance: return
-
-	# Attacks come from the wilds — any player zone adjacent to a neutral zone
-	var targets = []
-	for zone in zones:
-		if zone["owner"] != "player": continue
-		var already_pending = false
-		for pa in pending_attacks:
-			if pa["zone_id"] == zone["id"]: already_pending = true
-		if already_pending: continue
-		for conn_id in zone["connections"]:
-			if zones[conn_id]["owner"] == "neutral":
-				targets.append(zone["id"])
-				break
-
-	if targets.is_empty(): return
-
-	var target_id = targets[randi() % targets.size()]
-	var force = diff_settings.get("force_size", 1.0)
-	var effective_warning_turns = warning_turns + get_watchtower_bonus(target_id)
-	var effective_warning_seconds = effective_warning_turns * SECONDS_PER_OLD_TURN
-	pending_attacks.append({
-		"zone_id": target_id,
-		"seconds_remaining": effective_warning_seconds,
-		"total_seconds": effective_warning_seconds,
-		"force_size": force,
-	})
-	_notify("⚠ Creatures from the wilds will attack %s in %ds!" % [zones[target_id]["name"], int(effective_warning_seconds)])
-
-	# Nightmare/Hard can roll a second attack at the same time
-	if pending_attacks.size() < max_simultaneous and randf() < attack_chance * 0.5:
-		_maybe_spawn_attack()
-
-func _process_attack_countdowns(delta: float) -> void:
-	var remaining = []
-	var triggered = []
-	for attack in pending_attacks:
-		attack["seconds_remaining"] -= delta
-		if attack["seconds_remaining"] <= 0:
-			triggered.append(attack)
+	if not battle_active:
+		if battle_started:
+			# Player pressed Begin Battle — the wave is already on the
+			# field from scene load, this just lets combat logic begin.
+			battle_active = true
+			battle_started = false
+			_refresh_hud()
+			_set_status("Charge!")
+			if begin_battle_btn: begin_battle_btn.visible = false
 		else:
-			remaining.append(attack)
-	pending_attacks = remaining
+			hud_timer.text = "Place your troops, then press Begin Battle"
+	else:
+		hud_timer.text = "Battle in progress..."
 
-	if triggered.size() > 0:
-		mandatory_battle_queue.append_array(triggered)
-		_launch_next_mandatory_battle()
+	if battle_active:
+		_process_enemies(delta)
+		_process_troops(delta)
+		_move_projectiles(delta)
+	_update_visuals()
 
-func _launch_next_mandatory_battle() -> void:
-	if mandatory_battle_queue.is_empty(): return
-	var attack = mandatory_battle_queue[0]
-	var zone = zones[attack["zone_id"]]
-	_notify("⚔ %s is under attack from the wilds! You must defend it now." % zone["name"])
-	PlayerInventory.current_battle_zone = attack["zone_id"]
-	PlayerInventory.current_attack_force = attack["force_size"]
-	PlayerInventory.conquering_zone = false
-	# Roster is snapshotted NOW, at the moment the attack actually lands —
-	# not when it was first announced — so troops that marched in partway
-	# through the warning countdown are present and able to help defend.
-	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
-	PlayerInventory.set_battle_zone_buffs(
-		get_best_forge_level(attack["zone_id"]), get_best_shrine_level(attack["zone_id"]))
-	SaveManager.save_game()
-	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
+	# Check battle won — all enemies cleared, including any still in spawn queue
+	if battle_active and enemies.is_empty() and _all_enemies_spawned:
+		_on_victory()
+
+func _process_enemies(delta: float) -> void:
+	var new_enemies = []
+	for e in enemies:
+		if not is_instance_valid(e["rect"]):
+			continue
+
+		var enemy_type = e.get("enemy_type", "MELEE")
+
+		if enemy_type == "BUFFER":
+			_process_buffer_enemy(e, delta)
+			new_enemies.append(e)
+			continue
+
+		if e.get("dmg_boost_t", 0.0) > 0.0:
+			e["dmg_boost_t"] -= delta
+
+		var target_troop = _find_enemy_target(e, enemy_type)
+
+		var attack_range = 0.0
+		var real_dist = INF
+		if target_troop:
+			if enemy_type == "RANGED":
+				attack_range = RANGED_ATTACK_RANGE
+			else:
+				attack_range = e["sz"] / 2 + target_troop["sz"] / 2 + 6
+			real_dist = e["pos"].distance_to(target_troop["pos"])
+
+		var effective_atk = e["attack"]
+		if e.get("dmg_boost_t", 0.0) > 0.0:
+			effective_atk = int(effective_atk * (1.0 + BUFFER_DMG_BOOST_PCT))
+
+		if target_troop and real_dist <= attack_range:
+			# In range — stop and fight (melee swing or ranged shot)
+			e["attack_t"] -= delta
+			if e["attack_t"] <= 0:
+				if enemy_type == "RANGED":
+					_fire_proj(e["pos"], target_troop["pos"], effective_atk, false)
+					e["attack_t"] = 1.4
+				elif enemy_type == "CHARGER":
+					# One big burst, then the charger detonates and is removed
+					_damage_troop(target_troop, effective_atk, e)
+					if is_instance_valid(e["rect"]): e["rect"].queue_free()
+					if is_instance_valid(e["hp_bar"]): e["hp_bar"].queue_free()
+					if is_instance_valid(e["hp_bar_bg"]): e["hp_bar_bg"].queue_free()
+					if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+					continue
+				else:
+					_damage_troop(target_troop, effective_atk, e)
+					e["attack_t"] = 1.2
+		elif target_troop:
+			# Move toward target troop
+			var dir = (target_troop["pos"] - e["pos"]).normalized()
+			e["pos"] += dir * e["speed"] * delta
+			# Keep enemy inside the field bounds
+			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
+			e["pos"].y = clamp(e["pos"].y, 10, FIELD_H - 130)
+		elif e["pos"].x <= BASE_X + 30:
+			# No troops left — attack base
+			e["attack_t"] -= delta
+			if e["attack_t"] <= 0:
+				_damage_base(effective_atk)
+				e["attack_t"] = 1.0
+		else:
+			# No troops — march toward base
+			e["pos"].x -= e["speed"] * delta
+
+		# Reached base
+		if e["pos"].x <= BASE_X:
+			_damage_base(effective_atk * 2)
+			if is_instance_valid(e["rect"]): e["rect"].queue_free()
+			if is_instance_valid(e["hp_bar"]): e["hp_bar"].queue_free()
+			if is_instance_valid(e["hp_bar_bg"]): e["hp_bar_bg"].queue_free()
+			if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+			continue
+
+		new_enemies.append(e)
+	enemies = new_enemies
+
+# Picks which troop an enemy should target. Most archetypes use the
+# standard Knight-aggro formula (nearest troop, with Knights pulling
+# extra attention). Rogue ignores that entirely and explicitly hunts
+# backline roles (Mage/Healer/Archer) regardless of distance, falling
+# back to nearest-any-troop only if no backline role is present.
+func _find_enemy_target(e: Dictionary, enemy_type: String) -> Dictionary:
+	if enemy_type == "ROGUE":
+		var backline_target = {}
+		var backline_dist = INF
+		for t in placed_troops:
+			if t["hp"] <= 0: continue
+			if t["type"] in ["MAGE", "HEALER", "ARCHER"]:
+				var d = e["pos"].distance_to(t["pos"])
+				if d < backline_dist:
+					backline_dist = d
+					backline_target = t
+		if not backline_target.is_empty():
+			return backline_target
+		# No backline role on the field — fall back to nearest of anyone
+
+	var target_troop = {}
+	var target_score = INF
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var d = e["pos"].distance_to(t["pos"])
+		var score = d - (KNIGHT_AGGRO_BONUS if t["type"] == "KNIGHT" else 0.0)
+		if score < target_score:
+			target_score = score
+			target_troop = t
+	return target_troop
+
+# Buffer enemy — doesn't attack troops at all. Periodically grants a
+# temporary damage boost to nearby allied enemies, making it a real
+# priority-kill target rather than just another body in the wave.
+func _process_buffer_enemy(e: Dictionary, delta: float) -> void:
+	# Drift slowly toward the action rather than standing frozen at spawn
+	if placed_troops.size() > 0:
+		var nearest_troop_dist = INF
+		for t in placed_troops:
+			if t["hp"] <= 0: continue
+			nearest_troop_dist = min(nearest_troop_dist, e["pos"].distance_to(t["pos"]))
+		if nearest_troop_dist > BUFFER_AURA_RANGE * 1.5:
+			e["pos"].x -= e["speed"] * delta * 0.6
+			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
+
+	e["buff_t"] -= delta
+	if e["buff_t"] <= 0:
+		e["buff_t"] = BUFFER_BUFF_INTERVAL
+		for other in enemies:
+			if other == e: continue
+			if e["pos"].distance_to(other["pos"]) <= BUFFER_AURA_RANGE:
+				other["dmg_boost_t"] = BUFFER_DMG_BOOST_DURATION
+
+func _process_troops(delta: float) -> void:
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+
+		match t["type"]:
+			"KNIGHT":
+				# Tank — melee, also taunts: enemies within range prefer to target knights
+				_melee_engage(t, delta, 120.0, 70.0, t["attack"], 1.0)
+			"ROGUE":
+				# Fast melee striker — short range but hits hard and fast, no taunt
+				_melee_engage(t, delta, 90.0, 95.0, int(t["attack"] * 1.3), 0.6)
+			"ARCHER":
+				# Ranged — shoots nearest enemy anywhere on the field, doesn't need to move
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var nearest = _nearest_enemy(t["pos"], 500)
+					if nearest:
+						_fire_proj(t["pos"], nearest["pos"], t["attack"], true, t)
+						t["attack_t"] = t["attack_interval"]
+			"MAGE":
+				# AoE — damages all enemies in a large radius.
+				# If nothing is in range, drifts slowly toward the action instead
+				# of staying frozen at its placement spot forever.
+				var in_range = false
+				for e in enemies:
+					if t["pos"].distance_to(e["pos"]) < 250:
+						in_range = true
+						break
+
+				if not in_range:
+					var target = _nearest_enemy_anywhere(t["pos"])
+					if not target.is_empty():
+						var dir = (target["pos"] - t["pos"]).normalized()
+						t["pos"] += dir * 40.0 * delta   # slow drift, much slower than melee
+						t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
+						t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var hit_any = false
+					var spell_dmg = int(t["attack"] * 0.7 * (1.0 + t.get("spell_power", 0.0)))
+					for e in enemies:
+						if t["pos"].distance_to(e["pos"]) < 250:
+							_damage_enemy(e, spell_dmg, t)
+							hit_any = true
+					if hit_any:
+						t["attack_t"] = t["attack_interval"] * 1.5
+					else:
+						t["attack_t"] = 0.2
+			"HEALER":
+				# Heals nearest wounded troop AND attacks nearby enemies, stays put
+				t["attack_t"] -= delta
+				if t["attack_t"] <= 0:
+					var nearest = _nearest_enemy(t["pos"], 200)
+					if nearest:
+						_fire_proj(t["pos"], nearest["pos"], int(t["attack"] * 0.4), true, t)
+					t["attack_t"] = t["attack_interval"]
+				t["heal_t"] -= delta
+				if t["heal_t"] <= 0:
+					var target = _nearest_wounded_troop(t["pos"])
+					if target:
+						var heal = max(5, int(t["attack"] * 0.5 * (1.0 + t.get("spell_power", 0.0))))
+						target["hp"] = min(target["hp"] + heal, target["max_hp"])
+						_show_heal_effect(target["pos"])
+						_update_troop_hp_bar(target)
+					t["heal_t"] = 2.5
+
+func _fire_proj(from: Vector2, toward: Vector2, dmg: int, is_troop: bool, source: Dictionary = {}) -> void:
+	var dir = (toward - from).normalized()
+	var rect = ColorRect.new()
+	rect.size = Vector2(8, 8)
+	rect.color = C_PROJ_T if is_troop else C_PROJ_E
+	rect.position = from - Vector2(4, 4)
+	field_node.add_child(rect)
+	projectiles.append({"pos": Vector2(from.x, from.y), "dir": dir,
+		"damage": dmg, "is_troop": is_troop, "rect": rect, "source": source})
+
+func _move_projectiles(delta: float) -> void:
+	var new_projs = []
+	for p in projectiles:
+		if not is_instance_valid(p["rect"]): continue
+		p["pos"] += p["dir"] * 280.0 * delta
+
+		var oob = p["pos"].x < 0 or p["pos"].x > FIELD_W or p["pos"].y < 0 or p["pos"].y > FIELD_H
+		if oob:
+			p["rect"].queue_free()
+			continue
+
+		var hit = false
+		if p["is_troop"]:
+			for e in enemies:
+				if p["pos"].distance_to(e["pos"]) < e["sz"]/2 + 4:
+					_damage_enemy(e, p["damage"], p.get("source", {}))
+					p["rect"].queue_free()
+					hit = true
+					break
+		else:
+			for t in placed_troops:
+				if t["hp"] > 0 and p["pos"].distance_to(t["pos"]) < t["sz"]/2 + 4:
+					_damage_troop(t, p["damage"])
+					p["rect"].queue_free()
+					hit = true
+					break
+		if not hit:
+			new_projs.append(p)
+	projectiles = new_projs
+
+# -------------------------------------------------------
+# Damage helpers
+# -------------------------------------------------------
+func _damage_enemy(e: Dictionary, amount: int, source_troop: Dictionary = {}) -> void:
+	e["hp"] -= max(1, amount)
+
+	# Lifesteal — heals the attacking troop for a % of damage dealt.
+	# Inert on Healer since they don't call this function as the attacker
+	# (their heal logic is separate), so this naturally does nothing for them.
+	if not source_troop.is_empty():
+		var lifesteal_pct = source_troop.get("lifesteal", 0.0)
+		if lifesteal_pct > 0.0 and source_troop["hp"] > 0:
+			var healed = max(1, int(amount * lifesteal_pct))
+			source_troop["hp"] = min(source_troop["hp"] + healed, source_troop["max_hp"])
+			_update_troop_hp_bar(source_troop)
+
+	if e["hp"] <= 0:
+		e["hp"] = 0
+		if is_instance_valid(e["rect"]): e["rect"].queue_free()
+		if is_instance_valid(e["hp_bar"]): e["hp_bar"].queue_free()
+		if is_instance_valid(e["hp_bar_bg"]): e["hp_bar_bg"].queue_free()
+		if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+		enemies.erase(e)
+	else:
+		_update_enemy_hp_bar(e)
+
+func _damage_troop(t: Dictionary, amount: int, source_enemy: Dictionary = {}) -> void:
+	var reduced = max(1, amount - int(t["defense"] * 0.4))
+	t["hp"] -= reduced
+
+	# Thorns — reflects flat damage back to a melee attacker. Only passed
+	# in by the genuine melee-range hit, so ranged/projectile damage to a
+	# troop never triggers this — matches Thorns being melee-only.
+	var thorns_val = t.get("thorns", 0.0)
+	if thorns_val > 0.0 and not source_enemy.is_empty():
+		_damage_enemy(source_enemy, int(thorns_val))
+
+	if t["hp"] <= 0:
+		t["hp"] = 0
+		if is_instance_valid(t["rect"]) and t["rect"] is UnitSprite:
+			t["rect"].set_color(Color(0.3, 0.3, 0.3))
+	_update_troop_hp_bar(t)
+
+func _damage_base(amount: int) -> void:
+	base_hp -= amount
+	base_hp = max(0, base_hp)
+	_refresh_hud()
+	base_hp_bar.size.x = 40.0 * float(base_hp) / float(base_max_hp)
+	if base_hp <= 0:
+		_on_defeat()
+
+func _update_enemy_hp_bar(e: Dictionary) -> void:
+	if is_instance_valid(e["hp_bar"]):
+		e["hp_bar"].size.x = e["sz"] * float(e["hp"]) / float(e["max_hp"])
+
+func _update_troop_hp_bar(t: Dictionary) -> void:
+	if is_instance_valid(t["hp_bar"]):
+		var pct = float(t["hp"]) / float(t["max_hp"])
+		t["hp_bar"].size.x = t["sz"] * pct
+		t["hp_bar"].color = Color(0.9,0.2,0.2) if pct < 0.3 else (
+			Color(0.9,0.7,0.2) if pct < 0.6 else Color(0.3,0.9,0.3))
+
+func _show_heal_effect(pos: Vector2) -> void:
+	var lbl = Label.new()
+	lbl.text = "+HP"
+	lbl.add_theme_color_override("font_color", C_HEAL)
+	lbl.add_theme_font_size_override("font_size", 12)
+	lbl.position = pos - Vector2(12, 30)
+	field_node.add_child(lbl)
+	get_tree().create_timer(0.6).timeout.connect(func(): if is_instance_valid(lbl): lbl.queue_free())
+
+# -------------------------------------------------------
+# Targeting helpers
+# -------------------------------------------------------
+func _nearest_enemy(from: Vector2, max_range: float) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = max_range
+	for e in enemies:
+		if e["hp"] <= 0: continue
+		var d = from.distance_to(e["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = e
+	return nearest
+
+# Unlike _nearest_enemy, this has no range cap — used so melee troops can
+# always see and walk toward a target even before it's in attack range.
+func _nearest_enemy_anywhere(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for e in enemies:
+		if e["hp"] <= 0: continue
+		var d = from.distance_to(e["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = e
+	return nearest
+
+# Shared logic for melee troops (Knight, Rogue): walk toward the nearest
+# enemy if out of range, attack if in range. Mirrors how enemies already
+# behave, so both sides actively close the distance and engage.
+func _melee_engage(t: Dictionary, delta: float, attack_range: float, move_speed: float,
+		dmg: int, attack_speed_mult: float) -> void:
+	var target = _nearest_enemy_anywhere(t["pos"])
+	if target.is_empty(): return
+
+	var dist = t["pos"].distance_to(target["pos"])
+	if dist <= attack_range:
+		t["attack_t"] -= delta
+		if t["attack_t"] <= 0:
+			_damage_enemy(target, dmg, t)
+			t["attack_t"] = t["attack_interval"] * attack_speed_mult
+	else:
+		var dir = (target["pos"] - t["pos"]).normalized()
+		# Move Speed stat boosts closing speed — most meaningful here on
+		# melee units, since this is the path that actually needs to close
+		# distance; ranged/stationary units rarely hit this branch at all.
+		var effective_speed = move_speed * (1.0 + t.get("move_speed_bonus", 0.0))
+		t["pos"] += dir * effective_speed * delta
+		# Keep troop inside the battlefield bounds
+		t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
+		t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+
+func _nearest_troop(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var d = from.distance_to(t["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = t
+	return nearest
+
+func _nearest_wounded_troop(from: Vector2) -> Dictionary:
+	var nearest = {}
+	var nearest_dist = INF
+	for t in placed_troops:
+		if t["hp"] <= 0 or t["hp"] >= t["max_hp"]: continue
+		var d = from.distance_to(t["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = t
+	return nearest
+
+# -------------------------------------------------------
+# Visuals
+# -------------------------------------------------------
+func _update_visuals() -> void:
+	for e in enemies:
+		if is_instance_valid(e["rect"]):
+			e["rect"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2)
+			# Detect an attack firing by watching for attack_t resetting to
+			# a high value — purely cosmetic, doesn't touch combat logic.
+			if e["rect"] is UnitSprite:
+				var prev = e.get("_prev_attack_t", 0.0)
+				if e["attack_t"] > prev + 0.3:
+					e["rect"].play_attack()
+				e["_prev_attack_t"] = e["attack_t"]
+				e["rect"].face(Vector2(-1, 0))   # enemies face left toward the base
+		if is_instance_valid(e["hp_bar"]):
+			e["hp_bar"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2 + 7)
+		if is_instance_valid(e["hp_bar_bg"]):
+			e["hp_bar_bg"].position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2 + 7)
+		if is_instance_valid(e.get("type_lbl")):
+			e["type_lbl"].position = e["pos"] - Vector2(e["sz"]/2 + 4, e["sz"]/2 + 22)
+
+	for t in placed_troops:
+		if t["hp"] <= 0: continue
+		var sz = t["sz"]
+		if is_instance_valid(t["rect"]):
+			t["rect"].position = t["pos"] - Vector2(sz/2, sz/2)
+			if t["rect"] is UnitSprite:
+				var prev = t.get("_prev_attack_t", 0.0)
+				if t["attack_t"] > prev + 0.3:
+					t["rect"].play_attack()
+				t["_prev_attack_t"] = t["attack_t"]
+				t["rect"].face(Vector2(1, 0))   # troops face right toward enemies
+		if is_instance_valid(t["hp_bar"]):
+			t["hp_bar"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
+		if is_instance_valid(t["hp_bar_bg"]):
+			t["hp_bar_bg"].position = t["pos"] - Vector2(sz/2, sz/2 + 7)
+		if t.has("label") and is_instance_valid(t["label"]):
+			t["label"].position = t["pos"] - Vector2(20, sz/2 + 14)
 
 # -------------------------------------------------------
 # HUD
 # -------------------------------------------------------
 func _refresh_hud() -> void:
-	if hud_time:
-		var total_secs = int(elapsed_seconds)
-		var mins = total_secs / 60
-		var secs = total_secs % 60
-		hud_time.text = ("⏸ " if is_paused else "") + "Day %d, %02d:%02d" % [(mins / 60) + 1, mins % 60, secs]
-	if hud_diff:
-		var col = {"Easy": Color(0.3,0.9,0.3), "Normal": Color(0.4,0.7,1.0),
-				   "Hard": Color(1.0,0.65,0.1), "Nightmare": Color(0.9,0.2,0.2)}
-		hud_diff.text = "[%s]" % PlayerInventory.difficulty
-		hud_diff.add_theme_color_override("font_color",
-			col.get(PlayerInventory.difficulty, Color.WHITE))
-	if hud_resources:
-		hud_resources.text = "🌾%d 🪙%d" % [int(PlayerInventory.resources.get("food", 0)), int(PlayerInventory.resources.get("gold", 0))]
+	if hud_wave:
+		hud_wave.text = battle_title
+	if hud_base_hp:
+		hud_base_hp.text = "Base HP: %d / %d" % [base_hp, base_max_hp]
+		var col = Color(0.9,0.2,0.2) if base_hp < base_max_hp * 0.3 else Color(0.4,0.7,1.0)
+		hud_base_hp.add_theme_color_override("font_color", col)
 
-func _on_pause_pressed() -> void:
-	is_paused = not is_paused
-	pause_btn.text = "▶" if is_paused else "⏸"
-	_refresh_hud()
+func _set_status(msg: String) -> void:
+	if hud_status: hud_status.text = msg
 
-func _on_speed_changed(value: float) -> void:
-	time_speed = value
-	speed_label.text = "%.1fx" % value
+func _on_begin_battle_pressed() -> void:
+	if battle_active: return
+	battle_started = true
+	_set_status("Charge!")
 
-func _notify(msg: String) -> void:
-	if notification_label:
-		notification_label.text = msg
-		# Clear after 4 seconds
-		get_tree().create_timer(4.0).timeout.connect(func():
-			if is_instance_valid(notification_label):
-				notification_label.text = "")
+# Writes each placed troop's HP at the end of this battle back to their
+# persistent TroopData, so wounds carry over outside of battle. Troops
+# never drop below 1 HP here — they can be reduced to "down" (0 HP) for
+# the rest of THIS fight, but the persisted result is always at least 1,
+# matching the no-permanent-death design. Healing back up from there
+# costs food, handled separately in Management.
+func _persist_troop_hp() -> void:
+	for t in placed_troops:
+		var troop: TroopData = t["troop"]
+		var max_hp = t["max_hp"]
+		var final_hp = max(1, t["hp"])
+		# Store as an absolute value scaled back against the troop's real
+		# (unbuffed-by-this-battle) max, in case Forge/Shrine inflated
+		# max_hp for this fight specifically.
+		var real_max = troop.get_max_hp()
+		var pct = float(final_hp) / max(1, max_hp)
+		troop.current_hp = max(1, int(real_max * pct))
 
-func _input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			_close_popup()
-			selected_zone_id = -1
-			_draw_map()
-		elif event.button_index == MOUSE_BUTTON_MIDDLE:
-			is_panning = event.pressed
-	if event is InputEventMouseMotion and is_panning and map_camera:
-		map_camera.position -= event.relative
-	if event is InputEventKey and event.pressed and event.keycode == KEY_SPACE:
-		_on_pause_pressed()
+func _on_retreat() -> void:
+	_persist_troop_hp()
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "retreat"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+
+func _on_return() -> void:
+	if battle_zone_id >= 0:
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+
+# -------------------------------------------------------
+# End states
+# -------------------------------------------------------
+func _on_victory() -> void:
+	game_over = true
+	_persist_troop_hp()
+	PlayerInventory.current_stage += 1
+	if PlayerInventory.current_stage in [3, 5, 8]:
+		PlayerInventory.unlock_troop_slot()
+
+	# Report result to map
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "won"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+
+	SaveManager.save_game()
+	_show_end_screen(true)
+
+func _on_defeat() -> void:
+	game_over = true
+	_persist_troop_hp()
+
+	# Losing a defense of your home zone (zone 0) specifically is a real
+	# campaign-ending event, distinct from any other lost fight. Skip the
+	# normal autosave here so the player's last save still reflects the
+	# state BEFORE this loss — otherwise "load last save" would just
+	# reload the same defeat, making it a meaningless option.
+	var capital_has_fallen = battle_zone_id == 0 and not is_conquering
+
+	if capital_has_fallen:
+		_show_capital_fallen_screen()
+		return
+
+	if battle_zone_id >= 0:
+		PlayerInventory.last_battle_result = "lost"
+		PlayerInventory.last_battle_zone = battle_zone_id
+		PlayerInventory.last_battle_was_conquest = is_conquering
+
+	SaveManager.save_game()
+	_show_end_screen(false)
+
+# Shown specifically when your home zone falls — a real campaign-ending
+# event, but gentler than a hard game over: the player can reload their
+# last save (rewinding to before this loss) or start a fresh campaign,
+# rather than being stuck with no path forward.
+func _show_capital_fallen_screen() -> void:
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
+
+	var bg = ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.85)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(bg)
+
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	overlay.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(vbox)
+
+	var title = Label.new()
+	title.text = "YOUR CAPITAL HAS FALLEN"
+	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_color_override("font_color", Color(0.9, 0.2, 0.2))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var sub = Label.new()
+	sub.text = "Without your home zone, the campaign cannot continue."
+	sub.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(sub)
+
+	var load_btn = Button.new()
+	load_btn.text = "Load Last Save"
+	load_btn.tooltip_text = "Reload your save from before this defeat"
+	load_btn.custom_minimum_size = Vector2(240, 44)
+	load_btn.pressed.connect(func():
+		SaveManager.load_game()
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn"))
+	vbox.add_child(load_btn)
+
+	var new_game_btn = Button.new()
+	new_game_btn.text = "Start New Campaign"
+	new_game_btn.custom_minimum_size = Vector2(240, 44)
+	new_game_btn.pressed.connect(func():
+		get_tree().change_scene_to_file("res://scenes/new_game_screen.tscn"))
+	vbox.add_child(new_game_btn)
+
+func _show_end_screen(won: bool) -> void:
+	var overlay = CanvasLayer.new()
+	add_child(overlay)
+
+	var bg = ColorRect.new()
+	bg.color = Color(0,0,0,0.75)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(bg)
+
+	var panel = PanelContainer.new()
+	panel.set_anchors_preset(Control.PRESET_CENTER)
+	overlay.add_child(panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 14)
+	panel.add_child(vbox)
+
+	var title = Label.new()
+	title.text = "VICTORY!" if won else "BASE DESTROYED"
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(0.3,0.9,0.3) if won else Color(0.9,0.2,0.2))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	var sub = Label.new()
+	sub.text = "The battle is won!" if won else "Your base has fallen."
+	sub.add_theme_color_override("font_color", Color(0.8,0.8,0.8))
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(sub)
+
+	var btn = Button.new()
+	btn.text = "Return to Map" if battle_zone_id >= 0 else "Back to Management"
+	btn.custom_minimum_size = Vector2(220, 44)
+	btn.pressed.connect(_on_return)
+	vbox.add_child(btn)

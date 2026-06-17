@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://dlagoq8guhnce"]
+
+[ext_resource type="Script" uid="uid://df2w8snklwk11" path="res://gear_shop_screen.gd" id="1_jsx6o"]
+
+[node name="Control" type="Control" unique_id=1427746474]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("1_jsx6o")

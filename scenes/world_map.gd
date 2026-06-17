@@ -349,6 +349,15 @@ func _build_ui() -> void:
 	speed_slider.value_changed.connect(_on_speed_changed)
 	hbox.add_child(speed_slider)
 
+	var settings_btn = Button.new()
+	settings_btn.text = "⚙"
+	settings_btn.custom_minimum_size = Vector2(40, 32)
+	settings_btn.tooltip_text = "Settings"
+	settings_btn.pressed.connect(func():
+		PlayerInventory.settings_return_scene = "res://scenes/world_map.tscn"
+		get_tree().change_scene_to_file("res://scenes/settings_screen.tscn"))
+	hbox.add_child(settings_btn)
+
 	# Back to management
 	var mgmt_btn = Button.new()
 	mgmt_btn.text = "Management"
@@ -1317,6 +1326,15 @@ func force_admin_attack() -> String:
 
 func _maybe_spawn_attack() -> void:
 	var diff_settings = PlayerInventory.difficulty_settings
+
+	# Invasions can be turned off entirely via the free "Wilds Pact" talent,
+	# but only on difficulties that allow it (Easy/Normal) — Hard and
+	# Nightmare always keep attacks on regardless of this setting.
+	var can_toggle = diff_settings.get("invasions_toggleable", true)
+	var talent_unlocked = PlayerInventory.unlocked_talents.get("toggle_invasions", false)
+	if can_toggle and talent_unlocked and not PlayerInventory.invasions_enabled:
+		return
+
 	var attack_chance = diff_settings.get("attack_frequency", 0.6) * 0.25
 	var warning_turns = int(diff_settings.get("warning_turns", 3))
 	var max_simultaneous = int(diff_settings.get("max_simultaneous_attacks", 1))
@@ -1371,9 +1389,10 @@ func _process_attack_countdowns(delta: float) -> void:
 		_launch_next_mandatory_battle()
 
 func _launch_next_mandatory_battle() -> void:
-	if mandatory_battle_queue.is_empty(): return
+	if mandatory_battle_queue.is_empty():
+		return
 	var attack = mandatory_battle_queue[0]
-	var zone = zones[attack["zone_id"]]
+	var zone = zones[int(attack["zone_id"])]
 	_notify("⚔ %s is under attack from the wilds! You must defend it now." % zone["name"])
 	PlayerInventory.current_battle_zone = int(attack["zone_id"])
 	PlayerInventory.current_attack_force = attack["force_size"]
@@ -1383,7 +1402,7 @@ func _launch_next_mandatory_battle() -> void:
 	# through the warning countdown are present and able to help defend.
 	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
 	PlayerInventory.set_battle_zone_buffs(
-		get_best_forge_level(attack["zone_id"]), get_best_shrine_level(attack["zone_id"]))
+		get_best_forge_level(int(attack["zone_id"])), get_best_shrine_level(int(attack["zone_id"])))
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
 

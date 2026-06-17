@@ -1,15 +1,15 @@
 extends Control
 
 # -------------------------------------------------------
-# Shop Screen — spend Food/Gold (interchangeable) to recruit
+# Recruit Screen — spend Food/Gold (interchangeable) to recruit
 # a new random unit. Stats roll with small variance, like gear.
+# (Selling and upgrading gear lives in its own screen — see
+# gear_shop_screen.gd.)
 # -------------------------------------------------------
 
 var resource_label: Label = null
 var status_label: Label = null
 var recruit_choices_container: VBoxContainer = null
-var sell_list_container: VBoxContainer = null
-var sell_checkboxes: Dictionary = {}   # GearItem -> CheckBox
 
 func _ready() -> void:
 	_build_ui()
@@ -34,11 +34,12 @@ func _build_ui() -> void:
 
 	var outer = VBoxContainer.new()
 	outer.add_theme_constant_override("separation", 14)
+	outer.custom_minimum_size = Vector2(420, 0)
 	margin.add_child(outer)
 
 	# Header
 	var title = Label.new()
-	title.text = "SHOP"
+	title.text = "RECRUIT"
 	title.add_theme_font_size_override("font_size", 26)
 	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
 	outer.add_child(title)
@@ -57,13 +58,6 @@ func _build_ui() -> void:
 
 	var sep1 = HSeparator.new()
 	outer.add_child(sep1)
-
-	# --- RECRUIT SECTION ---
-	var recruit_header = Label.new()
-	recruit_header.text = "Recruit a New Unit"
-	recruit_header.add_theme_font_size_override("font_size", 18)
-	recruit_header.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	outer.add_child(recruit_header)
 
 	var recruit_desc = Label.new()
 	recruit_desc.text = "Adds a random unit to your roster. Stats roll with small variance, like gear."
@@ -91,51 +85,6 @@ func _build_ui() -> void:
 
 	var sep2 = HSeparator.new()
 	outer.add_child(sep2)
-
-	# --- SELL GEAR SECTION ---
-	var sell_header = Label.new()
-	sell_header.text = "Sell Gear"
-	sell_header.add_theme_font_size_override("font_size", 18)
-	sell_header.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	outer.add_child(sell_header)
-
-	var sell_desc = Label.new()
-	sell_desc.text = "Sell unwanted gear for Gold. Value scales with rarity and quality tier."
-	sell_desc.add_theme_font_size_override("font_size", 12)
-	sell_desc.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	sell_desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-	outer.add_child(sell_desc)
-
-	# Quick bulk-sell by rarity threshold
-	var threshold_hbox = HBoxContainer.new()
-	threshold_hbox.add_theme_constant_override("separation", 8)
-	outer.add_child(threshold_hbox)
-
-	for rarity_name in ["COMMON", "RARE", "EPIC"]:
-		var bulk_btn = Button.new()
-		bulk_btn.text = "Sell all %s and below" % rarity_name.capitalize()
-		bulk_btn.custom_minimum_size = Vector2(0, 36)
-		bulk_btn.add_theme_font_size_override("font_size", 11)
-		bulk_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		bulk_btn.pressed.connect(_on_bulk_sell_threshold.bind(rarity_name))
-		threshold_hbox.add_child(bulk_btn)
-
-	# Individual checkbox selection for precise control
-	sell_checkboxes.clear()
-	sell_list_container = VBoxContainer.new()
-	sell_list_container.add_theme_constant_override("separation", 4)
-	outer.add_child(sell_list_container)
-	_populate_sell_list()
-
-	var sell_selected_btn = Button.new()
-	sell_selected_btn.text = "Sell Selected"
-	sell_selected_btn.custom_minimum_size = Vector2(0, 40)
-	sell_selected_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	sell_selected_btn.pressed.connect(_on_sell_selected)
-	outer.add_child(sell_selected_btn)
-
-	var sep3 = HSeparator.new()
-	outer.add_child(sep3)
 
 	# Back button
 	var back_btn = Button.new()
@@ -238,84 +187,3 @@ func _finalize_recruit(troop: TroopData) -> void:
 
 func _set_status(msg: String) -> void:
 	if status_label: status_label.text = msg
-
-# -------------------------------------------------------
-# Sell Gear
-# -------------------------------------------------------
-func _populate_sell_list() -> void:
-	for child in sell_list_container.get_children():
-		child.queue_free()
-	sell_checkboxes.clear()
-
-	if PlayerInventory.gear_inventory.is_empty():
-		var empty = Label.new()
-		empty.text = "No gear to sell."
-		empty.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-		sell_list_container.add_child(empty)
-		return
-
-	for gear in PlayerInventory.gear_inventory:
-		var row = HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-
-		var cb = CheckBox.new()
-		sell_checkboxes[gear] = cb
-		row.add_child(cb)
-
-		var lbl = Label.new()
-		lbl.text = "%s [%s%s] \\u2014 %d🪙" % [
-			gear.item_name, gear.get_rarity_name(),
-			(" " + gear.get_quality_name()) if gear.get_quality_name() != "" else "",
-			gear.get_sell_price(),
-		]
-		lbl.add_theme_font_size_override("font_size", 12)
-		lbl.add_theme_color_override("font_color", gear.get_display_color())
-		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(lbl)
-
-		sell_list_container.add_child(row)
-
-func _on_bulk_sell_threshold(max_rarity: String) -> void:
-	var rarity_order = ["COMMON", "RARE", "EPIC", "LEGENDARY"]
-	var max_idx = rarity_order.find(max_rarity)
-
-	var to_sell = []
-	for gear in PlayerInventory.gear_inventory:
-		if rarity_order.find(gear.get_rarity_name()) <= max_idx:
-			to_sell.append(gear)
-
-	if to_sell.is_empty():
-		_set_status("Nothing to sell at or below %s." % max_rarity.capitalize())
-		return
-
-	var total_gold = 0
-	for gear in to_sell:
-		total_gold += gear.get_sell_price()
-		PlayerInventory.remove_gear(gear)
-
-	PlayerInventory.resources["gold"] += total_gold
-	SaveManager.save_game()
-	_set_status("Sold %d items for %d Gold." % [to_sell.size(), total_gold])
-	_refresh_resource_label()
-	_populate_sell_list()
-
-func _on_sell_selected() -> void:
-	var to_sell = []
-	for gear in sell_checkboxes:
-		if sell_checkboxes[gear].button_pressed:
-			to_sell.append(gear)
-
-	if to_sell.is_empty():
-		_set_status("No items selected.")
-		return
-
-	var total_gold = 0
-	for gear in to_sell:
-		total_gold += gear.get_sell_price()
-		PlayerInventory.remove_gear(gear)
-
-	PlayerInventory.resources["gold"] += total_gold
-	SaveManager.save_game()
-	_set_status("Sold %d items for %d Gold." % [to_sell.size(), total_gold])
-	_refresh_resource_label()
-	_populate_sell_list()

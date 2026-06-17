@@ -1,0 +1,10 @@
+[gd_scene format=3 uid="uid://dlbf4x7v7geda"]
+
+[ext_resource type="Script" uid="uid://c3ctmm8vovqsb" path="res://recruit_screen.gd" id="1_tk8mh"]
+
+[node name="Control" type="Control" unique_id=160430747]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("1_tk8mh")

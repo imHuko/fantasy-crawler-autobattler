@@ -104,6 +104,10 @@ const NODES = {
 		"name": "Diplomatic Tongue", "branch": "Standalone", "cost": 200, "prereq": "", "min_stage": 3,
 		"desc": "Conquest battles are slightly easier \\u2014 the zone's defenders fight at reduced strength.",
 	},
+	"toggle_invasions": {
+		"name": "Wilds Pact", "branch": "Standalone", "cost": 0, "prereq": "", "min_stage": 0,
+		"desc": "Free. Once unlocked, lets you turn random wilderness attacks on or off entirely \\u2014 only on Easy and Normal difficulty. Hard and Nightmare always keep attacks on regardless of this setting.",
+	},
 }
 
 # Returns true if the node's prerequisite (if any) is already unlocked.

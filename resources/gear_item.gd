@@ -15,6 +15,7 @@ enum Quality { NORMAL, AWAKENED, ASCENDANT, TRANSCENDENT }
 # stat_ranges stores the rolled ceiling for each stat so we can show the bar
 # format: { "attack": {"rolled": 22, "min": 16, "max": 38, "is_quality": false} }
 @export var set_name: String = ""
+@export var upgrade_level: int = 0   # 0-6; each level adds a small % to this item's own rolled stats
 
 func get_rarity_name() -> String:
 	return Rarity.keys()[rarity]
@@ -45,6 +46,85 @@ func get_sell_price() -> int:
 	if set_name != "":
 		price *= 1.2   # set-bonus items are slightly more valuable
 	return max(1, int(round(price)))
+
+# Salvage value follows the same shape as sell price (rarity base x
+# quality multiplier) but returns a count of this item's own rarity's
+# salvage material instead of gold, and is deliberately a smaller
+# number than the gold sell price — salvage is meant to feel like a
+# byproduct of breaking an item down, not a replacement currency.
+const SALVAGE_BASE_AMOUNT = {
+	"COMMON": 1, "RARE": 2, "EPIC": 4, "LEGENDARY": 8,
+}
+const SALVAGE_QUALITY_MULT = {
+	"": 1.0, "Awakened": 1.3, "Ascendant": 1.8, "Transcendent": 2.5,
+}
+
+func get_salvage_amount() -> int:
+	var base = SALVAGE_BASE_AMOUNT.get(get_rarity_name(), 1)
+	var quality_mult = SALVAGE_QUALITY_MULT.get(get_quality_name(), 1.0)
+	return max(1, int(round(base * quality_mult)))
+
+# -------------------------------------------------------
+# Upgrades — 6 levels, each adding a small % on top of this item's own
+# rolled stats. Paid for with salvage material matching the item's
+# RARITY (not quality) — quality instead makes each level cost more,
+# so a Transcendent item needs real commitment to fully upgrade.
+# -------------------------------------------------------
+const MAX_UPGRADE_LEVEL = 6
+const UPGRADE_STAT_BONUS_PER_LEVEL = 0.04   # +4% of this item's own rolled stats, per level
+
+# Base salvage cost for the FIRST upgrade level, by rarity — later
+# levels cost progressively more, see get_next_upgrade_cost() below.
+const UPGRADE_BASE_COST = {
+	"COMMON": 2, "RARE": 4, "EPIC": 8, "LEGENDARY": 15,
+}
+# Quality multiplies the cost on top of the rarity base — Transcendent
+# gear demands a lot more salvage to fully upgrade than a Normal item
+# of the same rarity.
+const UPGRADE_QUALITY_COST_MULT = {
+	"": 1.0, "Awakened": 1.6, "Ascendant": 2.4, "Transcendent": 3.5,
+}
+
+func is_max_upgrade() -> bool:
+	return upgrade_level >= MAX_UPGRADE_LEVEL
+
+# Cost in salvage (of this item's own rarity) to go from the current
+# upgrade_level to the next one. Each successive level costs more than
+# the last, so the final levels are a real investment.
+func get_next_upgrade_cost() -> int:
+	if is_max_upgrade(): return 0
+	var base = UPGRADE_BASE_COST.get(get_rarity_name(), 2)
+	var quality_mult = UPGRADE_QUALITY_COST_MULT.get(get_quality_name(), 1.0)
+	# Level 0->1 costs the base amount; each level after that costs 35% more
+	# than the previous level's cost, giving a real but gentle ramp.
+	var level_mult = pow(1.35, upgrade_level)
+	return max(1, int(round(base * quality_mult * level_mult)))
+
+func upgrade() -> bool:
+	if is_max_upgrade(): return false
+	upgrade_level += 1
+	return true
+
+# The % bonus this item's upgrade levels currently add to its rolled
+# stats — applied on top of whatever stats/stat_ranges already rolled,
+# never changing the base roll itself.
+func get_upgrade_bonus_pct() -> float:
+	return upgrade_level * UPGRADE_STAT_BONUS_PER_LEVEL
+
+# Returns this item's stats with the upgrade bonus applied — use this
+# instead of reading `stats` directly anywhere upgrade levels should
+# matter (combat stat totals, tooltips, etc).
+func get_effective_stats() -> Dictionary:
+	if upgrade_level <= 0: return stats
+	var bonus_mult = 1.0 + get_upgrade_bonus_pct()
+	var result: Dictionary = {}
+	for stat_key in stats:
+		var val = stats[stat_key]
+		if val is float:
+			result[stat_key] = val * bonus_mult
+		else:
+			result[stat_key] = int(round(val * bonus_mult))
+	return result
 
 func get_quality_suffix() -> String:
 	match quality:

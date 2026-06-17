@@ -1,5 +1,26 @@
 extends Node
 
+func _ready() -> void:
+	_apply_saved_settings()
+
+func _apply_saved_settings() -> void:
+	var config = ConfigFile.new()
+	if config.load("user://settings.cfg") != OK:
+		return   # no saved settings yet, use the project's defaults
+
+	var width = config.get_value("display", "width", -1)
+	var height = config.get_value("display", "height", -1)
+	var fullscreen = config.get_value("display", "fullscreen", false)
+
+	if fullscreen:
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	elif width > 0 and height > 0:
+		DisplayServer.window_set_size(Vector2i(width, height))
+		var screen_size = DisplayServer.screen_get_size()
+		DisplayServer.window_set_position((screen_size - Vector2i(width, height)) / 2)
+
+	confirm_before_disposing_gear = config.get_value("gameplay", "confirm_before_disposing_gear", true)
+
 # All gear the player has collected across runs
 var gear_inventory: Array[GearItem] = []
 
@@ -22,15 +43,19 @@ var difficulty_settings: Dictionary = {
 	"force_size": 1.0,
 	"enemy_expansion": 0.7,
 }
+var invasions_enabled: bool = true   # player's own preference, only respected when difficulty_settings.invasions_toggleable is true
 
 # Map state
 var current_battle_zone: int = -1
+var settings_return_scene: String = ""   # set right before navigating to Settings, so Back returns to the right place
+var confirm_before_disposing_gear: bool = true   # asks before selling/salvaging when on; loaded from settings.cfg at launch
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false
 
 # Dungeon run tier — chosen on the dungeon picker screen each time, not
 # the same as the map's Easy/Normal/Hard/Nightmare difficulty above.
 var dungeon_tier: String = "Standard"   # "Quick", "Standard", "Deep Delve"
+var dungeon_duration_seconds: float = 600.0   # how long the next survival run should last, set by the duration picker
 var dungeon_troop_id: String = ""        # troop_id of whichever troop is being played this dungeon run
 
 # Resources — banked for spending (recruiting, rerolling, talents, etc).
@@ -39,6 +64,17 @@ var dungeon_troop_id: String = ""        # troop_id of whichever troop is being 
 var resources: Dictionary = {
 	"food": 0,
 	"gold": 0,
+}
+
+# Salvage materials, one per gear rarity — produced by salvaging gear of
+# that rarity, spent on upgrading gear of that same rarity. Deliberately
+# NOT interchangeable with each other or with Food/Gold, so upgrading a
+# Legendary always requires having actually salvaged Legendary gear.
+var salvage: Dictionary = {
+	"COMMON": 0,
+	"RARE": 0,
+	"EPIC": 0,
+	"LEGENDARY": 0,
 }
 
 func get_total_resources() -> int:

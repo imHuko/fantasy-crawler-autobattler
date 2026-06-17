@@ -16,6 +16,7 @@ func save_game() -> void:
 		"unlocked_talents": PlayerInventory.unlocked_talents,
 		"max_buildings_per_zone": PlayerInventory.max_buildings_per_zone,
 		"resources": PlayerInventory.resources,
+		"salvage": PlayerInventory.salvage,
 		"map_generated": PlayerInventory.map_generated,
 		"map_elapsed_seconds": PlayerInventory.map_elapsed_seconds,
 		"map_zones": _serialize_zones(PlayerInventory.map_zones),
@@ -26,6 +27,7 @@ func save_game() -> void:
 		"map_seed": PlayerInventory.map_seed,
 		"difficulty": PlayerInventory.difficulty,
 		"difficulty_settings": PlayerInventory.difficulty_settings,
+		"invasions_enabled": PlayerInventory.invasions_enabled,
 		"dungeon_tier": PlayerInventory.dungeon_tier,
 		"tutorial_complete": PlayerInventory.tutorial_complete,
 		"gear": [],
@@ -43,6 +45,7 @@ func save_game() -> void:
 			"stats": gear.stats,
 			"stat_ranges": gear.stat_ranges,
 			"set_name": gear.set_name,
+			"upgrade_level": gear.upgrade_level,
 		})
 
 	# Save troops and their equipped gear
@@ -68,6 +71,7 @@ func save_game() -> void:
 					"stats": gear.stats,
 					"stat_ranges": gear.stat_ranges,
 					"set_name": gear.set_name,
+					"upgrade_level": gear.upgrade_level,
 				}
 		data["troops"].append(t_data)
 
@@ -98,6 +102,7 @@ func load_game() -> void:
 	PlayerInventory.map_seed = data.get("map_seed", 0)
 	PlayerInventory.difficulty = data.get("difficulty", "Normal")
 	PlayerInventory.difficulty_settings = data.get("difficulty_settings", PlayerInventory.difficulty_settings)
+	PlayerInventory.invasions_enabled = data.get("invasions_enabled", true)
 	PlayerInventory.dungeon_tier = data.get("dungeon_tier", "Standard")
 	PlayerInventory.tutorial_complete = data.get("tutorial_complete", false)
 
@@ -112,6 +117,10 @@ func load_game() -> void:
 		for key in data["resources"]:
 			if PlayerInventory.resources.has(key):
 				PlayerInventory.resources[key] = data["resources"][key]
+	if data.has("salvage"):
+		for key in data["salvage"]:
+			if PlayerInventory.salvage.has(key):
+				PlayerInventory.salvage[key] = data["salvage"][key]
 
 	PlayerInventory.map_generated = data.get("map_generated", false)
 	PlayerInventory.map_elapsed_seconds = data.get("map_elapsed_seconds", 0.0)
@@ -167,6 +176,7 @@ func new_game() -> void:
 		"move_troops": false, "end_turn": false,
 	}
 	PlayerInventory.resources = {"food": 0, "gold": 0}
+	PlayerInventory.salvage = {"COMMON": 0, "RARE": 0, "EPIC": 0, "LEGENDARY": 0}
 	PlayerInventory.unlocked_talents = {}
 	PlayerInventory.max_buildings_per_zone = 2
 
@@ -263,6 +273,7 @@ func _dict_to_gear(d: Dictionary) -> GearItem:
 	gear.stats       = d.get("stats", {})
 	gear.stat_ranges = d.get("stat_ranges", {})
 	gear.set_name    = d.get("set_name", "")
+	gear.upgrade_level = int(d.get("upgrade_level", 0))   # default for saves predating upgrades
 	return gear
 
 

@@ -1,25 +1,107 @@
 extends Node2D
 
 # -------------------------------------------------------
-# Action Dungeon — top-down WASD, auto-attack, room-based
+# Action Dungeon — Survival Arena
+# One large open scrollable arena, no rooms or doors. Enemies spawn
+# continuously and escalate the longer you survive. A relocating save
+# zone lets you bank gear you've found; only banked gear is safe if you
+# die. Run ends when the survival timer runs out, or you retreat/die.
 # -------------------------------------------------------
 
-const ROOM_W = 640
-const ROOM_H = 480
-const WALL_T = 32
-const MIN_SPAWN_DIST_FROM_HERO = 200.0
-const DOOR_W = 64
+# =========================================================
+# BALANCE TUNING — every number here is safe to change without
+# touching any logic below. Save the file and re-run to test.
+# =========================================================
 
+# --- Arena size ---
+const ARENA_W = 3200   # total arena width, in pixels
+const ARENA_H = 3200   # total arena height, in pixels
+const ARENA_WALL_T = 32   # border thickness around the arena edge
+
+# --- Hero ---
 const HERO_SPEED_BASE = 180.0
 const HERO_HP_BASE = 100
 const ATTACK_INTERVAL = 0.8
+const MIN_SPAWN_DIST_FROM_HERO = 220.0   # enemies won't spawn closer than this to the player
 
-# Per-class playstyle in the action dungeon. Whichever troop is brought
-# into the dungeon plays meaningfully differently rather than every run
-# feeling like the same generic melee character. Melee classes (Knight/
-# Rogue) get a short attack range that forces them to close distance —
-# technically still an auto-fire range check rather than true melee
-# collision, but tight enough to feel like melee in practice.
+# --- Continuous spawning & difficulty ramp ---
+const SPAWN_INTERVAL_START = 2.5    # seconds between spawn waves at run start
+const SPAWN_INTERVAL_MIN = 0.5      # spawn interval never drops below this, however long the run goes
+const SPAWN_INTERVAL_RAMP_PER_MIN = 0.15   # how much faster spawns get per minute survived
+const SPAWN_COUNT_START = 2         # enemies per wave at run start
+const SPAWN_COUNT_PER_MIN = 0.4     # extra enemies per wave, per minute survived
+const SPAWN_COUNT_MAX = 12          # hard cap on enemies per wave, however long the run goes
+
+# Three axes feed into how tough each spawned enemy is: how long
+# you've survived, how far you've wandered from the arena center, and
+# how many enemies are already alive (so a screen already full of
+# enemies doesn't also start adding stat-boosted ones on top).
+const ENEMY_HP_PER_MIN_PCT = 0.10       # enemy max HP grows this % per minute survived
+const ENEMY_SPEED_PER_MIN_PCT = 0.04    # enemy speed grows this % per minute survived
+const ENEMY_HP_PER_1000_DIST_PCT = 0.08    # enemy max HP grows this % per 1000px from arena center
+const ENEMY_DMG_PER_1000_DIST_PCT = 0.06   # enemy attack grows this % per 1000px from arena center
+const DENSITY_SPAWN_SLOWDOWN_THRESHOLD = 18   # once this many enemies are alive, spawning eases off rather than piling on more
+const DENSITY_SPAWN_SLOWDOWN_MULT = 1.6       # spawn interval is multiplied by this once above the density threshold
+
+# Ranged enemies are dangerous in a crowd (they hit you from outside
+# the melee scrum), so they're deliberately held out of the spawn pool
+# until this many minutes in, giving the player time to build up some
+# power first. Once unlocked, Ranged stays in the pool permanently —
+# this is a one-way gate, never re-locked by density or anything else.
+const RANGED_UNLOCK_MINUTE = 3.0
+
+# Relative spawn weights once a type is unlocked. Roughly Melee > Bull
+# > Charger > Ranged > Buffer, matching the intended pacing — common
+# threats show up far more often than the rarer, more dangerous ones.
+const ARCHETYPE_WEIGHTS = {
+	"MELEE": 100, "BULL": 45, "CHARGER": 30, "RANGED": 18, "BUFFER": 8,
+}
+# Per-archetype stat multipliers and visuals, mirroring the identities
+# already established in defense battles where they translate directly.
+const ARENA_ARCHETYPES = {
+	"MELEE":   { "hp_mult": 1.0,  "dmg_mult": 1.0,  "speed_mult": 1.0,  "color": Color(0.85, 0.25, 0.25) },
+	"BULL":    { "hp_mult": 1.6,  "dmg_mult": 1.4,  "speed_mult": 0.9,  "color": Color(0.55, 0.35, 0.15) },
+	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 2.5,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1) },
+	"RANGED":  { "hp_mult": 0.75, "dmg_mult": 0.9,  "speed_mult": 0.9,  "color": Color(0.25, 0.6, 0.3) },
+	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2) },
+}
+const RANGED_ATTACK_RANGE = 320.0
+const BUFFER_AURA_RANGE = 180.0
+const BUFFER_BUFF_INTERVAL = 4.0
+const BUFFER_DMG_BOOST_PCT = 0.35
+const BUFFER_DMG_BOOST_DURATION = 3.0
+
+# Bull charge — winds up with a visible telegraph (color flash for now,
+# real animation/glow later once art exists), then commits to a fixed
+# straight line regardless of where the player moves afterward, unlike
+# Charger which keeps homing in the whole way.
+const BULL_WINDUP_TIME = 1.0       # seconds standing still before the charge fires
+const BULL_CHARGE_SPEED = 480.0
+const BULL_CHARGE_DISTANCE = 420.0   # how far a single charge travels before stopping to recover
+const BULL_RECOVER_TIME = 1.2      # pause after a charge before it can wind up again
+
+# --- Mini-bosses ---
+# Paced by a mix of time and kills, not purely a timer — staying
+# aggressive and clearing enemies speeds up the next one.
+const MINIBOSS_BASE_INTERVAL_SECONDS = 90.0   # baseline seconds between mini-bosses
+const MINIBOSS_KILLS_REDUCE_TIMER_BY = 1.5    # each kill shaves this many seconds off the wait
+const MINIBOSS_UNIQUE_CHANCE = 0.3            # chance a mini-boss spawn is a rare unique instead of an empowered normal type
+const MINIBOSS_EMPOWERED_HP_MULT = 6.0
+const MINIBOSS_EMPOWERED_DMG_MULT = 2.0
+const MINIBOSS_EMPOWERED_SIZE_MULT = 1.8
+const MINIBOSS_GUARANTEED_RARITY_BOOST = 2   # mini-boss loot rolls as if this many difficulty levels higher
+
+# --- Save zone (Step 4 will expand this) ---
+const SAVE_ZONE_RADIUS = 70.0
+const SAVE_ZONE_CHANNEL_TIME = 5.0   # seconds standing in the zone to bank ("excavate") held gear
+const SAVE_ZONE_RELOCATE_INTERVAL = 45.0   # seconds before the zone moves to a new random spot
+
+# --- Per-class playstyle in the action dungeon. Whichever troop is
+# brought into the dungeon plays meaningfully differently rather than
+# every run feeling like the same generic melee character. Melee
+# classes (Knight/Rogue) get a short attack range that forces them to
+# close distance — technically still an auto-fire range check rather
+# than true melee collision, but tight enough to feel like melee. ---
 const CLASS_PROFILES = {
 	"KNIGHT": { "hp_mult": 1.5,  "dmg_mult": 0.7, "interval_mult": 1.0, "range": 220.0, "self_heal": false },
 	"ARCHER": { "hp_mult": 1.0,  "dmg_mult": 0.75,"interval_mult": 0.6, "range": 99999.0, "self_heal": false },
@@ -30,43 +112,22 @@ const CLASS_PROFILES = {
 const HEALER_SELF_HEAL_INTERVAL = 3.0   # seconds between passive self-heal ticks
 const HEALER_SELF_HEAL_PCT = 0.08       # % of max HP healed per tick
 const PROJECTILE_SPEED = 320.0
-const PROJ_DAMAGE = 8
+const PROJECTILE_MAX_RANGE = 700.0   # how far a projectile travels before disappearing, regardless of arena size
+
+# =========================================================
+# END BALANCE TUNING
+# =========================================================
 
 const C_FLOOR    = Color(0.18, 0.16, 0.22)
 const C_WALL     = Color(0.30, 0.25, 0.35)
-const C_DOOR_OFF = Color(0.55, 0.20, 0.20)
-const C_DOOR_ON  = Color(0.20, 0.65, 0.30)
 const C_HERO     = Color(0.30, 0.70, 1.00)
-const C_ENEMY    = Color(0.85, 0.25, 0.25)
-const C_BOSS     = Color(1.00, 0.10, 0.10)
 const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
+const C_SAVE_ZONE = Color(0.3, 0.85, 0.5, 0.35)
 
-const DIRS      = [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]
-const DIR_NAMES = {Vector2i(1,0):"east", Vector2i(-1,0):"west", Vector2i(0,1):"south", Vector2i(0,-1):"north"}
-const OPPOSITE  = {"east":"west","west":"east","north":"south","south":"north"}
-
-# Door center positions (where the opening is)
-const DOOR_CENTERS = {
-	"north": Vector2(ROOM_W/2,        WALL_T/2),
-	"south": Vector2(ROOM_W/2,        ROOM_H - WALL_T/2),
-	"east":  Vector2(ROOM_W - WALL_T/2, ROOM_H/2),
-	"west":  Vector2(WALL_T/2,        ROOM_H/2),
-}
-
-# Entry positions when coming through a door from outside
-const ENTRY_POS = {
-	"north": Vector2(ROOM_W/2, WALL_T + 40),
-	"south": Vector2(ROOM_W/2, ROOM_H - WALL_T - 40),
-	"east":  Vector2(ROOM_W - WALL_T - 40, ROOM_H/2),
-	"west":  Vector2(WALL_T + 40, ROOM_H/2),
-}
-
-var rooms: Array = []
-var current_room_idx: int = 0
-var came_from_dir: String = ""
-var run_gear: Array = []
-var pending_room_gear: Array = []   # drops from the CURRENT room, not yet committed
+var run_gear: Array = []          # gear currently held but NOT yet banked — lost (partially) on death
+var banked_gear: Array = []       # gear safely banked at the save zone — survives death and retreat
+var secured_gear: Array = []      # everything actually kept by the end of the run, for the end screen — never cleared mid-run
 
 var hero_hp: int = HERO_HP_BASE
 var hero_max_hp: int = HERO_HP_BASE
@@ -82,34 +143,50 @@ var self_heal_timer: float = HEALER_SELF_HEAL_INTERVAL
 var attack_timer: float = 0.0
 var invincible_timer: float = 0.0
 
-var hero_pos: Vector2 = Vector2(ROOM_W/2, ROOM_H/2)
-var hero_vel: Vector2 = Vector2.ZERO
+var hero_pos: Vector2 = Vector2(ARENA_W/2, ARENA_H/2)
 
 var enemies: Array = []        # {pos, hp, max_hp, speed, attack, shoot_t, is_boss, boss_p, boss_t, boss_a}
 var hero_projs: Array = []     # {pos, dir}
 var enemy_projs: Array = []    # {pos, dir, damage}
 
-var room_node: Node2D = null
+var arena_node: Node2D = null
 var hero_rect: UnitSprite = null
+var dungeon_troop: TroopData = null
 var hud_hp: Label = null
-var hud_room: Label = null
+var hud_timer: Label = null
 var hud_gear: Label = null
-var minimap: Control = null
-var door_rects: Dictionary = {}   # dir -> ColorRect
 var enemy_rects: Array = []
 var hero_proj_rects: Array = []
 var enemy_proj_rects: Array = []
 
+var camera: Camera2D = null
+
+var run_duration_seconds: float = 600.0   # set from PlayerInventory.dungeon_duration_seconds in _ready(); this default only matters if the dungeon is entered without going through the picker
+var elapsed_seconds: float = 0.0
+var spawn_timer: float = SPAWN_INTERVAL_START
+var miniboss_timer: float = MINIBOSS_BASE_INTERVAL_SECONDS
+var kill_count: int = 0
+var ranged_unlocked: bool = false
+
+var save_zone_pos: Vector2 = Vector2.ZERO
+var save_zone_relocate_timer: float = SAVE_ZONE_RELOCATE_INTERVAL
+var save_zone_channel_progress: float = 0.0
+var save_zone_node: ColorRect = null
+var save_zone_label: Label = null
+
 var game_over: bool = false
 
 func _ready() -> void:
+	run_duration_seconds = PlayerInventory.dungeon_duration_seconds
 	_load_hero_stats()
-	_generate_rooms()
+	_setup_camera()
+	_build_arena_visuals()
+	_start_run()
 	_build_hud()
-	_enter_room(0, "")
 
 func _load_hero_stats() -> void:
 	var troop = _get_dungeon_troop()
+	dungeon_troop = troop
 	var eff = troop.get_effective_stats() if troop else {}
 	var profile = CLASS_PROFILES.get(troop.get_type_name(), CLASS_PROFILES["KNIGHT"]) if troop else CLASS_PROFILES["KNIGHT"]
 
@@ -137,60 +214,47 @@ func _get_dungeon_troop() -> TroopData:
 # -------------------------------------------------------
 # Room generation
 # -------------------------------------------------------
-func _generate_rooms() -> void:
-	var count_range = {"Quick": [4, 6], "Standard": [6, 10], "Deep Delve": [10, 15]}
-	var range_for_tier = count_range.get(PlayerInventory.dungeon_tier, [6, 10])
-	var count = randi_range(range_for_tier[0], range_for_tier[1])
-	var grid: Dictionary = {}
-	var start = Vector2i(0, 0)
-	grid[start] = 0
-	rooms.append({"pos": start, "doors": {}, "cleared": false, "is_boss": false, "is_final_boss": false})
+# Camera follows the hero and scrolls with the arena — this is the core
+# of the Vampire Survivors feel. Limits are clamped to the arena bounds
+# so the camera never shows empty space past the edges.
+func _setup_camera() -> void:
+	camera = Camera2D.new()
+	camera.position = hero_pos
+	camera.limit_left = 0
+	camera.limit_top = 0
+	camera.limit_right = ARENA_W
+	camera.limit_bottom = ARENA_H
+	camera.enabled = true
+	add_child(camera)
 
-	var frontier = [start]
-	while rooms.size() < count and frontier.size() > 0:
-		var cur = frontier[randi() % frontier.size()]
-		var shuffled = DIRS.duplicate()
-		shuffled.shuffle()
-		for d in shuffled:
-			var np = cur + d
-			if not grid.has(np) and rooms.size() < count:
-				var dn = DIR_NAMES[d]
-				var on = OPPOSITE[dn]
-				rooms[grid[cur]]["doors"][dn] = rooms.size()
-				var nr = {"pos": np, "doors": {}, "cleared": false, "is_boss": false, "is_final_boss": false}
-				nr["doors"][on] = grid[cur]
-				grid[np] = rooms.size()
-				rooms.append(nr)
-				frontier.append(np)
-				break
-		frontier.erase(cur)
+# -------------------------------------------------------
+# Arena
+# -------------------------------------------------------
+func _build_arena_visuals() -> void:
+	arena_node = Node2D.new()
+	add_child(arena_node)
+	move_child(arena_node, 0)
 
-	rooms[rooms.size()-1]["is_boss"] = true
-	rooms[rooms.size()-1]["is_final_boss"] = true
+	# Floor fills the whole arena
+	_add_rect(arena_node, Vector2.ZERO, Vector2(ARENA_W, ARENA_H), C_FLOOR)
 
-	# Deep Delve: small chance for an additional mini-boss room partway through.
-	# This room reuses all boss spawn/combat logic but is NOT the final room,
-	# so clearing it doesn't end the run.
-	if PlayerInventory.dungeon_tier == "Deep Delve" and rooms.size() > 3 and randf() < 0.15:
-		var mid_idx = randi_range(2, rooms.size() - 2)
-		rooms[mid_idx]["is_boss"] = true
-		rooms[mid_idx]["is_final_boss"] = false
+	# Solid border around the entire arena — no doors, nowhere to exit
+	# except retreating via the HUD button.
+	_add_rect(arena_node, Vector2(-ARENA_WALL_T, -ARENA_WALL_T), Vector2(ARENA_W + ARENA_WALL_T*2, ARENA_WALL_T), C_WALL)
+	_add_rect(arena_node, Vector2(-ARENA_WALL_T, ARENA_H), Vector2(ARENA_W + ARENA_WALL_T*2, ARENA_WALL_T), C_WALL)
+	_add_rect(arena_node, Vector2(-ARENA_WALL_T, -ARENA_WALL_T), Vector2(ARENA_WALL_T, ARENA_H + ARENA_WALL_T*2), C_WALL)
+	_add_rect(arena_node, Vector2(ARENA_W, -ARENA_WALL_T), Vector2(ARENA_WALL_T, ARENA_H + ARENA_WALL_T*2), C_WALL)
 
 # -------------------------------------------------------
 # Enter room
 # -------------------------------------------------------
-func _enter_room(idx: int, from_dir: String) -> void:
-	current_room_idx = idx
-	came_from_dir = from_dir
+# -------------------------------------------------------
+# Run setup — happens once at scene start, no per-room re-entry
+# -------------------------------------------------------
+func _start_run() -> void:
 	game_over = false
-	pending_room_gear.clear()
-
-	# Clear old visuals
-	if room_node:
-		room_node.queue_free()
-	room_node = Node2D.new()
-	add_child(room_node)
-	move_child(room_node, 0)
+	hero_pos = Vector2(ARENA_W/2, ARENA_H/2)
+	secured_gear.clear()
 
 	enemies.clear()
 	enemy_rects.clear()
@@ -198,89 +262,109 @@ func _enter_room(idx: int, from_dir: String) -> void:
 	enemy_projs.clear()
 	hero_proj_rects.clear()
 	enemy_proj_rects.clear()
-	door_rects.clear()
 
-	# Place hero
-	if from_dir == "":
-		hero_pos = Vector2(ROOM_W/2, ROOM_H/2)
-	else:
-		hero_pos = ENTRY_POS[OPPOSITE[from_dir]]
-
-	_build_room_visuals()
 	_build_hero_rect()
-
-	var room = rooms[idx]
-	if not room["cleared"]:
-		_spawn_enemies(room)
-
-	_refresh_doors()
+	_relocate_save_zone()
 	_refresh_hud()
-	_refresh_minimap()
-
-# -------------------------------------------------------
-# Visuals
-# -------------------------------------------------------
-func _build_room_visuals() -> void:
-	var room = rooms[current_room_idx]
-
-	# Floor
-	_add_rect(room_node, Vector2(WALL_T, WALL_T),
-		Vector2(ROOM_W - WALL_T*2, ROOM_H - WALL_T*2), C_FLOOR)
-
-	# Walls with door gaps
-	# Top wall
-	var has_n = room["doors"].has("north")
-	if has_n:
-		var gap_x = ROOM_W/2 - DOOR_W/2
-		_add_rect(room_node, Vector2(0,0),          Vector2(gap_x, WALL_T), C_WALL)
-		_add_rect(room_node, Vector2(gap_x+DOOR_W,0), Vector2(ROOM_W-(gap_x+DOOR_W), WALL_T), C_WALL)
-	else:
-		_add_rect(room_node, Vector2(0,0), Vector2(ROOM_W, WALL_T), C_WALL)
-
-	# Bottom wall
-	var has_s = room["doors"].has("south")
-	if has_s:
-		var gap_x = ROOM_W/2 - DOOR_W/2
-		_add_rect(room_node, Vector2(0, ROOM_H-WALL_T), Vector2(gap_x, WALL_T), C_WALL)
-		_add_rect(room_node, Vector2(gap_x+DOOR_W, ROOM_H-WALL_T), Vector2(ROOM_W-(gap_x+DOOR_W), WALL_T), C_WALL)
-	else:
-		_add_rect(room_node, Vector2(0, ROOM_H-WALL_T), Vector2(ROOM_W, WALL_T), C_WALL)
-
-	# Left wall
-	var has_w = room["doors"].has("west")
-	if has_w:
-		var gap_y = ROOM_H/2 - DOOR_W/2
-		_add_rect(room_node, Vector2(0,0),           Vector2(WALL_T, gap_y), C_WALL)
-		_add_rect(room_node, Vector2(0, gap_y+DOOR_W), Vector2(WALL_T, ROOM_H-(gap_y+DOOR_W)), C_WALL)
-	else:
-		_add_rect(room_node, Vector2(0,0), Vector2(WALL_T, ROOM_H), C_WALL)
-
-	# Right wall
-	var has_e = room["doors"].has("east")
-	if has_e:
-		var gap_y = ROOM_H/2 - DOOR_W/2
-		_add_rect(room_node, Vector2(ROOM_W-WALL_T, 0),          Vector2(WALL_T, gap_y), C_WALL)
-		_add_rect(room_node, Vector2(ROOM_W-WALL_T, gap_y+DOOR_W), Vector2(WALL_T, ROOM_H-(gap_y+DOOR_W)), C_WALL)
-	else:
-		_add_rect(room_node, Vector2(ROOM_W-WALL_T, 0), Vector2(WALL_T, ROOM_H), C_WALL)
-
-	# Door indicator overlays
-	for dir in room["doors"]:
-		var dc = DOOR_CENTERS[dir]
-		var dr = ColorRect.new()
-		dr.size = Vector2(DOOR_W, WALL_T) if dir in ["north","south"] else Vector2(WALL_T, DOOR_W)
-		dr.position = dc - dr.size/2
-		dr.color = C_DOOR_ON
-		room_node.add_child(dr)
-		door_rects[dir] = dr
 
 func _build_hero_rect() -> void:
 	if hero_rect:
 		hero_rect.queue_free()
 	hero_rect = UnitSprite.new()
 	hero_rect.setup(UnitSprite.UnitType.HERO, C_HERO, 24.0)
-	room_node.add_child(hero_rect)
+	arena_node.add_child(hero_rect)
 	hero_rect.position = hero_pos - Vector2(12, 12)
+
+# -------------------------------------------------------
+# Save zone — an "extraction point" you channel at to bank held gear.
+# Relocates randomly on its own timer, and again immediately after a
+# successful bank, so it's never something you can just camp forever.
+# Placeholder ground marker for now — swap save_zone_node's visuals
+# for real art/animation once available, the position/timing logic
+# underneath won't need to change.
+# -------------------------------------------------------
+func _relocate_save_zone() -> void:
+	save_zone_pos = Vector2(
+		randf_range(ARENA_WALL_T + 150, ARENA_W - ARENA_WALL_T - 150),
+		randf_range(ARENA_WALL_T + 150, ARENA_H - ARENA_WALL_T - 150)
+	)
+	save_zone_relocate_timer = SAVE_ZONE_RELOCATE_INTERVAL
+	save_zone_channel_progress = 0.0
+	_build_save_zone_visual()
+
+func _build_save_zone_visual() -> void:
+	if save_zone_node and is_instance_valid(save_zone_node):
+		save_zone_node.queue_free()
+	if save_zone_label and is_instance_valid(save_zone_label):
+		save_zone_label.queue_free()
+
+	save_zone_node = ColorRect.new()
+	save_zone_node.size = Vector2(SAVE_ZONE_RADIUS * 2, SAVE_ZONE_RADIUS * 2)
+	save_zone_node.position = save_zone_pos - Vector2(SAVE_ZONE_RADIUS, SAVE_ZONE_RADIUS)
+	save_zone_node.color = C_SAVE_ZONE
+	arena_node.add_child(save_zone_node)
+	arena_node.move_child(save_zone_node, 1)   # draws above the floor; never visually overlaps the border walls since the zone always spawns well inside them
+
+	save_zone_label = Label.new()
+	save_zone_label.text = "Excavation Site"
+	save_zone_label.add_theme_font_size_override("font_size", 12)
+	save_zone_label.add_theme_color_override("font_color", Color(0.6, 1.0, 0.7))
+	save_zone_label.position = save_zone_pos - Vector2(SAVE_ZONE_RADIUS, SAVE_ZONE_RADIUS + 20)
+	arena_node.add_child(save_zone_label)
+
+# Called every frame from _process(). Handles the relocation timer,
+# whether the player is currently inside the zone, and channel
+# progress — stepping out resets progress to zero, but taking damage
+# while still inside does not interrupt the channel.
+func _process_save_zone(delta: float) -> void:
+	save_zone_relocate_timer -= delta
+	if save_zone_relocate_timer <= 0:
+		_relocate_save_zone()
+		return
+
+	var inside = hero_pos.distance_to(save_zone_pos) <= SAVE_ZONE_RADIUS
+	if inside:
+		save_zone_channel_progress += delta
+		if save_zone_channel_progress >= SAVE_ZONE_CHANNEL_TIME:
+			_bank_held_gear()
+			return   # _relocate_save_zone() (called by _bank_held_gear) already resets progress
+		if save_zone_node and is_instance_valid(save_zone_node):
+			save_zone_node.color = C_SAVE_ZONE.lerp(Color(0.5, 1.0, 0.6, 0.6), save_zone_channel_progress / SAVE_ZONE_CHANNEL_TIME)
+	else:
+		if save_zone_channel_progress > 0.0 and save_zone_node and is_instance_valid(save_zone_node):
+			save_zone_node.color = C_SAVE_ZONE
+		save_zone_channel_progress = 0.0
+
+	if save_zone_label and is_instance_valid(save_zone_label):
+		if inside and save_zone_channel_progress > 0.0:
+			save_zone_label.text = "Excavating... %d%%" % int(100.0 * save_zone_channel_progress / SAVE_ZONE_CHANNEL_TIME)
+		else:
+			save_zone_label.text = "Excavation Site"
+
+# Moves everything currently held into the safe pool, then immediately
+# relocates the zone — every successful bank also triggers a fresh move,
+# so it's never something you can just camp at repeatedly.
+func _bank_held_gear() -> void:
+	var banked_count = run_gear.size()
+	for gear in run_gear:
+		banked_gear.append(gear)
+	run_gear.clear()
+	_refresh_hud()
+	if banked_count > 0:
+		_show_bank_notification(banked_count)
+	_relocate_save_zone()
+
+func _show_bank_notification(count: int) -> void:
+	var lbl = Label.new()
+	lbl.text = "Banked %d item%s!" % [count, "" if count == 1 else "s"]
+	lbl.add_theme_font_size_override("font_size", 14)
+	lbl.add_theme_color_override("font_color", Color(0.5, 1.0, 0.6))
+	lbl.position = hero_pos - Vector2(40, 50)
+	arena_node.add_child(lbl)
+	var tw = create_tween()
+	tw.tween_property(lbl, "position:y", lbl.position.y - 30, 1.2)
+	tw.parallel().tween_property(lbl, "modulate:a", 0.0, 1.2)
+	tw.tween_callback(lbl.queue_free)
 
 func _add_rect(parent: Node, pos: Vector2, sz: Vector2, col: Color) -> ColorRect:
 	var r = ColorRect.new()
@@ -293,63 +377,133 @@ func _add_rect(parent: Node, pos: Vector2, sz: Vector2, col: Color) -> ColorRect
 # -------------------------------------------------------
 # Enemies
 # -------------------------------------------------------
-func _spawn_enemies(room: Dictionary) -> void:
-	var count = 1 if room["is_boss"] else randi_range(2, 4)
+# -------------------------------------------------------
+# Enemy spawning — picks an archetype by weight (respecting the
+# Ranged time-gate), then scales its stats by time survived, distance
+# from the arena center, and current enemy density.
+# -------------------------------------------------------
+func _get_available_archetypes() -> Dictionary:
+	if ranged_unlocked:
+		return ARCHETYPE_WEIGHTS
+	var without_ranged = ARCHETYPE_WEIGHTS.duplicate()
+	without_ranged.erase("RANGED")
+	return without_ranged
+
+func _roll_archetype() -> String:
+	var weights = _get_available_archetypes()
+	var total = 0
+	for w in weights.values(): total += w
+	var roll = randi() % total
+	var cumulative = 0
+	for archetype in weights:
+		cumulative += weights[archetype]
+		if roll < cumulative:
+			return archetype
+	return "MELEE"
+
+# Combined difficulty multiplier from all three axes — used for both
+# regular spawns and as the base mini-bosses scale further on top of.
+func _get_hp_scale() -> float:
+	var minutes = elapsed_seconds / 60.0
+	var dist_from_center = hero_pos.distance_to(Vector2(ARENA_W/2, ARENA_H/2))
+	var time_mult = 1.0 + minutes * ENEMY_HP_PER_MIN_PCT
+	var dist_mult = 1.0 + (dist_from_center / 1000.0) * ENEMY_HP_PER_1000_DIST_PCT
+	return time_mult * dist_mult
+
+func _get_dmg_scale() -> float:
+	var dist_from_center = hero_pos.distance_to(Vector2(ARENA_W/2, ARENA_H/2))
+	return 1.0 + (dist_from_center / 1000.0) * ENEMY_DMG_PER_1000_DIST_PCT
+
+func _get_speed_scale() -> float:
+	var minutes = elapsed_seconds / 60.0
+	return 1.0 + minutes * ENEMY_SPEED_PER_MIN_PCT
+
+func _spawn_enemy_wave(count: int) -> void:
 	var stage = PlayerInventory.current_stage
 	var tier_mult = {"Quick": 0.8, "Standard": 1.0, "Deep Delve": 1.4}.get(PlayerInventory.dungeon_tier, 1.0)
-	var boss_hp_mult = {"Quick": 4.0, "Standard": 5.0, "Deep Delve": 6.0}.get(PlayerInventory.dungeon_tier, 5.0)
+	var hp_scale = _get_hp_scale()
+	var dmg_scale = _get_dmg_scale()
+	var speed_scale = _get_speed_scale()
 
 	for i in range(count):
-		var is_boss = room["is_boss"]
-		var sz = 56.0 if is_boss else 28.0
-		var max_hp = int((8 + stage * 6) * (boss_hp_mult if is_boss else 1.0) * tier_mult)
-		var spd = 55.0 + stage * 4.0
+		var archetype = _roll_archetype()
+		_spawn_one_enemy(archetype, stage, tier_mult, hp_scale, dmg_scale, speed_scale, false)
 
-		var ex: float
-		var ey: float
-		var tries = 0
-		# Reroll until far enough from the hero's entry position — prevents
-		# enemies (especially bosses) spawning right on top of the player
-		# the moment a room loads.
-		while true:
-			ex = randf_range(WALL_T + 80, ROOM_W - WALL_T - 80)
-			ey = randf_range(WALL_T + 80, ROOM_H - WALL_T - 80)
-			tries += 1
-			if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
-				break
-		var epos = Vector2(ex, ey)
+func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale: float, dmg_scale: float, speed_scale: float, is_miniboss: bool, miniboss_unique: bool = false) -> void:
+	var profile = ARENA_ARCHETYPES.get(archetype, ARENA_ARCHETYPES["MELEE"])
 
-		var erect = UnitSprite.new()
-		erect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
-			C_BOSS if is_boss else C_ENEMY, sz)
-		erect.position = epos - Vector2(sz/2, sz/2)
-		room_node.add_child(erect)
+	var base_sz = 28.0
+	var base_hp = (8 + stage * 6) * tier_mult * profile["hp_mult"]
+	var base_spd = (55.0 + stage * 4.0) * profile["speed_mult"]
+	var base_atk = (4 + stage * 2) * tier_mult * profile["dmg_mult"]
 
-		var hp_bar_bg = null
-		var hp_bar = null
-		if is_boss:
-			hp_bar_bg = ColorRect.new()
-			hp_bar_bg.size = Vector2(80, 8)
-			hp_bar_bg.color = Color(0.3, 0.1, 0.1)
-			hp_bar_bg.position = epos - Vector2(40, 44)
-			room_node.add_child(hp_bar_bg)
+	var sz = base_sz
+	var max_hp = int(base_hp * hp_scale)
+	var spd = base_spd * speed_scale
+	var atk = int(base_atk * dmg_scale)
 
-			hp_bar = ColorRect.new()
-			hp_bar.size = Vector2(80, 8)
-			hp_bar.color = Color(0.9, 0.2, 0.2)
-			hp_bar.position = epos - Vector2(40, 44)
-			room_node.add_child(hp_bar)
+	if is_miniboss:
+		sz *= MINIBOSS_EMPOWERED_SIZE_MULT
+		max_hp = int(max_hp * MINIBOSS_EMPOWERED_HP_MULT)
+		atk = int(atk * MINIBOSS_EMPOWERED_DMG_MULT)
 
-		var e = {
-			"pos": epos, "hp": max_hp, "max_hp": max_hp,
-			"speed": spd, "attack": int((4 + stage * 2) * tier_mult),
-			"shoot_t": randf_range(1.5, 3.0),
-			"is_boss": is_boss, "is_final_boss": room.get("is_final_boss", false), "sz": sz,
-			"boss_p": 0, "boss_t": 2.0, "boss_a": 0.0,
-			"hp_bar": hp_bar, "hp_bar_bg": hp_bar_bg,
-		}
-		enemies.append(e)
-		enemy_rects.append(erect)
+	var ex: float
+	var ey: float
+	var tries = 0
+	while true:
+		ex = randf_range(hero_pos.x - 500, hero_pos.x + 500)
+		ey = randf_range(hero_pos.y - 500, hero_pos.y + 500)
+		ex = clamp(ex, ARENA_WALL_T + 80, ARENA_W - ARENA_WALL_T - 80)
+		ey = clamp(ey, ARENA_WALL_T + 80, ARENA_H - ARENA_WALL_T - 80)
+		tries += 1
+		if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
+			break
+	var epos = Vector2(ex, ey)
+
+	var display_color = profile["color"]
+	if is_miniboss:
+		display_color = Color(1.0, 0.1, 0.1) if miniboss_unique else display_color.lightened(0.3)
+
+	var erect = UnitSprite.new()
+	erect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_miniboss else UnitSprite.UnitType.ENEMY_BASIC,
+		display_color, sz)
+	erect.position = epos - Vector2(sz/2, sz/2)
+	arena_node.add_child(erect)
+
+	var hp_bar_bg = null
+	var hp_bar = null
+	if is_miniboss:
+		hp_bar_bg = ColorRect.new()
+		hp_bar_bg.size = Vector2(80, 8)
+		hp_bar_bg.color = Color(0.3, 0.1, 0.1)
+		hp_bar_bg.position = epos - Vector2(40, sz/2 + 16)
+		arena_node.add_child(hp_bar_bg)
+
+		hp_bar = ColorRect.new()
+		hp_bar.size = Vector2(80, 8)
+		hp_bar.color = Color(0.9, 0.2, 0.2)
+		hp_bar.position = epos - Vector2(40, sz/2 + 16)
+		arena_node.add_child(hp_bar)
+
+	var e = {
+		"pos": epos, "hp": max_hp, "max_hp": max_hp,
+		"speed": spd, "attack": atk,
+		"shoot_t": randf_range(1.5, 3.0),
+		"archetype": archetype,
+		"is_boss": is_miniboss, "is_miniboss_unique": miniboss_unique, "sz": sz,
+		"boss_p": 0, "boss_t": 2.0, "boss_a": 0.0,
+		"hp_bar": hp_bar, "hp_bar_bg": hp_bar_bg,
+		# Bull-specific charge state
+		"bull_state": "seeking",   # seeking -> winding_up -> charging -> recovering
+		"bull_state_t": 0.0,
+		"bull_charge_dir": Vector2.ZERO,
+		"bull_charge_traveled": 0.0,
+		# Buffer-specific
+		"buff_t": BUFFER_BUFF_INTERVAL,
+		"dmg_boost_t": 0.0,
+	}
+	enemies.append(e)
+	enemy_rects.append(erect)
 
 # -------------------------------------------------------
 # Process loop
@@ -357,13 +511,84 @@ func _spawn_enemies(room: Dictionary) -> void:
 func _process(delta: float) -> void:
 	if game_over: return
 
+	elapsed_seconds += delta
+	if elapsed_seconds >= run_duration_seconds:
+		_on_survival_complete()
+		return
+
 	_move_hero(delta)
 	_attack_tick(delta)
 	_move_projectiles(delta)
 	_process_enemies(delta)
-	_check_door_transition()
+	_process_spawn_timer(delta)
+	_process_save_zone(delta)
 	_self_heal_tick(delta)
 	_update_visuals()
+	_refresh_hud()
+
+# Reaching the chosen survival duration is a genuine win — all
+# currently-held (unbanked) gear is treated as successfully extracted
+# along with anything already banked, since making it to the end alive
+# is itself the win condition the save zone risk was building toward.
+func _on_survival_complete() -> void:
+	game_over = true
+	for gear in banked_gear:
+		PlayerInventory.add_gear(gear)
+		secured_gear.append(gear)
+	for gear in run_gear:
+		PlayerInventory.add_gear(gear)
+		secured_gear.append(gear)
+	run_gear.clear()
+	banked_gear.clear()
+	_show_end_screen("survived")
+
+# Basic continuous spawn placeholder for Step 1 testing — fixed
+# interval and count for now. Step 2 replaces this with the real
+# time-based ramp using the SPAWN_* constants up top.
+func _process_spawn_timer(delta: float) -> void:
+	if not ranged_unlocked and elapsed_seconds / 60.0 >= RANGED_UNLOCK_MINUTE:
+		ranged_unlocked = true
+
+	spawn_timer -= delta
+	if spawn_timer <= 0:
+		var minutes = elapsed_seconds / 60.0
+		var interval = max(SPAWN_INTERVAL_MIN, SPAWN_INTERVAL_START - minutes * SPAWN_INTERVAL_RAMP_PER_MIN)
+		# Density slowdown — if the screen is already crowded, ease off
+		# spawning more rather than piling stat-boosted enemies on top
+		# of an already-overwhelming fight.
+		if enemies.size() >= DENSITY_SPAWN_SLOWDOWN_THRESHOLD:
+			interval *= DENSITY_SPAWN_SLOWDOWN_MULT
+		spawn_timer = interval
+
+		var count = min(SPAWN_COUNT_MAX, SPAWN_COUNT_START + int(minutes * SPAWN_COUNT_PER_MIN))
+		_spawn_enemy_wave(count)
+
+	_process_miniboss_timer(delta)
+
+# Mini-bosses are paced by a mix of time and kills — staying aggressive
+# and clearing enemies speeds up the next one rather than just waiting.
+func _process_miniboss_timer(delta: float) -> void:
+	miniboss_timer -= delta
+	if miniboss_timer <= 0:
+		miniboss_timer = MINIBOSS_BASE_INTERVAL_SECONDS
+		_spawn_miniboss()
+
+func _spawn_miniboss() -> void:
+	var stage = PlayerInventory.current_stage
+	var tier_mult = {"Quick": 0.8, "Standard": 1.0, "Deep Delve": 1.4}.get(PlayerInventory.dungeon_tier, 1.0)
+	var hp_scale = _get_hp_scale()
+	var dmg_scale = _get_dmg_scale()
+	var speed_scale = _get_speed_scale()
+
+	var is_unique = randf() < MINIBOSS_UNIQUE_CHANCE
+	# Empowered mini-bosses are a bigger version of a normal type the
+	# player already recognizes. Uniques pick from the same pool for now
+	# but are flagged for a real attack pattern in _process_boss.
+	var archetype = _roll_archetype()
+	if archetype == "BUFFER":   # a giga-Buffer buffing a huge area isn't a fun "boss" moment — reroll once
+		archetype = _roll_archetype()
+
+	_spawn_one_enemy(archetype, stage, tier_mult, hp_scale, dmg_scale, speed_scale, true, is_unique)
 
 # Healer's passive sustain — periodically heals a % of max HP. This is
 # Healer's actual strength in the dungeon despite being the weakest
@@ -387,25 +612,15 @@ func _move_hero(delta: float) -> void:
 
 	hero_pos += dir * hero_speed * delta
 
-	# Clamp inside room (walls are solid except door gaps)
-	var room = rooms[current_room_idx]
-	var min_x = WALL_T + 12
-	var max_x = ROOM_W - WALL_T - 12
-	var min_y = WALL_T + 12
-	var max_y = ROOM_H - WALL_T - 12
+	# Clamp inside the arena's solid border — no doors, no exits
+	hero_pos.x = clamp(hero_pos.x, ARENA_WALL_T + 12, ARENA_W - ARENA_WALL_T - 12)
+	hero_pos.y = clamp(hero_pos.y, ARENA_WALL_T + 12, ARENA_H - ARENA_WALL_T - 12)
 
-	# Allow passing through door gaps
-	if room["doors"].has("north") and abs(hero_pos.x - ROOM_W/2) < DOOR_W/2:
-		min_y = 0
-	if room["doors"].has("south") and abs(hero_pos.x - ROOM_W/2) < DOOR_W/2:
-		max_y = ROOM_H
-	if room["doors"].has("west") and abs(hero_pos.y - ROOM_H/2) < DOOR_W/2:
-		min_x = 0
-	if room["doors"].has("east") and abs(hero_pos.y - ROOM_H/2) < DOOR_W/2:
-		max_x = ROOM_W
-
-	hero_pos.x = clamp(hero_pos.x, min_x, max_x)
-	hero_pos.y = clamp(hero_pos.y, min_y, max_y)
+	# Camera follows the hero, scrolling the arena as they move — this
+	# is the core Vampire Survivors feel: the world is much bigger than
+	# any single screen, and the view stays centered on the player.
+	if camera:
+		camera.position = hero_pos
 
 	# Invincibility frames
 	if invincible_timer > 0:
@@ -436,7 +651,7 @@ func _attack_tick(delta: float) -> void:
 
 func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_sprite: UnitSprite = null) -> void:
 	var dir = (toward - from).normalized()
-	var proj = {"pos": Vector2(from.x, from.y),
+	var proj = {"pos": Vector2(from.x, from.y), "origin": Vector2(from.x, from.y),
 				"dir": dir, "damage": dmg, "is_hero": is_hero}
 
 	if attacker_sprite and is_instance_valid(attacker_sprite):
@@ -447,7 +662,7 @@ func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_spr
 	prect.size = Vector2(10, 10)
 	prect.color = C_PROJ_H if is_hero else C_PROJ_E
 	prect.position = from - Vector2(5, 5)
-	room_node.add_child(prect)
+	arena_node.add_child(prect)
 
 	if is_hero:
 		hero_projs.append(proj)
@@ -465,8 +680,7 @@ func _move_projectiles(delta: float) -> void:
 		var pr = hero_proj_rects[i]
 		p["pos"] += p["dir"] * PROJECTILE_SPEED * delta
 
-		var oob = (p["pos"].x < WALL_T or p["pos"].x > ROOM_W - WALL_T
-				or p["pos"].y < WALL_T or p["pos"].y > ROOM_H - WALL_T)
+		var oob = p["pos"].distance_to(p["origin"]) > PROJECTILE_MAX_RANGE
 		if oob:
 			if is_instance_valid(pr): pr.queue_free()
 			continue
@@ -496,8 +710,7 @@ func _move_projectiles(delta: float) -> void:
 		var pr = enemy_proj_rects[i]
 		p["pos"] += p["dir"] * (PROJECTILE_SPEED * 0.65) * delta
 
-		var oob = (p["pos"].x < WALL_T or p["pos"].x > ROOM_W - WALL_T
-				or p["pos"].y < WALL_T or p["pos"].y > ROOM_H - WALL_T)
+		var oob = p["pos"].distance_to(p["origin"]) > PROJECTILE_MAX_RANGE
 		if oob:
 			if is_instance_valid(pr): pr.queue_free()
 			continue
@@ -516,27 +729,143 @@ func _process_enemies(delta: float) -> void:
 	for i in range(enemies.size()):
 		var e = enemies[i]
 		var e_sprite = enemy_rects[i] if i < enemy_rects.size() else null
-		if e["is_boss"]:
+
+		if e["is_boss"] and e["is_miniboss_unique"]:
+			# Rare unique mini-bosses get a real attack pattern on top of
+			# their bigger stats, reusing the same boss-pattern system.
 			_process_boss(e, delta, e_sprite)
-		else:
-			# Move toward hero
+			continue
+
+		var archetype = e.get("archetype", "MELEE")
+		match archetype:
+			"BULL":
+				_process_bull(e, delta, e_sprite)
+			"RANGED":
+				_process_ranged(e, delta, e_sprite)
+			"BUFFER":
+				_process_buffer(e, delta)
+			_:
+				_process_homing_melee(e, delta, e_sprite, i)
+
+# Melee and Charger share this — continuously home in on the player.
+# Charger is meant to feel like a suicide bomber: relentless tracking,
+# but it can be kited, baited, or killed before it closes the gap.
+func _process_homing_melee(e: Dictionary, delta: float, e_sprite: UnitSprite, idx: int) -> void:
+	var effective_atk = e["attack"]
+	if e.get("dmg_boost_t", 0.0) > 0.0:
+		e["dmg_boost_t"] -= delta
+		effective_atk = int(effective_atk * (1.0 + BUFFER_DMG_BOOST_PCT))
+
+	var move_dir = (hero_pos - e["pos"]).normalized()
+	e["pos"] += move_dir * e["speed"] * delta
+	e["pos"].x = clamp(e["pos"].x, ARENA_WALL_T + e["sz"]/2, ARENA_W - ARENA_WALL_T - e["sz"]/2)
+	e["pos"].y = clamp(e["pos"].y, ARENA_WALL_T + e["sz"]/2, ARENA_H - ARENA_WALL_T - e["sz"]/2)
+
+	if invincible_timer <= 0 and e["pos"].distance_to(hero_pos) < e["sz"]/2 + 14:
+		_take_damage(effective_atk)
+		if e.get("archetype", "") == "CHARGER":
+			# Detonates on contact, suicide-bomber style
+			_kill_enemy_no_loot(idx)
+
+# Ranged holds distance and fires from range rather than closing in —
+# this is exactly why it's time-gated: dangerous in a crowd, fine alone.
+func _process_ranged(e: Dictionary, delta: float, e_sprite: UnitSprite) -> void:
+	var effective_atk = e["attack"]
+	if e.get("dmg_boost_t", 0.0) > 0.0:
+		e["dmg_boost_t"] -= delta
+		effective_atk = int(effective_atk * (1.0 + BUFFER_DMG_BOOST_PCT))
+
+	var dist = e["pos"].distance_to(hero_pos)
+	if dist > RANGED_ATTACK_RANGE:
+		var move_dir = (hero_pos - e["pos"]).normalized()
+		e["pos"] += move_dir * e["speed"] * delta
+		e["pos"].x = clamp(e["pos"].x, ARENA_WALL_T + e["sz"]/2, ARENA_W - ARENA_WALL_T - e["sz"]/2)
+		e["pos"].y = clamp(e["pos"].y, ARENA_WALL_T + e["sz"]/2, ARENA_H - ARENA_WALL_T - e["sz"]/2)
+
+	e["shoot_t"] -= delta
+	if e["shoot_t"] <= 0 and dist <= RANGED_ATTACK_RANGE:
+		_fire(e["pos"], hero_pos, false, effective_atk, e_sprite)
+		e["shoot_t"] = randf_range(1.6, 2.4)
+
+# Buffer doesn't attack the player at all — it periodically grants
+# nearby enemies a temporary damage boost, making it the priority kill
+# whenever it shows up.
+func _process_buffer(e: Dictionary, delta: float) -> void:
+	var dist = e["pos"].distance_to(hero_pos)
+	if dist > BUFFER_AURA_RANGE * 1.5:
+		var move_dir = (hero_pos - e["pos"]).normalized()
+		e["pos"] += move_dir * e["speed"] * delta * 0.7
+		e["pos"].x = clamp(e["pos"].x, ARENA_WALL_T + e["sz"]/2, ARENA_W - ARENA_WALL_T - e["sz"]/2)
+		e["pos"].y = clamp(e["pos"].y, ARENA_WALL_T + e["sz"]/2, ARENA_H - ARENA_WALL_T - e["sz"]/2)
+
+	e["buff_t"] -= delta
+	if e["buff_t"] <= 0:
+		e["buff_t"] = BUFFER_BUFF_INTERVAL
+		for other in enemies:
+			if other == e: continue
+			if e["pos"].distance_to(other["pos"]) <= BUFFER_AURA_RANGE:
+				other["dmg_boost_t"] = BUFFER_DMG_BOOST_DURATION
+
+# Bull — winds up with a visible telegraph (color flash for now; swap
+# for a real animation/glow once art exists), then commits to a fixed
+# straight line regardless of where the player moves afterward. This is
+# what makes it dodgeable rather than an inescapable homing threat.
+func _process_bull(e: Dictionary, delta: float, e_sprite: UnitSprite) -> void:
+	var effective_atk = e["attack"]
+	if e.get("dmg_boost_t", 0.0) > 0.0:
+		e["dmg_boost_t"] -= delta
+		effective_atk = int(effective_atk * (1.0 + BUFFER_DMG_BOOST_PCT))
+
+	match e["bull_state"]:
+		"seeking":
 			var move_dir = (hero_pos - e["pos"]).normalized()
-			e["pos"] += move_dir * e["speed"] * delta
+			e["pos"] += move_dir * e["speed"] * delta * 0.6   # slower while seeking, the charge is the real threat
+			e["pos"].x = clamp(e["pos"].x, ARENA_WALL_T + e["sz"]/2, ARENA_W - ARENA_WALL_T - e["sz"]/2)
+			e["pos"].y = clamp(e["pos"].y, ARENA_WALL_T + e["sz"]/2, ARENA_H - ARENA_WALL_T - e["sz"]/2)
+			if e["pos"].distance_to(hero_pos) < 600:
+				e["bull_state"] = "winding_up"
+				e["bull_state_t"] = BULL_WINDUP_TIME
+				e["bull_charge_dir"] = (hero_pos - e["pos"]).normalized()
+				if e_sprite and is_instance_valid(e_sprite):
+					e_sprite.set_color(Color(1, 1, 0.3))   # telegraph flash — placeholder until real art/animation
 
-			# Clamp enemy inside room
-			e["pos"].x = clamp(e["pos"].x, WALL_T + e["sz"]/2, ROOM_W - WALL_T - e["sz"]/2)
-			e["pos"].y = clamp(e["pos"].y, WALL_T + e["sz"]/2, ROOM_H - WALL_T - e["sz"]/2)
+		"winding_up":
+			e["bull_state_t"] -= delta
+			if e["bull_state_t"] <= 0:
+				e["bull_state"] = "charging"
+				e["bull_charge_traveled"] = 0.0
+				if e_sprite and is_instance_valid(e_sprite):
+					e_sprite.set_color(ARENA_ARCHETYPES["BULL"]["color"])
 
-			# Shoot at player
-			e["shoot_t"] -= delta
-			if e["shoot_t"] <= 0:
-				if hero_pos.distance_to(e["pos"]) < 300:
-					_fire(e["pos"], hero_pos, false, e["attack"], e_sprite)
-				e["shoot_t"] = randf_range(1.8, 2.8)
-
-			# Melee
+		"charging":
+			var move = e["bull_charge_dir"] * BULL_CHARGE_SPEED * delta
+			e["pos"] += move
+			e["bull_charge_traveled"] += move.length()
+			e["pos"].x = clamp(e["pos"].x, ARENA_WALL_T + e["sz"]/2, ARENA_W - ARENA_WALL_T - e["sz"]/2)
+			e["pos"].y = clamp(e["pos"].y, ARENA_WALL_T + e["sz"]/2, ARENA_H - ARENA_WALL_T - e["sz"]/2)
 			if invincible_timer <= 0 and e["pos"].distance_to(hero_pos) < e["sz"]/2 + 14:
-				_take_damage(e["attack"])
+				_take_damage(effective_atk)
+			if e["bull_charge_traveled"] >= BULL_CHARGE_DISTANCE:
+				e["bull_state"] = "recovering"
+				e["bull_state_t"] = BULL_RECOVER_TIME
+
+		"recovering":
+			e["bull_state_t"] -= delta
+			if e["bull_state_t"] <= 0:
+				e["bull_state"] = "seeking"
+
+# Charger detonates on contact rather than dying for loot like a normal
+# kill — it's a hazard, not a farmable enemy in the same sense.
+func _kill_enemy_no_loot(idx: int) -> void:
+	var e = enemies[idx]
+	var er = enemy_rects[idx]
+	if is_instance_valid(er): er.queue_free()
+	if e["hp_bar"] != null and is_instance_valid(e["hp_bar"]):
+		e["hp_bar"].queue_free()
+	if e["hp_bar_bg"] != null and is_instance_valid(e["hp_bar_bg"]):
+		e["hp_bar_bg"].queue_free()
+	enemies.remove_at(idx)
+	enemy_rects.remove_at(idx)
 
 func _process_boss(e: Dictionary, delta: float, e_sprite: UnitSprite = null) -> void:
 	e["boss_t"] -= delta
@@ -569,6 +898,16 @@ func _process_boss(e: Dictionary, delta: float, e_sprite: UnitSprite = null) -> 
 				e["boss_t"] = 2.0
 				e["boss_p"] += 1
 
+	# Unique mini-bosses still move toward the player between attack
+	# patterns, same as the homing melee behavior, just without the
+	# Charger-style detonate-on-contact.
+	var move_dir = (hero_pos - e["pos"]).normalized()
+	e["pos"] += move_dir * e["speed"] * delta * 0.5
+	e["pos"].x = clamp(e["pos"].x, ARENA_WALL_T + e["sz"]/2, ARENA_W - ARENA_WALL_T - e["sz"]/2)
+	e["pos"].y = clamp(e["pos"].y, ARENA_WALL_T + e["sz"]/2, ARENA_H - ARENA_WALL_T - e["sz"]/2)
+	if invincible_timer <= 0 and e["pos"].distance_to(hero_pos) < e["sz"]/2 + 14:
+		_take_damage(e["attack"])
+
 func _update_boss_bar(e: Dictionary) -> void:
 	if e["hp_bar"] == null or not is_instance_valid(e["hp_bar"]): return
 	var pct = float(e["hp"]) / float(e["max_hp"])
@@ -588,44 +927,25 @@ func _kill_enemy(idx: int) -> void:
 	enemies.remove_at(idx)
 	enemy_rects.remove_at(idx)
 
-	# Gear drop — staged into pending_room_gear, not committed to the
-	# permanent inventory until the room is actually cleared. This is what
-	# makes retreat correctly forfeit loot from an in-progress room.
+	kill_count += 1
+	# Kills speed up the next mini-boss, on top of the time-based pace —
+	# staying aggressive is rewarded rather than just waiting it out.
+	miniboss_timer = max(10.0, miniboss_timer - MINIBOSS_KILLS_REDUCE_TIMER_BY)
+
+	# Gear drop — goes straight into run_gear (held but NOT yet banked).
+	# Step 4 adds the save zone, which moves items from run_gear into
+	# banked_gear; only banked_gear is guaranteed safe if you die.
+	# Mini-bosses always drop, and roll loot as if several difficulty
+	# levels higher, matching the "real loot event" design.
 	var drop_chance = 1.0 if e["is_boss"] else 0.16
 	if randf() < drop_chance:
-		var diff = clamp(PlayerInventory.current_stage + (1 if e["is_boss"] else 0), 1, 10)
+		var diff = clamp(PlayerInventory.current_stage + (MINIBOSS_GUARANTEED_RARITY_BOOST if e["is_boss"] else 0), 1, 10)
 		if PlayerInventory.dungeon_tier == "Deep Delve":
 			diff = clamp(diff + 1, 1, 10)
 		var biomes = ["crypt","forest_ruins","dragon_lair"]
 		var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
-		pending_room_gear.append(gear)
-
-	if enemies.is_empty():
-		rooms[current_room_idx]["cleared"] = true
-		_commit_pending_room_gear()
-		_refresh_doors()
-		_refresh_hud()
-		if e.get("is_final_boss", e["is_boss"]):
-			_on_run_complete()
-
-# Moves all gear staged for the current room into the permanent inventory
-# and the run's collected-gear tally. Called once a room is actually cleared.
-func _commit_pending_room_gear() -> void:
-	for gear in pending_room_gear:
-		PlayerInventory.add_gear(gear)
 		run_gear.append(gear)
-	pending_room_gear.clear()
-
-func _check_door_transition() -> void:
-	if not rooms[current_room_idx]["cleared"]: return
-	var room = rooms[current_room_idx]
-
-	for dir in room["doors"]:
-		var dc = DOOR_CENTERS[dir]
-		if hero_pos.distance_to(dc) < 24:
-			var next_idx = room["doors"][dir]
-			_enter_room(next_idx, dir)
-			return
+		_refresh_hud()
 
 func _take_damage(amount: int) -> void:
 	if invincible_timer > 0: return
@@ -634,9 +954,50 @@ func _take_damage(amount: int) -> void:
 	hero_hp = max(0, hero_hp)
 	invincible_timer = 0.6
 	_refresh_hud()
-	if hero_hp <= 0:
+	if hero_hp <= 0 and not game_over:
 		game_over = true
-		_show_end_screen("lost")
+		_play_death_visual()
+
+# A brief defeated flash before the run actually ends — placeholder
+# until real death art/animation exists. The world keeps running
+# during this; only the player's own sprite is affected.
+func _play_death_visual() -> void:
+	if hero_rect and is_instance_valid(hero_rect):
+		hero_rect.set_color(Color(0.15, 0.15, 0.15))
+	var tw = create_tween()
+	tw.tween_interval(1.0)
+	tw.tween_callback(_on_death_resolved)
+
+func _on_death_resolved() -> void:
+	_apply_death_penalty()
+	_show_end_screen("lost")
+
+# Death is a worse outcome than retreating, on purpose: unbanked gear
+# is forfeited entirely (same as retreat), AND roughly half of what
+# was already banked is randomly lost too. Whatever survives the roll
+# is still committed to the permanent inventory. The troop itself is
+# never permanently killed — its persistent HP is set to a 1 HP floor
+# outside the dungeon, mirroring the same no-permanent-death rule
+# already used for defense battles.
+func _apply_death_penalty() -> void:
+	run_gear.clear()   # unbanked gear forfeited entirely, same as retreat
+
+	var kept: Array = []
+	var lost_count = 0
+	for gear in banked_gear:
+		if randf() < 0.5:
+			lost_count += 1
+		else:
+			kept.append(gear)
+	banked_gear = kept
+
+	for gear in banked_gear:
+		PlayerInventory.add_gear(gear)
+		secured_gear.append(gear)
+	banked_gear.clear()
+
+	if dungeon_troop:
+		dungeon_troop.current_hp = 1
 
 # -------------------------------------------------------
 # Visual updates each frame
@@ -685,10 +1046,10 @@ func _build_hud() -> void:
 	hud_hp.add_theme_font_size_override("font_size", 14)
 	vbox.add_child(hud_hp)
 
-	hud_room = Label.new()
-	hud_room.add_theme_font_size_override("font_size", 12)
-	hud_room.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	vbox.add_child(hud_room)
+	hud_timer = Label.new()
+	hud_timer.add_theme_font_size_override("font_size", 13)
+	hud_timer.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
+	vbox.add_child(hud_timer)
 
 	hud_gear = Label.new()
 	hud_gear.add_theme_font_size_override("font_size", 11)
@@ -709,12 +1070,6 @@ func _build_hud() -> void:
 	retreat_btn.pressed.connect(_on_retreat_pressed)
 	vbox.add_child(retreat_btn)
 
-	minimap = Control.new()
-	minimap.custom_minimum_size = Vector2(150, 150)
-	minimap.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	minimap.position = Vector2(-158, 8)
-	hud.add_child(minimap)
-
 	_refresh_hud()
 
 func _refresh_hud() -> void:
@@ -723,49 +1078,17 @@ func _refresh_hud() -> void:
 		var col = Color(0.9,0.2,0.2) if hero_hp < hero_max_hp * 0.3 else (
 			Color(0.9,0.7,0.2) if hero_hp < hero_max_hp * 0.6 else Color(0.3,0.9,0.3))
 		hud_hp.add_theme_color_override("font_color", col)
-	if hud_room:
-		var room = rooms[current_room_idx]
-		var rtype = "BOSS" if room["is_boss"] else ("Cleared" if room["cleared"] else "%d enemies" % enemies.size())
-		hud_room.text = "Room %d/%d  [%s]" % [current_room_idx+1, rooms.size(), rtype]
+	if hud_timer:
+		var remaining = max(0, run_duration_seconds - elapsed_seconds)
+		var mins = int(remaining) / 60
+		var secs = int(remaining) % 60
+		hud_timer.text = "Survive: %d:%02d" % [mins, secs]
 	if hud_gear:
-		hud_gear.text = "Gear found: %d" % run_gear.size()
-
-func _refresh_doors() -> void:
-	var cleared = rooms[current_room_idx]["cleared"]
-	for dir in door_rects:
-		if is_instance_valid(door_rects[dir]):
-			door_rects[dir].color = C_DOOR_ON if cleared else C_DOOR_OFF
-
-func _refresh_minimap() -> void:
-	if minimap == null: return
-	for c in minimap.get_children(): c.queue_free()
-	var sc = 14
-	var off = Vector2(75, 75)
-	for i in range(rooms.size()):
-		var r = rooms[i]
-		var rp = Vector2(r["pos"].x, r["pos"].y) * (sc + 2) + off
-		var rect = ColorRect.new()
-		rect.size = Vector2(sc, sc)
-		rect.position = rp - Vector2(sc/2, sc/2)
-		if i == current_room_idx:
-			rect.color = Color(0.3, 0.7, 1.0)
-		elif r["is_boss"]:
-			rect.color = Color(0.9, 0.2, 0.2)
-		elif r["cleared"]:
-			rect.color = Color(0.3, 0.6, 0.3)
-		else:
-			rect.color = Color(0.5, 0.5, 0.5)
-		minimap.add_child(rect)
+		hud_gear.text = "Held: %d   Banked: %d" % [run_gear.size(), banked_gear.size()]
 
 # -------------------------------------------------------
 # End states
 # -------------------------------------------------------
-func _on_run_complete() -> void:
-	PlayerInventory.current_stage += 1
-	if PlayerInventory.current_stage in [3, 5, 8]:
-		PlayerInventory.unlock_troop_slot()
-	_show_end_screen("won")
-
 func _on_retreat_pressed() -> void:
 	if game_over: return
 	_show_retreat_confirm()
@@ -795,11 +1118,11 @@ func _show_retreat_confirm() -> void:
 	vbox.add_child(title)
 
 	var msg = Label.new()
-	var pending_count = pending_room_gear.size()
-	if pending_count > 0:
-		msg.text = "You'll keep loot from cleared rooms, but lose %d item(s) found in this room." % pending_count
+	var held_count = run_gear.size()
+	if held_count > 0:
+		msg.text = "You'll keep your %d banked item(s), but lose %d item(s) you haven't banked yet." % [banked_gear.size(), held_count]
 	else:
-		msg.text = "You'll keep all loot found so far. This room hasn't dropped anything yet."
+		msg.text = "You'll keep all %d banked item(s). Nothing unbanked to lose." % banked_gear.size()
 	msg.add_theme_font_size_override("font_size", 13)
 	msg.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	msg.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -828,7 +1151,12 @@ func _show_retreat_confirm() -> void:
 
 func _do_retreat() -> void:
 	game_over = true
-	pending_room_gear.clear()   # forfeited, per the retreat loot rule
+	# Banked gear is committed to the permanent inventory now. Unbanked
+	# (held) gear is forfeited, per the retreat loot rule.
+	for gear in banked_gear:
+		PlayerInventory.add_gear(gear)
+		secured_gear.append(gear)
+	run_gear.clear()
 	_show_end_screen("retreated")
 
 func _show_end_screen(outcome: String) -> void:
@@ -849,8 +1177,8 @@ func _show_end_screen(outcome: String) -> void:
 	panel.add_child(vbox)
 
 	var title = Label.new()
-	var title_text = {"won": "RUN COMPLETE!", "lost": "DEFEATED", "retreated": "RETREATED"}.get(outcome, "RUN OVER")
-	var title_color = {"won": Color(0.3,0.9,0.3), "lost": Color(0.9,0.2,0.2), "retreated": Color(0.9,0.6,0.3)}.get(outcome, Color.WHITE)
+	var title_text = {"won": "RUN COMPLETE!", "lost": "DEFEATED", "retreated": "RETREATED", "survived": "SURVIVED!"}.get(outcome, "RUN OVER")
+	var title_color = {"won": Color(0.3,0.9,0.3), "lost": Color(0.9,0.2,0.2), "retreated": Color(0.9,0.6,0.3), "survived": Color(0.3,0.9,0.5)}.get(outcome, Color.WHITE)
 	title.text = title_text
 	title.add_theme_font_size_override("font_size", 28)
 	title.add_theme_color_override("font_color", title_color)
@@ -858,21 +1186,21 @@ func _show_end_screen(outcome: String) -> void:
 	vbox.add_child(title)
 
 	var info = Label.new()
-	info.text = "Gear collected this run: %d item%s" % [run_gear.size(), "" if run_gear.size() == 1 else "s"]
+	info.text = "Gear secured this run: %d item%s" % [secured_gear.size(), "" if secured_gear.size() == 1 else "s"]
 	info.add_theme_color_override("font_color", Color(0.9, 0.75, 0.2))
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(info)
 
-	if run_gear.size() > 0:
+	if secured_gear.size() > 0:
 		var scroll = ScrollContainer.new()
-		scroll.custom_minimum_size = Vector2(280, min(220, run_gear.size() * 26))
+		scroll.custom_minimum_size = Vector2(280, min(220, secured_gear.size() * 26))
 		vbox.add_child(scroll)
 
 		var gear_list_vbox = VBoxContainer.new()
 		gear_list_vbox.add_theme_constant_override("separation", 2)
 		scroll.add_child(gear_list_vbox)
 
-		for gear in run_gear:
+		for gear in secured_gear:
 			var row = Label.new()
 			var quality_tag = (" " + gear.get_quality_name()) if gear.get_quality_name() != "" else ""
 			row.text = "%s  [%s%s]" % [gear.item_name, gear.get_rarity_name(), quality_tag]
