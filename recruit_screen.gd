@@ -13,6 +13,7 @@ var recruit_choices_container: VBoxContainer = null
 
 func _ready() -> void:
 	_build_ui()
+	TutorialRouter.resolve_current_step(self)
 
 func _build_ui() -> void:
 	var bg = ColorRect.new()
@@ -71,7 +72,7 @@ func _build_ui() -> void:
 	var choice_count = SaveManager.get_recruit_choice_count()
 	var btn_label = "Recruit  (🌾🪙 %d combined)" % rcost
 	if choice_count > 1:
-		btn_label = "Recruit \\u2014 choose 1 of %d  (🌾🪙 %d combined)" % [choice_count, rcost]
+		btn_label = "Recruit — choose 1 of %d  (🌾🪙 %d combined)" % [choice_count, rcost]
 	recruit_btn.text = btn_label
 	recruit_btn.custom_minimum_size = Vector2(0, 48)
 	recruit_btn.add_theme_font_size_override("font_size", 14)

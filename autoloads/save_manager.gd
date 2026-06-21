@@ -30,6 +30,8 @@ func save_game() -> void:
 		"invasions_enabled": PlayerInventory.invasions_enabled,
 		"dungeon_tier": PlayerInventory.dungeon_tier,
 		"tutorial_complete": PlayerInventory.tutorial_complete,
+		"tutorial_active": PlayerInventory.tutorial_active,
+		"tutorial_step_index": PlayerInventory.tutorial_step_index,
 		"gear": [],
 		"troops": [],
 	}
@@ -53,6 +55,7 @@ func save_game() -> void:
 		var t_data = {
 			"id": troop.troop_id,
 			"name": troop.troop_name,
+			"veteran_hp_bonus": troop.veteran_hp_bonus,
 			"type": troop.troop_type,
 			"base_stats": troop.base_stats,
 			"is_hero": troop.is_hero,
@@ -105,6 +108,8 @@ func load_game() -> void:
 	PlayerInventory.invasions_enabled = data.get("invasions_enabled", true)
 	PlayerInventory.dungeon_tier = data.get("dungeon_tier", "Standard")
 	PlayerInventory.tutorial_complete = data.get("tutorial_complete", false)
+	PlayerInventory.tutorial_active = data.get("tutorial_active", false)
+	PlayerInventory.tutorial_step_index = data.get("tutorial_step_index", 0)
 
 	if data.has("talents"):
 		for key in data["talents"]:
@@ -151,10 +156,14 @@ func load_game() -> void:
 		troop.base_stats = t["base_stats"]
 		troop.is_hero = t.get("is_hero", false)
 		troop.current_hp = int(t.get("current_hp", -1))
+		troop.veteran_hp_bonus = int(t.get("veteran_hp_bonus", 0))
 		for slot_key in t.get("equipped", {}):
 			var gear = _dict_to_gear(t["equipped"][slot_key])
 			troop.equipped_gear[slot_key] = gear
 		PlayerInventory.troop_roster.append(troop)
+
+	# Strip any legacy hero troop — Commander is now a separate entity, not a roster slot
+	PlayerInventory.troop_roster = PlayerInventory.troop_roster.filter(func(t): return not t.is_hero)
 
 	print("[SaveManager] Game loaded — Stage %d, %d troops, %d gear" % [
 		PlayerInventory.current_stage,
@@ -163,7 +172,7 @@ func load_game() -> void:
 
 func new_game() -> void:
 	PlayerInventory.current_stage = 1
-	PlayerInventory.unlocked_troop_slots = 2
+	PlayerInventory.unlocked_troop_slots = 3
 	PlayerInventory.gear_inventory.clear()
 	PlayerInventory.troop_roster.clear()
 	PlayerInventory.tutorial_complete = false
@@ -180,15 +189,19 @@ func new_game() -> void:
 	PlayerInventory.unlocked_talents = {}
 	PlayerInventory.max_buildings_per_zone = 2
 
-	# Starting troop — just the Hero, who is now a normal roster member
-	# usable on the map (stationed, marched, fights in defense battles)
-	# AND in the action dungeon. A second unit is earned via the tutorial.
-	var hero = TroopData.new()
-	hero.is_hero = true
-	hero.troop_name = "Hero"
-	hero.troop_type = TroopData.TroopType.KNIGHT
-	hero.base_stats = { "hp": 160, "attack": 16, "defense": 12, "speed": 3 }
-	PlayerInventory.troop_roster.append(hero)
+	# Starting troops — Knight and Archer. The Commander is a separate
+	# entity who runs dungeons; these two are the initial combat roster.
+	var knight = TroopData.new()
+	knight.troop_name = "Knight"
+	knight.troop_type = TroopData.TroopType.KNIGHT
+	knight.base_stats = _roll_stats(RECRUIT_BASE_STATS["KNIGHT"])
+	PlayerInventory.troop_roster.append(knight)
+
+	var archer = TroopData.new()
+	archer.troop_name = "Archer"
+	archer.troop_type = TroopData.TroopType.ARCHER
+	archer.base_stats = _roll_stats(RECRUIT_BASE_STATS["ARCHER"])
+	PlayerInventory.troop_roster.append(archer)
 
 	# Starting gear — a few commons to get going
 	for i in range(3):
@@ -251,6 +264,11 @@ func generate_recruit(troop_type: String = "") -> TroopData:
 	var names = RECRUIT_NAME_POOL[troop_type]
 	troop.troop_name = names[randi() % names.size()]
 	troop.base_stats = _roll_stats(RECRUIT_BASE_STATS[troop_type])
+	if PlayerInventory.unlocked_talents.get("recruiting_veteran_enrollment", false):
+		var stats = ["hp", "attack", "defense", "speed"]
+		var boosted_stat = stats[randi() % stats.size()]
+		var current = troop.base_stats.get(boosted_stat, 0)
+		troop.base_stats[boosted_stat] = max(current, int(ceil(current * 1.15)))
 	return troop
 
 # Rolls each stat within ±10% of its base value, rounded to a whole number

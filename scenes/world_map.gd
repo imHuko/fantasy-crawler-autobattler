@@ -28,6 +28,18 @@ const OWNER_COLORS = {
 	"neutral": Color(0.50, 0.50, 0.50),
 }
 
+# Unit slot grid (side panel overview) — lower number sorts first.
+# Matches TroopData's TroopType enum names exactly (get_type_name()).
+const UNIT_PRIORITY = {
+	"KNIGHT": 0,
+	"ROGUE":  1,
+	"ARCHER": 2,
+	"MAGE":   3,
+	"HEALER": 4,
+}
+const TOTAL_UNIT_SLOT_BOXES = 8   # fixed 2 rows of 4; bump this if the player's roster cap ever realistically approaches it
+const TOTAL_BUILDING_SLOT_BOXES = 6   # single row; bump this if max_buildings_per_zone ever realistically approaches it
+
 const ZONE_NAMES = [
 	"Ashveil", "Stonemark", "Duskhaven", "Ironfeld", "Crestmoor",
 	"Thornwall", "Embervast", "Greywatch", "Coldspire", "Mirewood",
@@ -46,12 +58,52 @@ const ATTACK_ROLL_INTERVAL = SECONDS_PER_OLD_TURN   # how often a new attack is 
 var zones: Array = []
 var connections: Array = []   # pairs of zone ids
 var selected_zone_id: int = -1
-var popup_panel: Control = null
+var popup_panel: Control = null   # still used by _open_move_troops_panel, which is out of scope for the new persistent side panel (only the zone info/build flow was migrated)
 var elapsed_seconds: float = 0.0   # total real-time elapsed on the map, replaces the old turn counter
 var attack_roll_timer: float = 0.0
 var pending_attacks: Array = []   # {zone_id, seconds_remaining, force_size}
 var marching_troops: Array = []   # {troop_id, troop_name, from_zone, to_zone, from_pos, to_pos, progress (0-1), total_seconds}
 var mandatory_battle_queue: Array = []   # attacks that have triggered and must be resolved before continuing
+
+# -------------------------------------------------------
+# Persistent zone side panel
+# Replaces the old "spawn a brand new popup every click" approach.
+# This panel is built ONCE in _build_ui() and never destroyed or
+# recreated for the rest of the screen's lifetime — only its contents
+# (text, button states) update when the player clicks a different zone
+# or switches between the overview/build views. This is what makes the
+# panel's own buttons safe and stable tutorial targets: a button
+# reference handed to the tutorial system here can never go stale or
+# point at a now-freed node, unlike the old popups where a fresh
+# PanelContainer (and fresh Button instances inside it) were created
+# from scratch on every single zone click and every Build Here click.
+# The panel itself is a Control, not part of the Node2D/Camera2D-
+# affected map drawing — so it's also naturally exempt from the
+# camera-transform position bug that affected the in-map zone markers.
+# -------------------------------------------------------
+var side_panel: PanelContainer = null
+var side_panel_zone_id: int = -1   # which zone the panel is currently showing, -1 = none/hidden
+var side_panel_view: String = "overview"   # "overview" or "build"
+
+# Overview view — built once, contents refreshed per zone
+var sp_header_label: Label
+var sp_owner_label: Label
+var sp_type_label: Label
+var sp_unit_grid: GridContainer   # the 8-box unit slot display (2 rows of 4), rebuilt per zone in _refresh_side_panel_overview
+var sp_building_grid: GridContainer   # the building slot row (single row), rebuilt per zone in _refresh_side_panel_overview
+var sp_incoming_label: Label
+var sp_action_container: VBoxContainer   # owner-dependent buttons (Build Here, Move Troops, Conquer, Explore) get rebuilt here per zone, but the container itself is stable
+var sp_outer_vbox: VBoxContainer
+var sp_overview_view: VBoxContainer
+var sp_build_view: VBoxContainer
+var tutorial_build_here_btn: Button = null   # re-set each time the overview view rebuilds its action buttons for a zone
+var tutorial_mgmt_btn: Button = null         # the Management nav button in the top HUD — used as nav reminder target when directing the player there
+
+# Build view — built once, building rows refreshed per zone
+var sp_build_title_label: Label
+var sp_build_slots_label: Label
+var sp_build_rows_container: VBoxContainer   # building rows get rebuilt here per zone/view-open, but the container itself is stable
+var tutorial_build_farm_btn: Button = null   # re-set each time the build view rebuilds its rows
 
 var time_speed: float = 1.0   # 1x to 5x, set by the speed slider
 var is_paused: bool = false
@@ -82,15 +134,35 @@ func _ready() -> void:
 		_save_map_state()
 		PlayerInventory.map_generated = true
 
+	# Center the camera on the player's own zone now that zones actually
+	# exist (they don't yet at _setup_camera() time, in either the fresh-
+	# generation or load-from-save path above). Previously the camera
+	# defaulted to the map's geometric center regardless of where the
+	# player's own zone actually was, which on a map this size could
+	# leave the starting zone partly or fully outside the initial view —
+	# exactly what was causing the tutorial's first zone-click step to
+	# spotlight a position the camera wasn't even showing yet.
+	if zones.size() > 0:
+		map_camera.position = zones[0]["pos"]
+	_fit_camera_zoom_to_viewport()
+
 	_build_ui()
 	_apply_pending_battle_result()
 	_draw_map()
 	_refresh_hud()
 
+	if not TutorialOverlay.step_advanced.is_connected(_on_tutorial_step_advanced):
+		TutorialOverlay.step_advanced.connect(_on_tutorial_step_advanced)
+
 	# If there are still mandatory battles queued (multiple simultaneous attacks),
 	# force the next one immediately — no map interaction allowed until resolved
 	if mandatory_battle_queue.size() > 0:
 		call_deferred("_launch_next_mandatory_battle")
+	elif PlayerInventory.tutorial_active:
+		# The new forced walkthrough (TutorialRouter) fully supersedes
+		# these older optional hint popups — both running at once would
+		# stack two separate tutorial UIs on screen simultaneously.
+		call_deferred("_resolve_tutorial_step")
 	elif PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["intro"]:
 		call_deferred("_show_map_tutorial_popup", "intro")
 		# Time-controls hint used to fire on the first End Turn click; now that
@@ -117,6 +189,36 @@ func _setup_camera() -> void:
 	map_camera.limit_bottom = MAP_H + CAMERA_MARGIN
 	map_camera.enabled = true
 	add_child(map_camera)
+	get_tree().get_root().size_changed.connect(_fit_camera_zoom_to_viewport)
+
+# Makes sure the full MAP_W x MAP_H area is always visible regardless
+# of window/viewport size — without this, a small enough resolution
+# (the custom resolution field in Settings has no real upper limit on
+# how small a player can type in, only a 640x480 floor, which is still
+# smaller than this map) could leave zones, including the player's own
+# starting zone, partially or fully outside the camera's view.
+# NOTE: Godot's Camera2D.zoom is the opposite of what feels intuitive —
+# values ABOVE 1.0 zoom OUT (show MORE world per screen pixel), values
+# BELOW 1.0 zoom IN. Confirmed directly against Godot's own docs before
+# writing this, since guessing the direction backwards here would have
+# made small windows zoom IN on the map instead of out, the opposite of
+# the actual fix needed.
+func _fit_camera_zoom_to_viewport() -> void:
+	if map_camera == null: return
+	var viewport_size = Vector2(get_viewport().size)
+	if viewport_size.x <= 0 or viewport_size.y <= 0: return
+
+	var zoom_needed_x = MAP_W / viewport_size.x
+	var zoom_needed_y = MAP_H / viewport_size.y
+	# Use the LARGER requirement so both axes fit (the smaller axis just
+	# shows a bit of margin) rather than the smaller one, which would
+	# crop whichever axis needed more zoom-out.
+	var zoom_factor = max(zoom_needed_x, zoom_needed_y)
+	# Never zoom IN past 1.0 — a viewport already bigger than the map
+	# doesn't need any correction, it already shows the whole thing
+	# (and then some) at native scale.
+	zoom_factor = max(zoom_factor, 1.0)
+	map_camera.zoom = Vector2(zoom_factor, zoom_factor)
 
 func _save_map_state() -> void:
 	PlayerInventory.map_zones = zones
@@ -187,22 +289,21 @@ func _generate_map() -> void:
 	var zone_count = PlayerInventory.difficulty_settings.get("zone_count", 13)
 
 	# Place starting zone left-center.
-	# If the player went through the tutorial, the city starts NEUTRAL —
-	# conquering it is the first thing they do on the real map, mirroring
-	# the tutorial dungeon's "fight to get something" lesson. Skipping the
-	# tutorial pre-owns the city as before so there's no forced detour.
+	# The player starts owning their city regardless of tutorial status.
+	# The OLD tutorial design had this start neutral so conquering it was
+	# the first map action (mirroring the old room-dungeon's "fight to get
+	# something" lesson) — the new forced walkthrough (TutorialRouter)
+	# teaches Building before any combat, which requires already owning a
+	# buildable zone, so that conquest-first premise no longer applies.
 	var start_pos = Vector2(120, MAP_H / 2)
-	var start_owner = "neutral" if PlayerInventory.play_tutorial else "player"
+	var start_owner = "player"
 	zones.append(_make_zone(0, "city", start_pos, start_owner, "Your City"))
 	zones[0]["dist_from_start"] = 0
 	zones[0]["enemy_strength"] = 1   # always a gentle first fight
 
-	# Station all starting troops at the home city only if it's already owned.
-	# If neutral, troops wait off-map until the city is conquered (handled
-	# by _apply_pending_battle_result placing them there on victory).
-	if start_owner == "player":
-		for troop in PlayerInventory.troop_roster:
-			zones[0]["troops"].append(troop.troop_id)
+	# Station all starting troops at the home city.
+	for troop in PlayerInventory.troop_roster:
+		zones[0]["troops"].append(troop.troop_id)
 
 	# Generate remaining zones
 	var used_positions = [start_pos]
@@ -288,7 +389,7 @@ func _build_ui() -> void:
 
 	var top = PanelContainer.new()
 	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	top.size.y = 44
+	top.size.y = TOP_HUD_HEIGHT
 	hud.add_child(top)
 
 	var hbox = HBoxContainer.new()
@@ -366,6 +467,626 @@ func _build_ui() -> void:
 		SaveManager.save_game()
 		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
 	hbox.add_child(mgmt_btn)
+	tutorial_mgmt_btn = mgmt_btn
+
+	_build_side_panel()
+
+# =========================================================
+# ZONE SIDE PANEL — map of where things live
+#
+# _build_side_panel()            Builds the panel ONCE: the panel
+#                                 itself + its style, the Close button,
+#                                 the overview section (zone name, art
+#                                 box, owner/type/incoming labels, unit
+#                                 grid, building grid, action button
+#                                 container), and the separate build
+#                                 sub-view (the "Build Here" screen +
+#                                 Back button). Nothing in here ever
+#                                 gets destroyed/recreated later.
+#
+# _refresh_side_panel_overview() Runs every time a zone is clicked.
+#                                 Does NOT rebuild structure — just
+#                                 updates text and rebuilds the two
+#                                 grids + action buttons to match
+#                                 whichever zone is now selected.
+#
+# _refresh_side_panel_build()    Same idea as above, but for the
+#                                 build sub-view's building list.
+#
+# _make_unit_slot_box() /
+# _make_building_slot_box()      Draw one box each for the unit/
+#                                 building grids (filled, empty, or
+#                                 locked/crossed-out).
+#
+# _load_unit_icon() /
+# _load_building_icon()          Load icons from the fixed
+#                                 art/icons/units/<key>.png and
+#                                 art/icons/buildings/<key>.png
+#                                 convention, right next to the box
+#                                 builders that use them.
+#
+# Sizing/sort knobs (all named constants, not buried in logic):
+#   SIDE_PANEL_WIDTH, UNIT_SLOT_BOX_SIZE, BUILDING_SLOT_BOX_SIZE,
+#   TOTAL_UNIT_SLOT_BOXES, TOTAL_BUILDING_SLOT_BOXES, UNIT_PRIORITY
+# =========================================================
+
+const SIDE_PANEL_WIDTH = 261.0
+const TOP_HUD_HEIGHT = 44.0   # shared with _build_ui()'s top bar — also used so the side panel knows to start below it instead of overlapping it
+
+func _build_side_panel() -> void:
+	# The panel lives under its own CanvasLayer rather than being added
+	# directly as a sibling of the map's own zone marker nodes. Godot
+	# draws Node2D-tree siblings in the order they were added, and this
+	# panel is built before _draw_map() ever creates its zone markers
+	# (those are created lazily, the first time the map draws) — so
+	# without this, every zone marker (icons, name labels) drew ON TOP
+	# of the panel instead of underneath it, confirmed directly from a
+	# screenshot showing a zone's name and icon bleeding through the
+	# unit slot grid. A CanvasLayer's draw order depends only on its
+	# explicit layer number, not on tree position or creation order,
+	# which sidesteps this category of bug entirely — same mechanism
+	# already used successfully for TutorialOverlay.
+	var side_panel_layer = CanvasLayer.new()
+	side_panel_layer.layer = 10   # above normal gameplay (layer 0), below TutorialOverlay (layer 90)
+	add_child(side_panel_layer)
+
+	side_panel = PanelContainer.new()
+	side_panel.custom_minimum_size = Vector2(SIDE_PANEL_WIDTH, 0)
+	side_panel.visible = false
+	# Override the default theme's panel margin, which was reserving a
+	# large gap on every side before any of this panel's own content
+	# even starts — most noticeable on the left, where it stacked with
+	# the centering of narrower rows like the unit/building grids.
+	var panel_style = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.12, 0.12, 0.14)
+	panel_style.content_margin_left = 6
+	panel_style.content_margin_right = 6
+	panel_style.content_margin_top = 6
+	panel_style.content_margin_bottom = 6
+	side_panel.add_theme_stylebox_override("panel", panel_style)
+	side_panel_layer.add_child(side_panel)
+	_position_side_panel()
+	get_tree().get_root().size_changed.connect(_position_side_panel)
+
+	var outer_vbox = VBoxContainer.new()
+	outer_vbox.add_theme_constant_override("separation", 8)
+	outer_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	# custom_minimum_size is set explicitly here (not just the expand
+	# flag above) because a flag only describes how this node behaves
+	# IF its parent hands it extra space — it doesn't force that space
+	# to exist. Centering inside outer_vbox/overview wasn't visibly
+	# working even with the flag set, which points at exactly this:
+	# PanelContainer's single-child auto-fit may not actually be
+	# stretching this child to the panel's full width on its own.
+	outer_vbox.custom_minimum_size = Vector2(SIDE_PANEL_WIDTH - 12, 0)   # minus the panel's own 6px+6px margin
+	side_panel.add_child(outer_vbox)
+	sp_outer_vbox = outer_vbox
+
+	# --- Overview sub-view ---
+	var overview = VBoxContainer.new()
+	overview.name = "OverviewView"
+	overview.add_theme_constant_override("separation", 8)
+	overview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	outer_vbox.add_child(overview)
+	sp_overview_view = overview
+
+	# Zone name
+	sp_header_label = Label.new()
+	sp_header_label.add_theme_font_size_override("font_size", 16)
+	sp_header_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overview.add_child(sp_header_label)
+
+	# Zone art placeholder, centered beneath the name — no zone-level
+	# art exists yet (only building/unit icons), so this stays an empty
+	# box for now; once zone art exists, swap this ColorRect for a
+	# TextureRect loading res://art/icons/zones/<type>.png or similar,
+	# same convention as the building/unit icons.
+	var art_center = CenterContainer.new()
+	art_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	overview.add_child(art_center)
+	var picture_box = ColorRect.new()
+	picture_box.color = Color(0.15, 0.15, 0.18)
+	picture_box.custom_minimum_size = Vector2(180, 120)
+	art_center.add_child(picture_box)
+
+	sp_owner_label = Label.new()
+	sp_owner_label.add_theme_font_size_override("font_size", 12)
+	sp_owner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overview.add_child(sp_owner_label)
+
+	sp_type_label = Label.new()
+	sp_type_label.add_theme_font_size_override("font_size", 11)
+	sp_type_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	sp_type_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overview.add_child(sp_type_label)
+
+	sp_incoming_label = Label.new()
+	sp_incoming_label.add_theme_font_size_override("font_size", 10)
+	sp_incoming_label.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
+	sp_incoming_label.autowrap_mode = TextServer.AUTOWRAP_WORD
+	sp_incoming_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	overview.add_child(sp_incoming_label)
+
+	# Small gap before the unit slot grid, per spec
+	var gap_before_units = Control.new()
+	gap_before_units.custom_minimum_size = Vector2(0, 4)
+	overview.add_child(gap_before_units)
+
+	# Unit slot grid — fixed 2 rows of 4 boxes (TOTAL_UNIT_SLOT_BOXES).
+	# Filled boxes show one box per individual troop actually stationed
+	# in this zone (grouped/ordered by UNIT_PRIORITY, NOT collapsed into
+	# a single box per type — "2 Knights" is still 2 separate boxes,
+	# just adjacent and using the same icon). Remaining boxes up to the
+	# player's current PlayerInventory.unlocked_troop_slots show empty
+	# with no slash. Anything beyond that, up to TOTAL_UNIT_SLOT_BOXES,
+	# shows crossed-out/locked. This deliberately is NOT scoped to this
+	# zone for the empty/locked portion — unlocked_troop_slots is a
+	# single global number on the player, so those boxes represent
+	# overall roster capacity, just displayed in whichever zone the
+	# player happens to be looking at.
+	sp_unit_grid = GridContainer.new()
+	sp_unit_grid.columns = 4
+	sp_unit_grid.add_theme_constant_override("h_separation", 4)
+	sp_unit_grid.add_theme_constant_override("v_separation", 4)
+	var unit_grid_center = CenterContainer.new()
+	unit_grid_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	unit_grid_center.add_child(sp_unit_grid)
+	overview.add_child(unit_grid_center)
+
+	# Small gap before the building slot row, per spec
+	var gap_before_building_slots = Control.new()
+	gap_before_building_slots.custom_minimum_size = Vector2(0, 4)
+	overview.add_child(gap_before_building_slots)
+
+	# Building slot row — single row of TOTAL_BUILDING_SLOT_BOXES boxes,
+	# same idea as the unit slot grid above but smaller and zone-scoped
+	# (a zone's buildings genuinely live in that zone, unlike troops
+	# which roam, so the filled portion here doesn't need the same
+	# "global capacity shown in a local context" reasoning units do).
+	sp_building_grid = GridContainer.new()
+	sp_building_grid.columns = TOTAL_BUILDING_SLOT_BOXES
+	sp_building_grid.add_theme_constant_override("h_separation", 4)
+	sp_building_grid.add_theme_constant_override("v_separation", 4)
+	var building_grid_center = CenterContainer.new()
+	building_grid_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	building_grid_center.add_child(sp_building_grid)
+	overview.add_child(building_grid_center)
+
+	var overview_sep = HSeparator.new()
+	overview.add_child(overview_sep)
+
+	# Action buttons: Move Units, then a small gap, then Build Here and
+	# Explore (and Conquer when applicable) — built fresh per zone in
+	# _refresh_side_panel_overview, but always in this fixed order.
+	sp_action_container = VBoxContainer.new()
+	sp_action_container.add_theme_constant_override("separation", 8)
+	overview.add_child(sp_action_container)
+
+	# --- Build sub-view ---
+	var build_view = VBoxContainer.new()
+	build_view.name = "BuildView"
+	build_view.add_theme_constant_override("separation", 8)
+	build_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	build_view.visible = false
+	outer_vbox.add_child(build_view)
+	sp_build_view = build_view
+
+	sp_build_title_label = Label.new()
+	sp_build_title_label.add_theme_font_size_override("font_size", 14)
+	sp_build_title_label.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	build_view.add_child(sp_build_title_label)
+
+	sp_build_slots_label = Label.new()
+	sp_build_slots_label.add_theme_font_size_override("font_size", 11)
+	build_view.add_child(sp_build_slots_label)
+
+	var build_sep = HSeparator.new()
+	build_view.add_child(build_sep)
+
+	sp_build_rows_container = VBoxContainer.new()
+	sp_build_rows_container.add_theme_constant_override("separation", 8)
+	build_view.add_child(sp_build_rows_container)
+
+	var back_btn = Button.new()
+	back_btn.text = "Back"
+	back_btn.pressed.connect(_show_side_panel_overview)
+	build_view.add_child(back_btn)
+
+	# Close lives outside both sub-views, as the last child of outer_vbox
+	# — so it renders at the very bottom of the panel below whichever
+	# sub-view is currently visible, rather than at the top where it
+	# used to sit directly in the same screen region as the HUD's
+	# Management button (see _position_side_panel() for the other half
+	# of that fix).
+	var close_sep = HSeparator.new()
+	outer_vbox.add_child(close_sep)
+	var close_btn = Button.new()
+	close_btn.text = "Close"
+	close_btn.pressed.connect(_close_side_panel)
+	var close_btn_center = CenterContainer.new()
+	close_btn_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_btn_center.add_child(close_btn)
+	outer_vbox.add_child(close_btn_center)
+
+
+# Explicit position/size instead of an anchor preset — side_panel's
+# parent (this script's own root) is a Node2D, not a plain Control or
+# the root Viewport, and Godot's anchor system is documented to only
+# behave predictably under one of those two parent types. Anchors
+# silently doing nothing under a Node2D parent is exactly what caused
+# the panel to render on the left instead of the requested right edge.
+# Recalculating explicitly on resize (same pattern already used for
+# the camera's zoom-to-fit elsewhere in this file) sidesteps that
+# entirely. This function ONLY repositions/resizes the panel — it must
+# never construct content, since it's connected to size_changed and
+# runs on every window resize; content construction belongs in
+# _build_side_panel() instead, which runs exactly once.
+#
+# Starts at y=TOP_HUD_HEIGHT rather than y=0 — the panel previously
+# spanned the full screen height, which meant its top edge sat directly
+# over the top HUD bar (specifically the Management button, the
+# right-most item in that bar, since the panel is also right-anchored)
+# whenever it was open. Stopping short of that row instead of trying to
+# poke a hole in the panel for just that one button is the more robust
+# fix — nothing in the panel's own layer can ever cover the HUD again,
+# regardless of what's added to either in the future.
+func _position_side_panel() -> void:
+	if not side_panel:
+		return
+	var screen_size = Vector2(get_viewport().size)
+	side_panel.position = Vector2(screen_size.x - SIDE_PANEL_WIDTH, TOP_HUD_HEIGHT)
+	side_panel.size = Vector2(SIDE_PANEL_WIDTH, screen_size.y - TOP_HUD_HEIGHT)
+
+	# Actively re-sync outer_vbox's width to the panel's actual content
+	# area (panel width minus its own left+right margin) every time
+	# this runs, rather than relying on a custom_minimum_size set once
+	# at construction — that one-time value left a visible gap on the
+	# right, since PanelContainer's real layout pass happens after
+	# construction and wasn't reliably matching the pre-calculated
+	# number.
+	if sp_outer_vbox:
+		sp_outer_vbox.custom_minimum_size = Vector2(SIDE_PANEL_WIDTH - 12, 0)
+
+func _close_side_panel() -> void:
+	side_panel.visible = false
+	side_panel_zone_id = -1
+
+func _show_side_panel_overview() -> void:
+	side_panel_view = "overview"
+	sp_overview_view.visible = true
+	sp_build_view.visible = false
+	if side_panel_zone_id >= 0:
+		_refresh_side_panel_overview(side_panel_zone_id)
+
+func _show_side_panel_build(zone_id: int) -> void:
+	side_panel_view = "build"
+	side_panel_zone_id = zone_id
+	sp_overview_view.visible = false
+	sp_build_view.visible = true
+	if PlayerInventory.tutorial_active:
+		TutorialRouter.advance_step("build_here")
+	_refresh_side_panel_build(zone_id)   # this also calls TutorialRouter.resolve_current_step() internally once the rows are built
+
+func _open_side_panel(zone_id: int) -> void:
+	side_panel_zone_id = zone_id
+	side_panel.visible = true
+	_show_side_panel_overview()
+
+func _refresh_side_panel_overview(zone_id: int) -> void:
+	var zone = zones[zone_id]
+
+	sp_header_label.text = "%s %s" % [ZONE_TYPE_ICONS[zone["type"]], zone["name"]]
+	sp_header_label.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
+
+	sp_owner_label.text = "Owner: %s" % zone["owner"].capitalize()
+	sp_owner_label.add_theme_color_override("font_color", OWNER_COLORS[zone["owner"]])
+
+	sp_type_label.text = "Type: %s  |  Threat: %d" % [zone["type"].capitalize(), zone["enemy_strength"]]
+
+	var stationed_troops: Array[TroopData] = []
+	for troop_id in zone["troops"]:
+		var t = _get_troop_data_by_id(troop_id)
+		if t:
+			stationed_troops.append(t)
+	stationed_troops.sort_custom(func(a, b):
+		return UNIT_PRIORITY.get(a.get_type_name(), 99) < UNIT_PRIORITY.get(b.get_type_name(), 99))
+
+	for child in sp_unit_grid.get_children():
+		sp_unit_grid.remove_child(child)
+		child.queue_free()
+
+	for troop in stationed_troops:
+		sp_unit_grid.add_child(_make_unit_slot_box(troop.get_type_name(), false))
+
+	var unlocked = PlayerInventory.unlocked_troop_slots
+	var filled_count = stationed_troops.size()
+	for i in range(filled_count, TOTAL_UNIT_SLOT_BOXES):
+		var locked = i >= unlocked
+		sp_unit_grid.add_child(_make_unit_slot_box("", locked))
+
+	for child in sp_building_grid.get_children():
+		sp_building_grid.remove_child(child)
+		child.queue_free()
+
+	# Iterate BUILDINGS' own declared order (Watchtower, Barracks, Farm,
+	# Forge, Shrine) rather than zone["buildings"]'s own dictionary
+	# order, so the row's ordering is stable and consistent across
+	# every zone regardless of the order things happened to be built in.
+	var built_names = []
+	for bname in BUILDINGS:
+		if zone["buildings"].has(bname):
+			built_names.append(bname)
+
+	for bname in built_names:
+		sp_building_grid.add_child(_make_building_slot_box(bname, false))
+
+	var building_cap = PlayerInventory.max_buildings_per_zone
+	var building_filled_count = built_names.size()
+	for i in range(building_filled_count, TOTAL_BUILDING_SLOT_BOXES):
+		var building_locked = i >= building_cap
+		sp_building_grid.add_child(_make_building_slot_box("", building_locked))
+
+	var incoming = []
+	for m in marching_troops:
+		if m["to_zone"] == zone["id"]:
+			incoming.append("%s (%ds)" % [m["troop_name"], int(ceil(m["seconds_left"]))])
+	if incoming.size() > 0:
+		sp_incoming_label.text = "Incoming: " + ", ".join(incoming)
+		sp_incoming_label.visible = true
+	else:
+		sp_incoming_label.visible = false
+
+	# Action buttons are owner-dependent, so the container's contents do
+	# get rebuilt here — but the container itself (sp_action_container)
+	# is the same stable node every time, never destroyed, which is
+	# what actually matters for tutorial targeting: get_tutorial_target
+	# always finds the button at the same place in the tree, never a
+	# stale reference to something queue_free()'d moments ago.
+	for child in sp_action_container.get_children():
+		sp_action_container.remove_child(child)
+		child.queue_free()
+	tutorial_build_here_btn = null
+
+	if zone["owner"] == "player":
+		_add_sp_action_btn("Move Troops Here", Color(0.4, 0.8, 1.0), _on_move_troops.bind(zone["id"]))
+		var action_gap = Control.new()
+		action_gap.custom_minimum_size = Vector2(0, 4)
+		sp_action_container.add_child(action_gap)
+		tutorial_build_here_btn = _add_sp_action_btn("Build Here", Color(0.85, 0.75, 0.4), _on_build.bind(zone["id"]))
+		var explore_tier = _get_explore_tier(zone["id"])
+		if zone["troops"].is_empty():
+			var no_troop_hint = Label.new()
+			no_troop_hint.text = "Station a troop here to Explore (%s)" % explore_tier
+			no_troop_hint.add_theme_font_size_override("font_size", 11)
+			no_troop_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+			no_troop_hint.autowrap_mode = TextServer.AUTOWRAP_WORD
+			sp_action_container.add_child(no_troop_hint)
+		else:
+			_add_sp_action_btn("Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9),
+				_on_explore.bind(explore_tier))
+	elif zone["owner"] == "neutral":
+		var adj = _is_adjacent_to_player(zone["id"]) or zone["id"] == 0
+		if adj:
+			var threat_str = "Threat Level %d" % zone["enemy_strength"]
+			_add_sp_action_btn("Conquer Zone  (%s)" % threat_str,
+				Color(0.4, 0.9, 0.4), _on_conquer.bind(zone["id"]))
+		else:
+			var hint = Label.new()
+			hint.text = "Must conquer adjacent zones first"
+			hint.add_theme_font_size_override("font_size", 11)
+			hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+			sp_action_container.add_child(hint)
+
+	if PlayerInventory.tutorial_active:
+		TutorialRouter.resolve_current_step(self)
+
+func _add_sp_action_btn(text: String, color: Color, action: Callable) -> Button:
+	var btn = Button.new()
+	btn.text = text
+	btn.add_theme_color_override("font_color", color)
+	btn.custom_minimum_size = Vector2(0, 36)
+	btn.pressed.connect(action)
+	var center = CenterContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.add_child(btn)
+	sp_action_container.add_child(center)
+	return btn
+
+const UNIT_SLOT_BOX_SIZE = 45.0   # 20% smaller than the original 56
+const BUILDING_SLOT_BOX_SIZE = UNIT_SLOT_BOX_SIZE * 0.7   # 70% of the unit box size, i.e. 30% smaller
+
+# Builds one box for the unit slot grid:
+#  - unit_type_name non-empty -> shows that unit's icon (filled slot)
+#  - unit_type_name empty, locked=false -> empty outline, no slash
+#    (an unlocked slot with no troop occupying it right now)
+#  - unit_type_name empty, locked=true -> crossed-out box (a slot the
+#    player hasn't unlocked yet, e.g. via a future talent)
+func _make_unit_slot_box(unit_type_name: String, locked: bool) -> Control:
+	var box = PanelContainer.new()
+	box.custom_minimum_size = Vector2(UNIT_SLOT_BOX_SIZE, UNIT_SLOT_BOX_SIZE)
+
+	if unit_type_name != "":
+		var icon = _load_unit_icon(unit_type_name)
+		if icon:
+			var tex_rect = TextureRect.new()
+			tex_rect.texture = icon
+			tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			box.add_child(tex_rect)
+		else:
+			# Icon failed to load (shouldn't normally happen once the
+			# placeholder PNGs are in place) — fall back to a labeled
+			# colored box so a missing file is obvious rather than
+			# silently blank.
+			var fallback = ColorRect.new()
+			fallback.color = Color(0.3, 0.3, 0.35)
+			box.add_child(fallback)
+			var lbl = Label.new()
+			lbl.text = unit_type_name.substr(0, 2)
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			box.add_child(lbl)
+		return box
+
+	if locked:
+		var locked_bg = ColorRect.new()
+		locked_bg.color = Color(0.12, 0.12, 0.12)
+		box.add_child(locked_bg)
+		# A simple X drawn with two labels would be fragile to align;
+		# a single slash character, centered and scaled up, reads
+		# clearly enough as "locked" without needing custom drawing.
+		var slash = Label.new()
+		slash.text = "✕"
+		slash.add_theme_font_size_override("font_size", 24)
+		slash.add_theme_color_override("font_color", Color(0.4, 0.25, 0.25))
+		slash.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		slash.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		box.add_child(slash)
+	else:
+		var empty_bg = ColorRect.new()
+		empty_bg.color = Color(0.18, 0.18, 0.2)
+		box.add_child(empty_bg)
+
+	return box
+
+# Loads a unit icon by the fixed res://art/icons/units/<key>.png
+# convention. unit_type_name is the uppercase TroopType name (e.g.
+# "KNIGHT"); the actual file is the lowercase key. Returns null if the
+# file doesn't exist yet (e.g. before placeholder/real art is added),
+# so callers can fall back gracefully instead of erroring.
+func _load_unit_icon(unit_type_name: String) -> Texture2D:
+	var path = "res://art/icons/units/%s.png" % unit_type_name.to_lower()
+	if not ResourceLoader.exists(path):
+		return null
+	return load(path)
+
+# Same idea as _make_unit_slot_box, but smaller (BUILDING_SLOT_BOX_SIZE)
+# and keyed by building name (e.g. "Farm") rather than unit type.
+func _make_building_slot_box(building_name: String, locked: bool) -> Control:
+	var box = PanelContainer.new()
+	box.custom_minimum_size = Vector2(BUILDING_SLOT_BOX_SIZE, BUILDING_SLOT_BOX_SIZE)
+
+	if building_name != "":
+		var icon = _load_building_icon(building_name)
+		if icon:
+			var tex_rect = TextureRect.new()
+			tex_rect.texture = icon
+			tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			box.add_child(tex_rect)
+		else:
+			var fallback = ColorRect.new()
+			fallback.color = Color(0.3, 0.3, 0.35)
+			box.add_child(fallback)
+			var lbl = Label.new()
+			lbl.text = building_name.substr(0, 2)
+			lbl.add_theme_font_size_override("font_size", 10)
+			lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			box.add_child(lbl)
+		return box
+
+	if locked:
+		var locked_bg = ColorRect.new()
+		locked_bg.color = Color(0.12, 0.12, 0.12)
+		box.add_child(locked_bg)
+		var slash = Label.new()
+		slash.text = "✕"
+		slash.add_theme_font_size_override("font_size", 16)
+		slash.add_theme_color_override("font_color", Color(0.4, 0.25, 0.25))
+		slash.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		slash.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		box.add_child(slash)
+	else:
+		var empty_bg = ColorRect.new()
+		empty_bg.color = Color(0.18, 0.18, 0.2)
+		box.add_child(empty_bg)
+
+	return box
+
+# Loads a building icon by the fixed res://art/icons/buildings/<key>.png
+# convention. building_name is the display name (e.g. "Farm"); the
+# actual file is the lowercase key. Returns null if the file doesn't
+# exist yet, so callers can fall back gracefully instead of erroring.
+func _load_building_icon(building_name: String) -> Texture2D:
+	var path = "res://art/icons/buildings/%s.png" % building_name.to_lower()
+	if not ResourceLoader.exists(path):
+		return null
+	return load(path)
+
+func _refresh_side_panel_build(zone_id: int) -> void:
+	sp_build_title_label.text = "Build in " + zones[zone_id]["name"]
+
+	var slots_used = zones[zone_id]["buildings"].size()
+	var slots_max = PlayerInventory.max_buildings_per_zone
+	sp_build_slots_label.text = "Building slots: %d / %d" % [slots_used, slots_max]
+	sp_build_slots_label.add_theme_color_override("font_color",
+		Color(0.9, 0.5, 0.3) if slots_used >= slots_max else Color(0.6, 0.6, 0.6))
+
+	for child in sp_build_rows_container.get_children():
+		sp_build_rows_container.remove_child(child)
+		child.queue_free()
+	tutorial_build_farm_btn = null
+
+	for bname in BUILDINGS:
+		var b = BUILDINGS[bname]
+		var current_level = zones[zone_id]["buildings"].get(bname, 0)
+		var max_level = b.get("max_level", 1)
+		var at_max = current_level >= max_level
+		var zone_full = slots_used >= slots_max and current_level == 0
+		var effective_cost = _get_building_cost(bname)
+		# Free as long as the tutorial is active, this is the player's
+		# own starting zone (zone 0 — the only zone the tutorial ever
+		# directs the player to build in), and they don't have a Farm
+		# yet. Checking ownership directly (current_level == 0) rather
+		# than pinning to the exact "build_place_farm" step id, since
+		# the step id and the player's actual progress can drift out of
+		# sync, which previously caused the button to display "FREE"
+		# while the real purchase still charged for it.
+		var is_tutorial_free_farm = (bname == "Farm" and current_level == 0
+			and zone_id == 0 and PlayerInventory.tutorial_active)
+		var cant_afford = (not PlayerInventory.can_afford({"food": 0, "gold": effective_cost})) and not is_tutorial_free_farm
+
+		var row_vbox = VBoxContainer.new()
+		sp_build_rows_container.add_child(row_vbox)
+
+		var btn = Button.new()
+		var btn_text = bname
+		if max_level > 1:
+			btn_text += " (Lv%d/%d)" % [current_level, max_level]
+		if at_max:
+			btn_text += " ✓ MAX"
+		elif zone_full:
+			btn_text += " (zone full)"
+		else:
+			var action = "Upgrade" if current_level > 0 else "Build"
+			if is_tutorial_free_farm:
+				btn_text += "  [%s — FREE]" % action
+			else:
+				btn_text += "  [%s — %d 🌾🪙]" % [action, effective_cost]
+			if cant_afford:
+				btn_text += " (can't afford)"
+
+		btn.text = btn_text
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.add_theme_font_size_override("font_size", 12)
+		btn.disabled = at_max or zone_full or cant_afford
+		btn.add_theme_color_override("font_color",
+			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if (zone_full or cant_afford) else Color(0.85, 0.75, 0.4)))
+		btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
+		row_vbox.add_child(btn)
+		if bname == "Farm":
+			tutorial_build_farm_btn = btn
+
+		var desc = Label.new()
+		desc.text = b["desc"]
+		desc.add_theme_font_size_override("font_size", 10)
+		desc.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+		desc.autowrap_mode = TextServer.AUTOWRAP_WORD
+		row_vbox.add_child(desc)
+
+	if PlayerInventory.tutorial_active:
+		TutorialRouter.resolve_current_step(self)
 
 var zone_dynamic_refs: Dictionary = {}   # zone_id -> {warn_icon, countdown_lbl, troop_lbl, march_lbl, circle}
 
@@ -499,6 +1220,7 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	btn.position = Vector2(-32, -32)
 	btn.pressed.connect(_on_zone_clicked.bind(zone["id"]))
 	container.add_child(btn)
+	refs["click_btn"] = btn
 
 	# Incoming troops marker
 	var march_lbl = Label.new()
@@ -560,128 +1282,10 @@ func _update_zone_node(zone: Dictionary) -> void:
 # -------------------------------------------------------
 func _on_zone_clicked(zone_id: int) -> void:
 	selected_zone_id = zone_id
-	_close_popup()
 	_draw_map()
-	_open_popup(zones[zone_id])
-
-func _open_popup(zone: Dictionary) -> void:
-	popup_panel = PanelContainer.new()
-
-	# Position popup — keep on screen. Height isn't known until the
-	# popup's content is built, so clamp against a generous estimate
-	# rather than the exact final height.
-	const ESTIMATED_POPUP_HEIGHT = 260.0
-	var px = min(zone["pos"].x + 50, MAP_W - 280)
-	var py = clamp(zone["pos"].y + 44, 60, MAP_H - ESTIMATED_POPUP_HEIGHT)
-	popup_panel.position = Vector2(px, py)
-	popup_panel.custom_minimum_size = Vector2(260, 0)
-	add_child(popup_panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	popup_panel.add_child(vbox)
-
-	# Header
-	var header = Label.new()
-	header.text = "%s %s" % [ZONE_TYPE_ICONS[zone["type"]], zone["name"]]
-	header.add_theme_font_size_override("font_size", 16)
-	header.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
-	vbox.add_child(header)
-
-	var owner_lbl = Label.new()
-	owner_lbl.text = "Owner: %s" % zone["owner"].capitalize()
-	owner_lbl.add_theme_color_override("font_color", OWNER_COLORS[zone["owner"]])
-	owner_lbl.add_theme_font_size_override("font_size", 12)
-	vbox.add_child(owner_lbl)
-
-	var type_lbl = Label.new()
-	type_lbl.text = "Type: %s  |  Threat: %d" % [zone["type"].capitalize(), zone["enemy_strength"]]
-	type_lbl.add_theme_font_size_override("font_size", 11)
-	type_lbl.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	vbox.add_child(type_lbl)
-
-	# Troops
-	var troop_lbl = Label.new()
-	if zone["troops"].is_empty():
-		troop_lbl.text = "Troops: None"
-	else:
-		var names = []
-		for troop_id in zone["troops"]:
-			names.append(_get_troop_name_by_id(troop_id))
-		troop_lbl.text = "Troops: " + ", ".join(names)
-	troop_lbl.add_theme_font_size_override("font_size", 11)
-	troop_lbl.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
-	troop_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
-	vbox.add_child(troop_lbl)
-
-	# Incoming troops
-	var incoming = []
-	for m in marching_troops:
-		if m["to_zone"] == zone["id"]:
-			incoming.append("%s (%ds)" % [m["troop_name"], int(ceil(m["seconds_left"]))])
-	if incoming.size() > 0:
-		var incoming_lbl = Label.new()
-		incoming_lbl.text = "Incoming: " + ", ".join(incoming)
-		incoming_lbl.add_theme_font_size_override("font_size", 10)
-		incoming_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 1.0))
-		incoming_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
-		vbox.add_child(incoming_lbl)
-
-	# Buildings
-	var build_lbl = Label.new()
-	var building_strs = []
-	for bname in zone["buildings"]:
-		var lvl = zone["buildings"][bname]
-		if BUILDINGS[bname].get("max_level", 1) > 1:
-			building_strs.append("%s Lv%d" % [bname, lvl])
-		else:
-			building_strs.append(bname)
-	build_lbl.text = "Buildings: " + (", ".join(building_strs) if not building_strs.is_empty() else "None")
-	build_lbl.text += "  (%d/%d slots)" % [zone["buildings"].size(), PlayerInventory.max_buildings_per_zone]
-	build_lbl.add_theme_font_size_override("font_size", 11)
-	build_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5))
-	vbox.add_child(build_lbl)
-
-	var sep = HSeparator.new()
-	vbox.add_child(sep)
-
-	# Action buttons based on owner
-	if zone["owner"] == "player":
-		_add_popup_btn(vbox, "Move Troops Here", Color(0.4, 0.8, 1.0), _on_move_troops.bind(zone["id"]))
-		_add_popup_btn(vbox, "Build Here", Color(0.85, 0.75, 0.4), _on_build.bind(zone["id"]))
-		var explore_tier = _get_explore_tier(zone["id"])
-		if zone["troops"].is_empty():
-			var no_troop_hint = Label.new()
-			no_troop_hint.text = "Station a troop here to Explore (%s)" % explore_tier
-			no_troop_hint.add_theme_font_size_override("font_size", 11)
-			no_troop_hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-			no_troop_hint.autowrap_mode = TextServer.AUTOWRAP_WORD
-			vbox.add_child(no_troop_hint)
-		elif zone["troops"].size() == 1:
-			var only_troop_id = zone["troops"][0]
-			_add_popup_btn(vbox, "Explore as %s  (%s)" % [_get_troop_name_by_id(only_troop_id), explore_tier],
-				Color(0.65, 0.3, 0.9), _on_explore.bind(only_troop_id, explore_tier))
-		else:
-			_add_popup_btn(vbox, "Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9),
-				_open_explore_troop_picker.bind(zone["id"], explore_tier))
-	elif zone["owner"] == "neutral":
-		var adj = _is_adjacent_to_player(zone["id"]) or zone["id"] == 0
-		if adj:
-			var threat_str = "Threat Level %d" % zone["enemy_strength"]
-			_add_popup_btn(vbox, "Conquer Zone  (%s)" % threat_str,
-				Color(0.4, 0.9, 0.4), _on_conquer.bind(zone["id"]))
-		else:
-			var hint = Label.new()
-			hint.text = "Must conquer adjacent zones first"
-			hint.add_theme_font_size_override("font_size", 11)
-			hint.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
-			vbox.add_child(hint)
-
-	# Close button
-	var close_btn = Button.new()
-	close_btn.text = "Close"
-	close_btn.pressed.connect(_close_popup)
-	vbox.add_child(close_btn)
+	if PlayerInventory.tutorial_active and zone_id == 0:
+		TutorialRouter.advance_step("build_open_zone")
+	_open_side_panel(zone_id)
 
 func _get_explore_tier(zone_id: int) -> String:
 	var dist = zones[zone_id].get("dist_from_start", 0.0)
@@ -692,56 +1296,10 @@ func _get_explore_tier(zone_id: int) -> String:
 	else:
 		return "Deep Delve"
 
-func _on_explore(troop_id: String, tier: String) -> void:
+func _on_explore(tier: String) -> void:
 	PlayerInventory.dungeon_tier = tier
-	PlayerInventory.dungeon_troop_id = troop_id
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn")
-
-# Shown when more than one troop is stationed at a zone, so the player
-# picks which one actually plays this dungeon run — each class plays
-# differently, so this is a real choice rather than a formality.
-func _open_explore_troop_picker(zone_id: int, tier: String) -> void:
-	_close_popup()
-
-	var overlay = CanvasLayer.new()
-	add_child(overlay)
-
-	var bg = ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.7)
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	overlay.add_child(bg)
-
-	var panel = PanelContainer.new()
-	panel.set_anchors_preset(Control.PRESET_CENTER)
-	overlay.add_child(panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 10)
-	panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = "Explore as which troop?"
-	title.add_theme_font_size_override("font_size", 16)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
-
-	for troop_id in zones[zone_id]["troops"]:
-		var troop_btn = Button.new()
-		var troop_name = _get_troop_name_by_id(troop_id)
-		var troop_type = _get_troop_type_by_id(troop_id)
-		troop_btn.text = "%s  [%s]" % [troop_name, troop_type]
-		troop_btn.custom_minimum_size = Vector2(220, 36)
-		troop_btn.pressed.connect(func():
-			overlay.queue_free()
-			_on_explore(troop_id, tier))
-		vbox.add_child(troop_btn)
-
-	var cancel_btn = Button.new()
-	cancel_btn.text = "Cancel"
-	cancel_btn.custom_minimum_size = Vector2(220, 32)
-	cancel_btn.pressed.connect(func(): overlay.queue_free())
-	vbox.add_child(cancel_btn)
 
 func _get_troop_type_by_id(troop_id: String) -> String:
 	for troop in PlayerInventory.troop_roster:
@@ -749,13 +1307,14 @@ func _get_troop_type_by_id(troop_id: String) -> String:
 			return troop.get_type_name()
 	return "?"
 
-func _add_popup_btn(parent: VBoxContainer, text: String, col: Color, callback: Callable) -> void:
+func _add_popup_btn(parent: VBoxContainer, text: String, col: Color, callback: Callable) -> Button:
 	var btn = Button.new()
 	btn.text = text
 	btn.custom_minimum_size = Vector2(0, 34)
 	btn.add_theme_color_override("font_color", col)
 	btn.pressed.connect(callback)
 	parent.add_child(btn)
+	return btn
 
 func _close_popup() -> void:
 	if popup_panel and is_instance_valid(popup_panel):
@@ -769,7 +1328,7 @@ func _close_popup() -> void:
 const TUTORIAL_HINTS = {
 	"intro": {
 		"title": "The World Map",
-		"body": "This is your campaign map. Your City sits unclaimed \\u2014 conquer it first to establish your base. From there, expand outward: build up zones, station troops, and push back the creatures of the wilds.",
+		"body": "This is your campaign map. Your City sits unclaimed — conquer it first to establish your base. From there, expand outward: build up zones, station troops, and push back the creatures of the wilds.",
 	},
 	"conquer": {
 		"title": "Conquering Zones",
@@ -777,19 +1336,85 @@ const TUTORIAL_HINTS = {
 	},
 	"build": {
 		"title": "Building Up",
-		"body": "Each zone can hold up to 2 buildings. Watchtowers warn you of attacks earlier, Farms and Barracks generate resources, and Forges/Shrines buff troops stationed nearby. Choose wisely \\u2014 you can't build everything everywhere.",
+		"body": "Each zone can hold up to 2 buildings. Watchtowers warn you of attacks earlier, Farms and Barracks generate resources, and Forges/Shrines buff troops stationed nearby. Choose wisely — you can't build everything everywhere.",
 	},
 	"move_troops": {
 		"title": "Positioning Troops",
-		"body": "Troops take time to travel between zones based on distance. Keep your border zones defended \\u2014 reinforcements from far away won't always arrive in time.",
+		"body": "Troops take time to travel between zones based on distance. Keep your border zones defended — reinforcements from far away won't always arrive in time.",
 	},
 	"end_turn": {
 		"title": "Time Flows on Its Own",
-		"body": "The map runs in real time now \\u2014 resources accrue, troops march, and the wilds may move against you continuously. Use the pause button if you need a moment to think, and the speed slider to fast-forward when things are quiet.",
+		"body": "The map runs in real time now — resources accrue, troops march, and the wilds may move against you continuously. Use the pause button if you need a moment to think, and the speed slider to fast-forward when things are quiet.",
 	},
 }
 
+func _resolve_tutorial_step() -> void:
+	TutorialRouter.resolve_current_step(self)
+
+# Fires on every tutorial step advance while this screen is loaded.
+# TutorialRouter connects to TutorialOverlay.step_advanced in its own
+# _ready() — autoloads initialize before any scene, so that connection
+# is made before this one, meaning by the time THIS handler runs,
+# tutorial_step_index has already moved to the NEXT step. So this
+# checks for "defense_battle" (the step that follows the info-only
+# "defense_intro"), not "defense_intro" itself.
+func _on_tutorial_step_advanced() -> void:
+	if not PlayerInventory.tutorial_active: return
+	var step = TutorialSteps.get_step(PlayerInventory.tutorial_step_index)
+	if step.get("id", "") == "defense_battle":
+		call_deferred("_start_scripted_tutorial_defense")
+
+# A guaranteed, scripted attack on the player's own city — winnable by
+# a wide margin, since the tutorial design explicitly requires this
+# fight to never realistically be lost, just to feel like it costs
+# something. defense_scene.gd internally floors this value to 0.5-0.6
+# A higher multiplier makes enemies hit harder — necessary because the
+# Knight's DEF=20 absorbs 8 flat damage per hit, so enemies need ATK > 8
+# to deal more than 1 damage. At 2.5 they deal 4 per swing, which is
+# enough to genuinely threaten the Knight over the course of the fight.
+# The wave count is capped separately in defense_scene._plan_wave().
+const TUTORIAL_DEFENSE_FORCE_MULT = 2.5
+
+func _start_scripted_tutorial_defense() -> void:
+	var zone = zones[0]
+	_notify("⚔ %s is under attack! You must defend it now." % zone["name"])
+	PlayerInventory.current_battle_zone = 0
+	PlayerInventory.current_attack_force = TUTORIAL_DEFENSE_FORCE_MULT
+	PlayerInventory.conquering_zone = false
+	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
+	PlayerInventory.set_battle_zone_buffs(get_best_forge_level(0), get_best_shrine_level(0))
+	# defense_scene.gd's victory handler unconditionally increments
+	# current_stage, which is real game progression that scales future
+	# dungeon/enemy difficulty — this scripted, deliberately-trivial
+	# tutorial fight shouldn't count toward that. Stash the pre-battle
+	# value so it can be restored once the player's back; world_map.gd
+	# isn't present while defense_scene.gd runs, so this can't be
+	# corrected from there directly, but resolving the very next
+	# tutorial step (heal_intro, on Management) is the right moment.
+	PlayerInventory.set_meta("tutorial_pre_battle_stage", PlayerInventory.current_stage)
+	SaveManager.save_game()
+	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
+
+# Maps a tutorial step's target_id (see autoloads/tutorial_steps.gd) to
+# an actual Control on this screen. Sub-step 3 fills these in properly
+# as each step's real hookup is built; pause_button and speed_slider
+# are wired now since both already exist as named vars on this screen.
+func get_tutorial_target(target_id: String) -> Control:
+	match target_id:
+		"pause_button": return pause_btn
+		"speed_slider": return speed_slider
+		"owned_zone_marker":
+			if zone_dynamic_refs.has(0) and zone_dynamic_refs[0].has("click_btn"):
+				return zone_dynamic_refs[0]["click_btn"]
+			return null
+		"build_here_button": return tutorial_build_here_btn
+		"farm_button": return tutorial_build_farm_btn
+		"mgmt_button": return tutorial_mgmt_btn
+		_: return null
+
 func _show_map_tutorial_popup(hint_key: String) -> void:
+	if PlayerInventory.tutorial_active:
+		return   # the new forced walkthrough (TutorialRouter) supersedes these older optional hints entirely
 	if PlayerInventory.map_tutorial_seen.get(hint_key, true):
 		return
 	PlayerInventory.map_tutorial_seen[hint_key] = true
@@ -910,10 +1535,9 @@ func _on_move_troops(zone_id: int) -> void:
 	_open_move_troops_panel(zone_id)
 
 func _on_build(zone_id: int) -> void:
-	_close_popup()
 	if PlayerInventory.play_tutorial and not PlayerInventory.map_tutorial_seen["build"]:
 		_show_map_tutorial_popup("build")
-	_open_build_panel(zone_id)
+	_show_side_panel_build(zone_id)
 
 # -------------------------------------------------------
 # Move Troops Panel
@@ -1005,7 +1629,7 @@ func _on_assign_troop(troop_id: String, zone_id: int) -> void:
 			"troop_id": troop_id, "troop_name": troop_display_name, "from_zone": from_zone_id,
 			"to_zone": zone_id, "seconds_left": travel_seconds, "total_seconds": travel_seconds,
 		})
-		_notify("%s marching to %s \\u2014 arrives in %ds" % [troop_display_name, zones[zone_id]["name"], int(travel_seconds)])
+		_notify("%s marching to %s — arrives in %ds" % [troop_display_name, zones[zone_id]["name"], int(travel_seconds)])
 
 	_close_popup()
 	_draw_map()
@@ -1015,6 +1639,15 @@ func _get_troop_name_by_id(troop_id: String) -> String:
 		if troop.troop_id == troop_id:
 			return troop.troop_name
 	return "Unknown Unit"
+
+# Same lookup as _get_troop_name_by_id, but returns the full TroopData
+# object — needed by the unit slot grid for troop_type (icon + sort
+# priority), not just the display name.
+func _get_troop_data_by_id(troop_id: String) -> TroopData:
+	for troop in PlayerInventory.troop_roster:
+		if troop.troop_id == troop_id:
+			return troop
+	return null
 
 # -------------------------------------------------------
 # Build Panel
@@ -1042,82 +1675,8 @@ const BUILDINGS = {
 	},
 }
 
-func _open_build_panel(zone_id: int) -> void:
-	popup_panel = PanelContainer.new()
-	popup_panel.position = Vector2(MAP_W / 2 - 170, MAP_H / 2 - 140)
-	popup_panel.custom_minimum_size = Vector2(340, 0)
-	add_child(popup_panel)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 8)
-	popup_panel.add_child(vbox)
-
-	var title = Label.new()
-	title.text = "Build in " + zones[zone_id]["name"]
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	vbox.add_child(title)
-
-	var slots_used = zones[zone_id]["buildings"].size()
-	var slots_max = PlayerInventory.max_buildings_per_zone
-	var slot_lbl = Label.new()
-	slot_lbl.text = "Building slots: %d / %d" % [slots_used, slots_max]
-	slot_lbl.add_theme_font_size_override("font_size", 11)
-	slot_lbl.add_theme_color_override("font_color",
-		Color(0.9, 0.5, 0.3) if slots_used >= slots_max else Color(0.6, 0.6, 0.6))
-	vbox.add_child(slot_lbl)
-
-	var sep = HSeparator.new()
-	vbox.add_child(sep)
-
-	for bname in BUILDINGS:
-		var b = BUILDINGS[bname]
-		var current_level = zones[zone_id]["buildings"].get(bname, 0)
-		var max_level = b.get("max_level", 1)
-		var at_max = current_level >= max_level
-		var zone_full = slots_used >= slots_max and current_level == 0
-		var effective_cost = _get_building_cost(bname)
-		var cant_afford = not PlayerInventory.can_afford({"food": 0, "gold": effective_cost})
-
-		var hbox = HBoxContainer.new()
-		vbox.add_child(hbox)
-
-		var btn = Button.new()
-		var btn_text = bname
-		if max_level > 1:
-			btn_text += " (Lv%d/%d)" % [current_level, max_level]
-		if at_max:
-			btn_text += " ✓ MAX"
-		elif zone_full:
-			btn_text += " (zone full)"
-		else:
-			var action = "Upgrade" if current_level > 0 else "Build"
-			btn_text += "  [%s \\u2014 %d 🌾🪙]" % [action, effective_cost]
-			if cant_afford:
-				btn_text += " (can't afford)"
-
-		btn.text = btn_text
-		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.add_theme_font_size_override("font_size", 12)
-		btn.disabled = at_max or zone_full or cant_afford
-		btn.add_theme_color_override("font_color",
-			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if (zone_full or cant_afford) else Color(0.85, 0.75, 0.4)))
-		btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
-		hbox.add_child(btn)
-
-		var desc = Label.new()
-		desc.text = b["desc"]
-		desc.add_theme_font_size_override("font_size", 10)
-		desc.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-		desc.autowrap_mode = TextServer.AUTOWRAP_WORD
-		vbox.add_child(desc)
-
-	var close_btn = Button.new()
-	close_btn.text = "Cancel"
-	close_btn.pressed.connect(_close_popup)
-	vbox.add_child(close_btn)
-
 func _on_build_selected(building_name: String, zone_id: int) -> void:
+	print("[TUTORIAL DEBUG] _on_build_selected FIRED: building=%s zone_id=%d" % [building_name, zone_id])
 	var zone = zones[zone_id]
 	var current_level = zone["buildings"].get(building_name, 0)
 	var max_level = BUILDINGS[building_name].get("max_level", 1)
@@ -1125,26 +1684,35 @@ func _on_build_selected(building_name: String, zone_id: int) -> void:
 
 	if is_new_building and zone["buildings"].size() >= PlayerInventory.max_buildings_per_zone:
 		_notify("This zone's building slots are full!")
-		_close_popup()
 		return
 
 	if current_level >= max_level:
-		_close_popup()
 		return
 
 	var cost = _get_building_cost(building_name)
-	if not PlayerInventory.can_afford({"food": 0, "gold": cost}):
-		_notify("Not enough resources \\u2014 need %d combined Food+Gold." % cost)
-		_close_popup()
-		return
-
-	PlayerInventory.spend_resources({"food": 0, "gold": cost})
+	# Free as long as the tutorial is active, this is the player's own
+	# starting zone (zone 0), and they don't have a Farm yet — matches
+	# the same check used when building this menu's button text/
+	# affordability above, rather than pinning to the exact
+	# "build_place_farm" step id (which could drift out of sync with
+	# the step index and cause the button to display "FREE" while this
+	# function still charged for it).
+	var is_tutorial_free_farm = (building_name == "Farm" and is_new_building
+		and zone_id == 0 and PlayerInventory.tutorial_active)
+	print("[TUTORIAL DEBUG] is_tutorial_free_farm=%s (is_new_building=%s tutorial_active=%s)" % [is_tutorial_free_farm, is_new_building, PlayerInventory.tutorial_active])
+	if not is_tutorial_free_farm:
+		if not PlayerInventory.can_afford({"food": 0, "gold": cost}):
+			_notify("Not enough resources — need %d combined Food+Gold." % cost)
+			return
+		PlayerInventory.spend_resources({"food": 0, "gold": cost})
 	zone["buildings"][building_name] = current_level + 1
+	if is_tutorial_free_farm:
+		TutorialRouter.advance_step("build_place_farm")
 
 	if building_name == "Barracks" and current_level == 0:
 		PlayerInventory.unlock_troop_slot()
 
-	_close_popup()
+	_refresh_side_panel_build(zone_id)
 	_draw_map()
 	_refresh_hud()
 
@@ -1207,7 +1775,7 @@ func _get_best_building_level_in_range(zone_id: int, building_name: String) -> i
 
 # Generates resources from Farm/Barracks each turn
 func _process_resource_generation(delta: float) -> void:
-	var farm_yield = 5.0 if PlayerInventory.unlocked_talents.get("economy_bountiful_harvest", false) else 3.0
+	var farm_yield = 50.0 if PlayerInventory.unlocked_talents.get("economy_bountiful_harvest", false) else 30.0
 	var barracks_yield = 4.0 if PlayerInventory.unlocked_talents.get("economy_steady_coffers", false) else 2.0
 	var trade_routes = PlayerInventory.unlocked_talents.get("economy_trade_routes", false)
 
@@ -1223,7 +1791,7 @@ func _process_resource_generation(delta: float) -> void:
 		if has_barracks:
 			gold_gain += barracks_yield
 		if trade_routes and not has_farm and not has_barracks:
-			gold_gain += 1.0
+			gold_gain += 2.0 if PlayerInventory.unlocked_talents.get("economy_supply_network", false) else 1.0
 
 	# Converted from "per old turn" to "per second" — divide by the old turn length.
 	if food_gain > 0:
@@ -1428,6 +1996,8 @@ func _on_pause_pressed() -> void:
 	is_paused = not is_paused
 	pause_btn.text = "▶" if is_paused else "⏸"
 	_refresh_hud()
+	if PlayerInventory.tutorial_active:
+		TutorialRouter.advance_step("map_pause")
 
 func _on_speed_changed(value: float) -> void:
 	time_speed = value
@@ -1445,6 +2015,7 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			_close_popup()
+			_close_side_panel()
 			selected_zone_id = -1
 			_draw_map()
 		elif event.button_index == MOUSE_BUTTON_MIDDLE:

@@ -4,6 +4,12 @@ extends Control
 # Management Screen — fully code-built, no scene tree needed
 # -------------------------------------------------------
 
+var tutorial_recruit_btn: Button = null
+var tutorial_dungeon_btn: Button = null
+var tutorial_talent_btn: Button = null
+var tutorial_gear_shop_btn: Button = null
+var tutorial_heal_buttons: Dictionary = {}   # TroopData -> Button, rebuilt each time troop cards are drawn
+
 const RARITY_COLORS = {
 	"COMMON":    Color(0.75, 0.75, 0.75),
 	"RARE":      Color(0.25, 0.50, 1.00),
@@ -27,7 +33,7 @@ var selected_gear_button: Button = null
 # Stats that display and roll as percentages rather than flat numbers
 const PERCENT_STATS = ["crit_chance", "attack_speed", "spell_power", "lifesteal", "move_speed"]
 var focus_troop: TroopData = null   # "working on" troop, used by hover-compare when no slot is selected
-var show_suggestions: bool = true
+var show_suggestions: bool = false
 var compare_panel: PanelContainer = null
 var all_slot_buttons: Array = []   # every gear slot button across every troop card, for cross-card highlighting
 
@@ -38,9 +44,140 @@ var set_bonus_label: Label
 
 func _ready() -> void:
 	_build_ui()
+	_ensure_tutorial_heal_food()
 	_populate_troops()
 	_populate_gear()
 	_update_status("Select a gear slot on a troop, then choose gear from the right.")
+	TutorialRouter.resolve_current_step(self)
+
+# The tutorial's design promises the player will have passively earned
+# enough Food to fully heal by the time this step runs — but Food only
+# accrues while the World Map screen is actually loaded (see
+# world_map.gd's per-delta accrual), and the new sequence spends most
+# of its time on other screens between building the Farm and reaching
+# this step. Real passive accrual alone wouldn't reliably cover a full
+# heal, so this tops Food up to exactly what's needed, idempotently
+# (never grants MORE than needed, so revisiting this screen before
+# actually healing doesn't stack extra food) rather than faking the
+# heal action itself — the player still uses the real Heal button.
+func _ensure_tutorial_heal_food() -> void:
+	if not PlayerInventory.tutorial_active: return
+	var step = TutorialSteps.get_step(PlayerInventory.tutorial_step_index)
+	if step.get("id", "") != "heal_intro": return
+
+	# Undo the real-progression side effect the scripted tutorial
+	# defense battle would otherwise have caused (see
+	# world_map.gd's _start_scripted_tutorial_defense) — that fight is
+	# deliberately trivial and shouldn't count as real game progress.
+	if PlayerInventory.has_meta("tutorial_pre_battle_stage"):
+		PlayerInventory.current_stage = PlayerInventory.get_meta("tutorial_pre_battle_stage")
+		PlayerInventory.remove_meta("tutorial_pre_battle_stage")
+
+	var max_missing = 0
+	for troop in PlayerInventory.troop_roster:
+		max_missing = max(max_missing, troop.get_missing_hp())
+	if max_missing <= 0: return
+
+	var have = PlayerInventory.resources.get("food", 0)
+	if have < max_missing:
+		PlayerInventory.resources["food"] = max_missing
+
+func get_tutorial_target(target_id: String) -> Control:
+	match target_id:
+		"recruit_button": return tutorial_recruit_btn
+		"dungeon_button": return tutorial_dungeon_btn
+		"talents_button": return tutorial_talent_btn
+		"gear_shop_button": return tutorial_gear_shop_btn
+		"heal_button":
+			for troop in tutorial_heal_buttons:
+				if troop.get_missing_hp() > 0:
+					return tutorial_heal_buttons[troop]
+			return null
+		"gear_item_weapon": return _find_gear_button_by_slot("WEAPON")
+		"gear_item_armor": return _find_gear_button_by_slot("ARMOR")
+		"hero_weapon_slot": return _find_slot_button_for_hero("WEAPON")
+		"recruit_weapon_slot": return _find_slot_button_for_newest_recruit("WEAPON")
+		_: return null
+
+# Finds the inventory list button for the (unequipped) item matching a
+# given slot. Used for the tutorial's two guaranteed equip items
+# (WEAPON, ARMOR) — searches by slot rather than tracking a persistent
+# reference, since the gear list fully rebuilds on every change and a
+# cached button reference would otherwise go stale immediately.
+func _find_gear_button_by_slot(slot_name: String) -> Control:
+	var target_gear: GearItem = null
+	for gear in PlayerInventory.gear_inventory:
+		if gear.get_slot_name() == slot_name:
+			target_gear = gear
+			break
+	print("[TUTORIAL DEBUG] _find_gear_button_by_slot('%s') -> matched gear: %s" % [
+		slot_name, (target_gear.item_name + " [" + target_gear.get_slot_name() + "]") if target_gear else "NONE"
+	])
+	if target_gear == null: return null
+	var result = _find_button_with_gear_meta(gear_list, target_gear)
+	print("[TUTORIAL DEBUG] _find_button_with_gear_meta -> %s" % [
+		("found button id=%d, text starts: %s" % [result.get_instance_id(), result.text.substr(0, 30)]) if result else "NULL (no matching button found)"
+	])
+
+	# Full dump: every row currently in gear_list, in actual visual
+	# order, with its item name and real on-screen rect — so we can see
+	# directly whether "result" (the chosen target) is really sitting
+	# where we think it is, or whether something else is. Gear buttons
+	# are nested one level inside each row's HBoxContainer, not direct
+	# children of gear_list, so this walks one level in to find them.
+	print("[TUTORIAL DEBUG] --- gear_list dump (visual order) ---")
+	for row in gear_list.get_children():
+		for child in row.get_children():
+			if child is Button and child.has_meta("gear"):
+				var g: GearItem = child.get_meta("gear")
+				var xform = child.get_global_transform_with_canvas()
+				var marker = " <== RESULT" if child == result else ""
+				print("[TUTORIAL DEBUG]   %s [%s] id=%d pos=%s size=%s%s" % [
+					g.item_name, g.get_slot_name(), child.get_instance_id(), xform.origin, child.size, marker
+				])
+	print("[TUTORIAL DEBUG] --- end dump ---")
+
+	# Scroll the gear panel so the button is actually visible — the list
+	# can be long enough that the item sits below the fold, which would
+	# make the tutorial highlight appear on a blank area of the screen.
+	if result:
+		var scroll = gear_list.get_parent()
+		if scroll is ScrollContainer:
+			scroll.ensure_control_visible(result)
+	return result
+
+func _find_button_with_gear_meta(node: Node, target_gear: GearItem) -> Control:
+	for child in node.get_children():
+		if child is Button and child.has_meta("gear") and child.get_meta("gear") == target_gear:
+			return child
+		var found = _find_button_with_gear_meta(child, target_gear)
+		if found: return found
+	return null
+
+# Finds the empty slot button on the Knight (first troop in roster).
+# The tutorial targets this for the initial gear equip step.
+func _find_slot_button_for_hero(slot_name: String) -> Control:
+	if PlayerInventory.troop_roster.is_empty(): return null
+	var knight: TroopData = PlayerInventory.troop_roster[0]
+	for slot_btn in all_slot_buttons:
+		if not slot_btn.has_meta("troop") or not slot_btn.has_meta("slot"): continue
+		var troop: TroopData = slot_btn.get_meta("troop")
+		if troop == knight and slot_btn.get_meta("slot") == slot_name:
+			return slot_btn
+	return null
+
+# Finds the empty slot button on whichever troop was most recently
+# added to the roster (the tutorial dungeon's free recruit, at this
+# point in the sequence) — rather than the Hero.
+func _find_slot_button_for_newest_recruit(slot_name: String) -> Control:
+	if PlayerInventory.troop_roster.is_empty(): return null
+	var newest: TroopData = PlayerInventory.troop_roster[PlayerInventory.troop_roster.size() - 1]
+	for slot_btn in all_slot_buttons:
+		if not slot_btn.has_meta("troop") or not slot_btn.has_meta("slot"): continue
+		var troop: TroopData = slot_btn.get_meta("troop")
+		if troop == newest and slot_btn.get_meta("slot") == slot_name:
+			return slot_btn
+	return null
 
 func _build_ui() -> void:
 	# Dark background
@@ -67,7 +204,7 @@ func _build_ui() -> void:
 	title_hbox.add_child(title)
 
 	var suggest_btn = Button.new()
-	suggest_btn.text = "Suggestions: ON"
+	suggest_btn.text = "Suggestions: " + ("ON" if show_suggestions else "OFF")
 	suggest_btn.add_theme_font_size_override("font_size", 11)
 	suggest_btn.pressed.connect(func():
 		show_suggestions = !show_suggestions
@@ -158,9 +295,12 @@ func _build_ui() -> void:
 	recruit_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
 	recruit_btn.tooltip_text = "Spend Food and Gold on recruiting new units"
 	recruit_btn.pressed.connect(func():
+		if PlayerInventory.tutorial_active:
+			TutorialRouter.advance_step("recruit_intro")
 		SaveManager.save_game()
 		get_tree().change_scene_to_file("res://scenes/recruit_screen.tscn"))
 	top_nav_hbox.add_child(recruit_btn)
+	tutorial_recruit_btn = recruit_btn
 
 	var gear_shop_btn = Button.new()
 	gear_shop_btn.text = "🛒 Gear Shop"
@@ -172,6 +312,7 @@ func _build_ui() -> void:
 		SaveManager.save_game()
 		get_tree().change_scene_to_file("res://scenes/gear_shop_screen.tscn"))
 	top_nav_hbox.add_child(gear_shop_btn)
+	tutorial_gear_shop_btn = gear_shop_btn
 
 	var talent_btn = Button.new()
 	talent_btn.text = "🌳 Talents"
@@ -180,9 +321,12 @@ func _build_ui() -> void:
 	talent_btn.add_theme_color_override("font_color", Color(0.6, 0.9, 0.7))
 	talent_btn.tooltip_text = "Spend resources to unlock permanent upgrades"
 	talent_btn.pressed.connect(func():
+		if PlayerInventory.tutorial_active:
+			TutorialRouter.advance_step("talents_intro")
 		SaveManager.save_game()
 		get_tree().change_scene_to_file("res://scenes/talent_tree_screen.tscn"))
 	top_nav_hbox.add_child(talent_btn)
+	tutorial_talent_btn = talent_btn
 
 	var admin_btn = Button.new()
 	admin_btn.text = "⚙ Admin"
@@ -205,11 +349,21 @@ func _build_ui() -> void:
 	action_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
 	action_btn.tooltip_text = "Top-down WASD action dungeon"
 	action_btn.pressed.connect(func():
-		PlayerInventory.dungeon_troop_id = ""   # standalone path always uses the Hero
+		if PlayerInventory.tutorial_active:
+			# The tutorial dungeon is a short, fixed-length scripted
+			# clear, not an open-ended survival run — skip the duration
+			# picker entirely and go straight there, so a tutorial
+			# player is never accidentally routed into the real
+			# survival arena instead.
+			TutorialRouter.advance_step("dungeon_send")
+			SaveManager.save_game()
+			get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")
+			return
 		SaveManager.save_game()
 		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/action_dungeon.tscn")
 		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))
 	dungeon_hbox.add_child(action_btn)
+	tutorial_dungeon_btn = action_btn
 
 	# --- STATUS BAR ---
 	var status_panel = PanelContainer.new()
@@ -225,6 +379,7 @@ func _populate_troops() -> void:
 	for child in troop_list.get_children():
 		child.queue_free()
 	all_slot_buttons.clear()
+	tutorial_heal_buttons.clear()
 
 	var map_label = Label.new()
 	map_label.text = "🗺 TROOPS  (stationed on the world map, fight in defense battles)"
@@ -354,6 +509,7 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	heal_btn.add_theme_font_size_override("font_size", 11)
 	heal_btn.pressed.connect(_on_heal_troop_pressed.bind(troop, card))
 	hp_hbox.add_child(heal_btn)
+	tutorial_heal_buttons[troop] = heal_btn
 
 	_refresh_hp_row(hp_label, heal_btn, troop)
 
@@ -440,11 +596,18 @@ func _on_unequip_pressed(troop: TroopData, slot_key: String, slot_btn: Button) -
 func _make_gear_button(gear: GearItem) -> Button:
 	var btn = DraggableGearButton.new()
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	btn.custom_minimum_size = Vector2(0, 56)
 	btn.set_meta("gear", gear)
 	btn.gear_item = gear
 
 	btn.text = _gear_display_text(gear, false)
+	# Height sized to the actual text instead of a fixed guess — items
+	# vary a lot in line count (1-3 stats, optional set-bonus line,
+	# optional suggestion line), so a single fixed height either wastes
+	# space on simple items or overflows into the next row on complex
+	# ones. ~16px per line plus a little breathing room on top/bottom.
+	var line_count = btn.text.count("\n") + 1
+	btn.custom_minimum_size = Vector2(0, line_count * 16 + 14)
+
 	if selected_gear == gear:
 		btn.add_theme_color_override("font_color", Color(1, 1, 0))
 		selected_gear_button = btn
@@ -492,8 +655,7 @@ func _gear_display_text(gear: GearItem, show_ranges: bool) -> String:
 			else:
 				stat_str += " [%s-%s]%s" % [str(r["min"]), str(r["max"]), " ✦" if is_q else ""]
 
-		stat_lines += "
-  " + stat_str
+		stat_lines += "\n  " + stat_str
 
 	# Unit suggestions
 	var suggest_str = ""
@@ -554,6 +716,11 @@ func _on_heal_troop_pressed(troop: TroopData, card: PanelContainer) -> void:
 	if hp_label and heal_btn:
 		_refresh_hp_row(hp_label, heal_btn, troop)
 
+	# Advance the tutorial LAST, after the HP row refresh above — see the
+	# matching comment in _equip_gear_to_slot() for why this order matters.
+	if PlayerInventory.tutorial_active:
+		TutorialRouter.advance_step("heal_intro")
+
 func _on_focus_troop_pressed(troop: TroopData) -> void:
 	focus_troop = null if focus_troop == troop else troop
 	_populate_troops()
@@ -570,7 +737,7 @@ func _on_gear_hover(gear: GearItem, btn: Button) -> void:
 		_show_compare(gear, focus_troop, gear.get_slot_name())
 
 func _on_gear_unhover(gear: GearItem, btn: Button) -> void:
-	btn.text = _gear_display_text(gear, true)
+	btn.text = _gear_display_text(gear, false)
 	_hide_compare()
 
 func _on_slot_pressed(btn: Button, troop: TroopData, slot_key: String) -> void:
@@ -629,7 +796,23 @@ func _on_gear_selected(gear: GearItem, btn: Button) -> void:
 			highlighted += 1
 
 	_update_status("Selected %s — highlighted %d matching %s slot(s). Click one to equip." % [gear.item_name, highlighted, matching_slot])
+
 	_populate_gear()
+
+	# Advance the tutorial LAST, after the list refresh above — see the
+	# matching comment in _equip_gear_to_slot() for why this order matters.
+	# Branches on the tutorial's actual current step id rather than the
+	# clicked item's slot type — both equip steps use WEAPON-slot items
+	# now (hero AND recruit each get a Practice Sword), so slot type
+	# alone can no longer tell the two steps apart the way it used to
+	# when one was a weapon step and the other was an armor step.
+	if PlayerInventory.tutorial_active:
+		var current_step = TutorialSteps.get_step(PlayerInventory.tutorial_step_index)
+		var current_step_id = current_step.get("id", "") if current_step else ""
+		if current_step_id == "equip_hero_pick_item":
+			TutorialRouter.advance_step("equip_hero_pick_item")
+		elif current_step_id == "equip_recruit_pick_item":
+			TutorialRouter.advance_step("equip_recruit_pick_item")
 
 # Shared equip logic used regardless of which was clicked first (slot or gear)
 func _equip_gear_to_slot(gear: GearItem, troop: TroopData, slot_key: String, slot_btn: Button) -> void:
@@ -653,6 +836,21 @@ func _equip_gear_to_slot(gear: GearItem, troop: TroopData, slot_key: String, slo
 
 	_populate_gear()
 	_update_set_bonuses()
+
+	# Advance the tutorial LAST, after the gear list has actually been
+	# rebuilt above — advance_step() synchronously resolves and
+	# highlights the NEXT step, which (for the very next step in this
+	# sequence) needs to search this exact list. Firing it any earlier
+	# means that search runs against the stale, still-sorted, not-yet-
+	# rebuilt list, finding a button that's about to be freed and
+	# leaving the highlight frozen at a pixel position that the
+	# freshly-rebuilt list will have since reassigned to a different
+	# item entirely.
+	if PlayerInventory.tutorial_active:
+		if not PlayerInventory.troop_roster.is_empty() and troop == PlayerInventory.troop_roster[0]:
+			TutorialRouter.advance_step("equip_hero_pick_slot")
+		elif troop == PlayerInventory.troop_roster[PlayerInventory.troop_roster.size() - 1]:
+			TutorialRouter.advance_step("equip_recruit_pick_slot")
 
 func _clear_selection() -> void:
 	if selected_slot_button:

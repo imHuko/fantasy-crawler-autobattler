@@ -56,7 +56,7 @@ var conquering_zone: bool = false
 # the same as the map's Easy/Normal/Hard/Nightmare difficulty above.
 var dungeon_tier: String = "Standard"   # "Quick", "Standard", "Deep Delve"
 var dungeon_duration_seconds: float = 600.0   # how long the next survival run should last, set by the duration picker
-var dungeon_troop_id: String = ""        # troop_id of whichever troop is being played this dungeon run
+var commander_class: String = "ARCHER"   # class profile the Commander uses in dungeon runs
 
 # Resources — banked for spending (recruiting, rerolling, talents, etc).
 # Food and Gold are interchangeable for spending purposes — costs are
@@ -119,21 +119,18 @@ var last_battle_was_conquest: bool = false
 
 # Tutorial state
 var tutorial_complete: bool = false
-var play_tutorial: bool = true   # set from new game screen checkbox
+var play_tutorial: bool = true   # set from new game screen checkbox; only matters before the walkthrough starts
+
+# The full forced walkthrough, in order. Each entry is a step ID; the
+# actual text/target/screen for each ID lives in TutorialSteps
+# (autoloads/tutorial_steps.gd), kept separate from this raw progress
+# tracker so content can be edited without touching save data shape.
+var tutorial_step_index: int = 0
+var tutorial_active: bool = false   # true once the walkthrough has actually begun, false once finished or skipped
 var map_tutorial_seen: Dictionary = {
 	"intro": false, "conquer": false, "build": false,
 	"move_troops": false, "end_turn": false,
 }
-
-# The Hero is now a regular member of troop_roster (flagged via
-# TroopData.is_hero) rather than a separate dedicated character — usable
-# on the map, in defense battles, and in the action dungeon, all as the
-# same single character.
-func get_hero() -> TroopData:
-	for troop in troop_roster:
-		if troop.is_hero:
-			return troop
-	return null
 
 # Snapshot of troop names eligible for the current/next battle.
 # Set by world_map right before launching defense_scene so the battle

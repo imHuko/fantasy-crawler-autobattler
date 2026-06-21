@@ -1,14 +1,25 @@
 extends Node2D
 
 # -------------------------------------------------------
-# Tutorial Dungeon — scripted intro, 3 short rooms,
-# ends with a choice of 2 random recruits
+# Tutorial Dungeon — a short, scripted version of the real survival
+# arena (open area, camera follows the hero, enemies spawn
+# continuously) rather than the old fixed 3-room layout. Guarantees
+# exactly 4 gear drops (one for each slot) and one free recruit,
+# regardless of how the fight actually goes, so the tutorial sequence
+# downstream (equip on hero, equip on recruit, sell, upgrade) always
+# has something real to work with.
+#
+# This is intentionally much smaller and tighter than the real
+# action_dungeon.gd survival arena — no difficulty scaling, no bosses,
+# no save-zone mechanic, no death penalty. It exists purely to teach,
+# not to challenge.
 # -------------------------------------------------------
 
-const ROOM_W = 640
-const ROOM_H = 480
+const ARENA_W = 1400
+const ARENA_H = 1000
 const WALL_T = 32
-const MIN_SPAWN_DIST_FROM_HERO = 180.0
+const MIN_SPAWN_DIST_FROM_HERO = 220.0
+const KILLS_TO_CLEAR = 8   # enemies defeated before the dungeon ends
 
 const C_FLOOR  = Color(0.16, 0.14, 0.20)
 const C_WALL   = Color(0.28, 0.24, 0.32)
@@ -17,67 +28,88 @@ const C_ENEMY  = Color(0.85, 0.25, 0.25)
 const C_PROJ_H = Color(0.50, 0.90, 1.00)
 const C_PROJ_E = Color(1.00, 0.55, 0.10)
 
-const HERO_SPEED = 180.0
-const ATTACK_INTERVAL = 0.7
-const PROJ_SPEED = 320.0
+const HERO_SPEED = 200.0
+const ATTACK_INTERVAL = 0.6
+const PROJ_SPEED = 340.0
+const SPAWN_INTERVAL = 2.2   # seconds between new enemy spawns
+const MAX_ALIVE_ENEMIES = 3   # keeps the fight readable for a first-time player
 
-var room_index: int = 0
-var total_rooms: int = 3
-
-var hero_hp: int = 120
-var hero_max_hp: int = 120
-var hero_attack: int = 16
+var hero_hp: int = 140
+var hero_max_hp: int = 140
+var hero_attack: int = 18
 var attack_timer: float = 0.0
+var spawn_timer: float = 1.0
 
-var hero_pos: Vector2 = Vector2(ROOM_W/2, ROOM_H/2)
+var hero_pos: Vector2 = Vector2(ARENA_W / 2, ARENA_H / 2)
 var enemies: Array = []
 var hero_projs: Array = []
 var enemy_projs: Array = []
 
-var room_node: Node2D = null
+var arena_node: Node2D = null
 var hero_rect: ColorRect = null
+var camera: Camera2D = null
 var hud_hp: Label = null
-var hud_room: Label = null
+var hud_kills: Label = null
 var hud_tip: Label = null
 
 var game_over: bool = false
-var room_cleared: bool = false
+var kills: int = 0
 
 func _ready() -> void:
-	_build_hud()
-	_load_room(0)
-
-func _load_room(idx: int) -> void:
-	room_index = idx
-	room_cleared = false
-
-	if room_node:
-		room_node.queue_free()
-	room_node = Node2D.new()
-	add_child(room_node)
-	move_child(room_node, 0)
-
-	enemies.clear()
-	hero_projs.clear()
-	enemy_projs.clear()
-	hero_pos = Vector2(ROOM_W/2, ROOM_H/2)
-
-	_build_room_visuals()
+	_build_arena_visuals()
 	_build_hero()
-	_spawn_room_enemies(idx)
-	_refresh_hud()
+	_setup_camera()
+	_build_hud()
+	_set_tip("WASD to move. Get close to enemies — you'll auto-attack the nearest one.")
+	TutorialRouter.resolve_current_step(self)
 
-	match idx:
-		0: _set_tip("WASD to move. Get close to enemies \\u2014 you'll auto-attack the nearest one.")
-		1: _set_tip("Keep moving \\u2014 standing still near multiple foes gets dangerous fast.")
-		2: _set_tip("Last room! Clear it to find your first recruit.")
+func _build_arena_visuals() -> void:
+	arena_node = Node2D.new()
+	add_child(arena_node)
+	move_child(arena_node, 0)
 
-func _build_room_visuals() -> void:
-	_add_rect(room_node, Vector2(WALL_T, WALL_T), Vector2(ROOM_W-WALL_T*2, ROOM_H-WALL_T*2), C_FLOOR)
-	_add_rect(room_node, Vector2(0,0), Vector2(ROOM_W, WALL_T), C_WALL)
-	_add_rect(room_node, Vector2(0, ROOM_H-WALL_T), Vector2(ROOM_W, WALL_T), C_WALL)
-	_add_rect(room_node, Vector2(0,0), Vector2(WALL_T, ROOM_H), C_WALL)
-	_add_rect(room_node, Vector2(ROOM_W-WALL_T, 0), Vector2(WALL_T, ROOM_H), C_WALL)
+	_add_rect(arena_node, Vector2.ZERO, Vector2(ARENA_W, ARENA_H), C_FLOOR)
+	_add_rect(arena_node, Vector2(-WALL_T, -WALL_T), Vector2(ARENA_W + WALL_T*2, WALL_T), C_WALL)
+	_add_rect(arena_node, Vector2(-WALL_T, ARENA_H), Vector2(ARENA_W + WALL_T*2, WALL_T), C_WALL)
+	_add_rect(arena_node, Vector2(-WALL_T, -WALL_T), Vector2(WALL_T, ARENA_H + WALL_T*2), C_WALL)
+	_add_rect(arena_node, Vector2(ARENA_W, -WALL_T), Vector2(WALL_T, ARENA_H + WALL_T*2), C_WALL)
+	_build_floor_props()
+
+# Scatters small visual-only debris rects across the floor so the
+# player can perceive their own movement against the otherwise-solid
+# background. Purely decorative — no collision, no gameplay effect.
+# Uses a fixed seed so the layout is identical every run (avoids
+# confusing the player with a different-looking arena on retry).
+func _build_floor_props() -> void:
+	var rng = RandomNumberGenerator.new()
+	rng.seed = 42   # fixed — same map every run
+
+	# A few distinct "rock/debris" shades, all subtle variations on the floor color
+	var prop_colors = [
+		Color(0.22, 0.20, 0.26),   # slightly lighter stone
+		Color(0.13, 0.11, 0.17),   # slightly darker shadow
+		Color(0.25, 0.21, 0.20),   # warm brown chip
+		Color(0.19, 0.18, 0.24),   # neutral mid tone
+	]
+
+	var margin = WALL_T + 30.0   # keep props away from walls
+	var center = Vector2(ARENA_W / 2.0, ARENA_H / 2.0)
+	var clear_radius = 120.0     # keep center spawn area clear
+
+	for i in range(80):
+		var pos = Vector2(
+			rng.randf_range(margin, ARENA_W - margin),
+			rng.randf_range(margin, ARENA_H - margin)
+		)
+		if pos.distance_to(center) < clear_radius:
+			continue   # skip props too close to where the hero spawns
+
+		var sz = Vector2(
+			rng.randf_range(4.0, 14.0),
+			rng.randf_range(3.0, 10.0)
+		)
+		var col = prop_colors[rng.randi() % prop_colors.size()]
+		_add_rect(arena_node, pos, sz, col)
 
 func _add_rect(parent: Node, pos: Vector2, sz: Vector2, col: Color) -> void:
 	var r = ColorRect.new()
@@ -91,49 +123,58 @@ func _build_hero() -> void:
 	hero_rect = ColorRect.new()
 	hero_rect.size = Vector2(24, 24)
 	hero_rect.color = C_HERO
-	room_node.add_child(hero_rect)
+	arena_node.add_child(hero_rect)
 	hero_rect.position = hero_pos - Vector2(12, 12)
 
-func _spawn_room_enemies(idx: int) -> void:
-	var count = [1, 2, 3][idx]
+func _setup_camera() -> void:
+	camera = Camera2D.new()
+	camera.position = hero_pos
+	camera.limit_left = 0
+	camera.limit_top = 0
+	camera.limit_right = ARENA_W
+	camera.limit_bottom = ARENA_H
+	camera.enabled = true
+	add_child(camera)
 
-	for i in range(count):
-		var ex: float
-		var ey: float
-		var tries = 0
-		# Keep rerolling until the spawn point is far enough from the hero's
-		# starting position — prevents enemies appearing right on top of the
-		# player the instant a room loads, which felt like an unfair ambush.
-		while true:
-			ex = randf_range(WALL_T + 100, ROOM_W - WALL_T - 100)
-			ey = randf_range(WALL_T + 100, ROOM_H - WALL_T - 100)
-			tries += 1
-			if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
-				break
+func _spawn_enemy() -> void:
+	var ex: float
+	var ey: float
+	var tries = 0
+	while true:
+		ex = randf_range(WALL_T + 80, ARENA_W - WALL_T - 80)
+		ey = randf_range(WALL_T + 80, ARENA_H - WALL_T - 80)
+		tries += 1
+		if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
+			break
 
-		var sz = 28.0
-		var max_hp = 18 + idx * 10
+	var sz = 28.0
+	var rect = ColorRect.new()
+	rect.size = Vector2(sz, sz)
+	rect.color = C_ENEMY
+	rect.position = Vector2(ex - sz/2, ey - sz/2)
+	arena_node.add_child(rect)
 
-		var rect = ColorRect.new()
-		rect.size = Vector2(sz, sz)
-		rect.color = C_ENEMY
-		rect.position = Vector2(ex - sz/2, ey - sz/2)
-		room_node.add_child(rect)
-
-		enemies.append({
-			"pos": Vector2(ex, ey), "hp": max_hp, "max_hp": max_hp,
-			"attack": 4 + idx * 2, "speed": 50.0,
-			"shoot_t": randf_range(1.0, 2.0), "sz": sz, "rect": rect,
-		})
+	enemies.append({
+		"pos": Vector2(ex, ey), "hp": 22, "max_hp": 22,
+		"attack": 6, "speed": 55.0,
+		"shoot_t": randf_range(1.0, 2.0), "sz": sz, "rect": rect,
+	})
 
 func _process(delta: float) -> void:
 	if game_over: return
 	_move_hero(delta)
+	_handle_spawning(delta)
 	_attack_tick(delta)
 	_move_projectiles(delta)
 	_process_enemies(delta)
 	_update_visuals()
-	_check_room_cleared()
+	camera.position = hero_pos
+
+func _handle_spawning(delta: float) -> void:
+	spawn_timer -= delta
+	if spawn_timer <= 0 and enemies.size() < MAX_ALIVE_ENEMIES:
+		_spawn_enemy()
+		spawn_timer = SPAWN_INTERVAL
 
 func _move_hero(delta: float) -> void:
 	var dir = Vector2.ZERO
@@ -143,8 +184,8 @@ func _move_hero(delta: float) -> void:
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): dir.x += 1
 	if dir.length() > 0: dir = dir.normalized()
 	hero_pos += dir * HERO_SPEED * delta
-	hero_pos.x = clamp(hero_pos.x, WALL_T + 12, ROOM_W - WALL_T - 12)
-	hero_pos.y = clamp(hero_pos.y, WALL_T + 12, ROOM_H - WALL_T - 12)
+	hero_pos.x = clamp(hero_pos.x, WALL_T + 12, ARENA_W - WALL_T - 12)
+	hero_pos.y = clamp(hero_pos.y, WALL_T + 12, ARENA_H - WALL_T - 12)
 
 func _attack_tick(delta: float) -> void:
 	attack_timer -= delta
@@ -166,7 +207,7 @@ func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int) -> void:
 	rect.size = Vector2(9, 9)
 	rect.color = C_PROJ_H if is_hero else C_PROJ_E
 	rect.position = from - Vector2(4.5, 4.5)
-	room_node.add_child(rect)
+	arena_node.add_child(rect)
 	var proj = {"pos": Vector2(from.x, from.y), "dir": dir, "damage": dmg, "rect": rect}
 	if is_hero: hero_projs.append(proj)
 	else: enemy_projs.append(proj)
@@ -176,7 +217,7 @@ func _move_projectiles(delta: float) -> void:
 	for p in hero_projs:
 		if not is_instance_valid(p["rect"]): continue
 		p["pos"] += p["dir"] * PROJ_SPEED * delta
-		var oob = p["pos"].x < WALL_T or p["pos"].x > ROOM_W-WALL_T or p["pos"].y < WALL_T or p["pos"].y > ROOM_H-WALL_T
+		var oob = p["pos"].x < WALL_T or p["pos"].x > ARENA_W-WALL_T or p["pos"].y < WALL_T or p["pos"].y > ARENA_H-WALL_T
 		if oob:
 			p["rect"].queue_free()
 			continue
@@ -196,7 +237,7 @@ func _move_projectiles(delta: float) -> void:
 	for p in enemy_projs:
 		if not is_instance_valid(p["rect"]): continue
 		p["pos"] += p["dir"] * (PROJ_SPEED * 0.6) * delta
-		var oob = p["pos"].x < WALL_T or p["pos"].x > ROOM_W-WALL_T or p["pos"].y < WALL_T or p["pos"].y > ROOM_H-WALL_T
+		var oob = p["pos"].x < WALL_T or p["pos"].x > ARENA_W-WALL_T or p["pos"].y < WALL_T or p["pos"].y > ARENA_H-WALL_T
 		if oob:
 			p["rect"].queue_free()
 			continue
@@ -211,8 +252,8 @@ func _process_enemies(delta: float) -> void:
 	for e in enemies:
 		var dir = (hero_pos - e["pos"]).normalized()
 		e["pos"] += dir * e["speed"] * delta
-		e["pos"].x = clamp(e["pos"].x, WALL_T + e["sz"]/2, ROOM_W - WALL_T - e["sz"]/2)
-		e["pos"].y = clamp(e["pos"].y, WALL_T + e["sz"]/2, ROOM_H - WALL_T - e["sz"]/2)
+		e["pos"].x = clamp(e["pos"].x, WALL_T + e["sz"]/2, ARENA_W - WALL_T - e["sz"]/2)
+		e["pos"].y = clamp(e["pos"].y, WALL_T + e["sz"]/2, ARENA_H - WALL_T - e["sz"]/2)
 
 		e["shoot_t"] -= delta
 		if e["shoot_t"] <= 0:
@@ -226,6 +267,12 @@ func _process_enemies(delta: float) -> void:
 func _kill_enemy(e: Dictionary) -> void:
 	if is_instance_valid(e["rect"]): e["rect"].queue_free()
 	enemies.erase(e)
+	kills += 1
+	_refresh_hud()
+	if kills >= KILLS_TO_CLEAR:
+		game_over = true
+		_grant_rewards()
+		get_tree().create_timer(0.8).timeout.connect(_show_results)
 
 func _take_damage(amount: int) -> void:
 	hero_hp -= amount
@@ -234,42 +281,6 @@ func _take_damage(amount: int) -> void:
 	if hero_hp <= 0:
 		game_over = true
 		_show_defeat()
-
-func _check_room_cleared() -> void:
-	if room_cleared or not enemies.is_empty(): return
-	room_cleared = true
-	_drop_fixed_gear(room_index)
-	if room_index + 1 < total_rooms:
-		get_tree().create_timer(1.0).timeout.connect(func(): _load_room(room_index + 1))
-	else:
-		game_over = true
-		get_tree().create_timer(0.8).timeout.connect(_show_recruit_choice)
-
-# -------------------------------------------------------
-# Fixed tutorial gear — same every run, teaches the gear system
-# without randomization confusing a first-time player
-# -------------------------------------------------------
-func _drop_fixed_gear(idx: int) -> void:
-	var gear = GearItem.new()
-	match idx:
-		0:
-			gear.item_name = "Apprentice's Blade"
-			gear.rarity = GearItem.Rarity.COMMON
-			gear.slot = GearItem.Slot.WEAPON
-			gear.stats = {"attack": 6}
-		1:
-			gear.item_name = "Worn Chainmail"
-			gear.rarity = GearItem.Rarity.RARE
-			gear.slot = GearItem.Slot.ARMOR
-			gear.stats = {"hp": 25, "armor": 8}
-		2:
-			gear.item_name = "Survivor's Band"
-			gear.rarity = GearItem.Rarity.EPIC
-			gear.slot = GearItem.Slot.RING
-			gear.stats = {"attack": 8, "crit_chance": 0.06, "hp": 15}
-
-	PlayerInventory.add_gear(gear)
-	_set_tip("Found: %s! Check your inventory back at Management." % gear.item_name)
 
 func _update_visuals() -> void:
 	if hero_rect and is_instance_valid(hero_rect):
@@ -302,12 +313,11 @@ func _build_hud() -> void:
 	hud_hp.add_theme_font_size_override("font_size", 14)
 	vbox.add_child(hud_hp)
 
-	hud_room = Label.new()
-	hud_room.add_theme_font_size_override("font_size", 12)
-	hud_room.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	vbox.add_child(hud_room)
+	hud_kills = Label.new()
+	hud_kills.add_theme_font_size_override("font_size", 12)
+	hud_kills.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	vbox.add_child(hud_kills)
 
-	# Tip banner top center
 	var tip_panel = PanelContainer.new()
 	tip_panel.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	tip_panel.position.y = 8
@@ -326,11 +336,54 @@ func _refresh_hud() -> void:
 		hud_hp.text = "HP: %d / %d" % [hero_hp, hero_max_hp]
 		hud_hp.add_theme_color_override("font_color",
 			Color(0.9,0.2,0.2) if hero_hp < hero_max_hp*0.3 else Color(0.3,0.9,0.3))
-	if hud_room:
-		hud_room.text = "Room %d / %d" % [room_index + 1, total_rooms]
+	if hud_kills:
+		hud_kills.text = "Defeated: %d / %d" % [kills, KILLS_TO_CLEAR]
 
 func _set_tip(msg: String) -> void:
 	if hud_tip: hud_tip.text = msg
+
+# -------------------------------------------------------
+# Rewards — guaranteed every run, regardless of how the fight went.
+# Generates real gear via GearGenerator rather than hand-authored fixed
+# items, since GearGenerator already knows how to keep stats internally
+# consistent with whatever slot/rarity an item ends up with — hand-
+# overwriting .slot or .rarity on a generated item after the fact would
+# leave its stats rolled for the WRONG slot/rarity. Instead this
+# re-rolls (generate, check, discard if wrong) until each guaranteed
+# slot is filled, which is reliable in practice well within a handful
+# of tries since there are only 4 possible slots.
+# -------------------------------------------------------
+const TUTORIAL_DIFFICULTY = 1   # lowest difficulty, keeps stat rolls gentle
+
+func _grant_rewards() -> void:
+	# Wipe any loose gear sitting in inventory from before this tutorial
+	# run (leftover from earlier testing, a previous attempt, etc.) so
+	# the gear shop's lists only ever show what's granted below.
+	PlayerInventory.gear_inventory.clear()
+
+	# 4 IDENTICAL hand-built weapons — completely bypasses GearGenerator,
+	# so there's no random slot/rarity/stat roll that could ever come out
+	# wrong. Every later step (equip x2, sell, salvage) just needs "any
+	# weapon" rather than one specific named item, which structurally
+	# rules out the whole class of slot-mismatch bug that came up during
+	# testing (an ARMOR step accidentally resolving to a WEAPON item).
+	# Flow: equip on Hero, equip on recruit, sell one, salvage one — the
+	# upgrade step afterward targets whichever weapon is already equipped
+	# on the Hero, not a 5th loose item.
+	for i in range(4):
+		var weapon = GearItem.new()
+		weapon.item_name = "Practice Sword"
+		weapon.rarity = GearItem.Rarity.COMMON
+		weapon.slot = GearItem.Slot.WEAPON
+		weapon.quality = GearItem.Quality.NORMAL
+		weapon.stats = {"attack": 1}
+		weapon.stat_ranges = {}
+		PlayerInventory.add_gear(weapon)
+
+	var recruit = SaveManager.generate_recruit()
+	PlayerInventory.troop_roster.append(recruit)
+
+	_set_tip("Found gear and a new recruit!")
 
 # -------------------------------------------------------
 # End states
@@ -358,7 +411,7 @@ func _show_defeat() -> void:
 	vbox.add_child(title)
 
 	var sub = Label.new()
-	sub.text = "Don't worry \\u2014 try again. Sir Aldric is tougher than he looks."
+	sub.text = "Don't worry — try again."
 	sub.add_theme_color_override("font_color", Color(0.8,0.8,0.8))
 	vbox.add_child(sub)
 
@@ -368,7 +421,7 @@ func _show_defeat() -> void:
 	btn.pressed.connect(func(): get_tree().reload_current_scene())
 	vbox.add_child(btn)
 
-func _show_recruit_choice() -> void:
+func _show_results() -> void:
 	var overlay = CanvasLayer.new()
 	add_child(overlay)
 	var bg = ColorRect.new()
@@ -392,67 +445,27 @@ func _show_recruit_choice() -> void:
 	vbox.add_child(title)
 
 	var sub = Label.new()
-	sub.text = "You've found two survivors. Choose one to join your roster."
+	sub.text = "You found 4 pieces of gear and a new recruit. Let's go put them to use."
 	sub.add_theme_color_override("font_color", Color(0.8,0.8,0.8))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD
+	sub.custom_minimum_size = Vector2(260, 0)
 	vbox.add_child(sub)
 
-	# Roll 2 distinct random recruits
-	var t1 = SaveManager.generate_recruit()
-	var t2 = SaveManager.generate_recruit()
-	var tries = 0
-	while t2.troop_type == t1.troop_type and tries < 10:
-		t2 = SaveManager.generate_recruit()
-		tries += 1
+	var btn = Button.new()
+	btn.text = "Continue"
+	btn.custom_minimum_size = Vector2(200, 40)
+	btn.pressed.connect(_on_continue_pressed)
+	vbox.add_child(btn)
 
-	var hbox = HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 16)
-	vbox.add_child(hbox)
-
-	_add_recruit_card(hbox, t1)
-	_add_recruit_card(hbox, t2)
-
-func _add_recruit_card(parent: HBoxContainer, troop: TroopData) -> void:
-	var card = PanelContainer.new()
-	card.custom_minimum_size = Vector2(180, 0)
-	parent.add_child(card)
-
-	var vbox = VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
-	card.add_child(vbox)
-
-	var name_lbl = Label.new()
-	name_lbl.text = troop.troop_name
-	name_lbl.add_theme_font_size_override("font_size", 15)
-	name_lbl.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(name_lbl)
-
-	var type_lbl = Label.new()
-	type_lbl.text = "[%s]" % troop.get_type_name()
-	type_lbl.add_theme_font_size_override("font_size", 12)
-	type_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(type_lbl)
-
-	var stats_lbl = Label.new()
-	stats_lbl.text = "HP:%d ATK:%d\nDEF:%d SPD:%d" % [
-		troop.base_stats.get("hp",0), troop.base_stats.get("attack",0),
-		troop.base_stats.get("defense",0), troop.base_stats.get("speed",0)
-	]
-	stats_lbl.add_theme_font_size_override("font_size", 11)
-	stats_lbl.add_theme_color_override("font_color", Color(0.75,0.75,0.75))
-	stats_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(stats_lbl)
-
-	var choose_btn = Button.new()
-	choose_btn.text = "Recruit"
-	choose_btn.custom_minimum_size = Vector2(0, 36)
-	choose_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
-	choose_btn.pressed.connect(_on_recruit_chosen.bind(troop))
-	vbox.add_child(choose_btn)
-
-func _on_recruit_chosen(troop: TroopData) -> void:
-	PlayerInventory.troop_roster.append(troop)
-	PlayerInventory.tutorial_complete = true
+# Unlike the old tutorial, this does NOT set tutorial_complete or
+# navigate to the World Map directly — the new forced walkthrough has
+# many more steps after the dungeon (equip on hero, equip on recruit,
+# sell, the scripted defense battle, healing, talents, upgrade), so
+# finishing here would cut the rest of the sequence off. Just save and
+# hand off to whatever screen the next tutorial step actually needs —
+# the router itself decides that via TutorialSteps, not this script.
+func _on_continue_pressed() -> void:
+	TutorialRouter.advance_step("dungeon_run")   # advances here, not via Next — the WASD overlay has no Next button
 	SaveManager.save_game()
-	get_tree().change_scene_to_file("res://scenes/world_map.tscn")
+	get_tree().change_scene_to_file("res://scenes/management_screen.tscn")

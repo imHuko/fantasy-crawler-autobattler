@@ -38,11 +38,13 @@ var _all_enemies_spawned: bool = true
 var game_over: bool = false
 var base_hp: int = 20
 var base_max_hp: int = 20
+var _enemy_dmg_mult_override: float = 1.0   # set by _apply_defense_sandbox(); 1.0 = no change
 
 # Zone context — set by world map before launching this scene
 var battle_zone_id: int = -1
 var battle_started: bool = false   # true once player presses Begin Battle
 var begin_battle_btn: Button = null
+var retreat_btn: Button = null
 var is_conquering: bool = false
 var attack_force_mult: float = 1.0
 var battle_title: String = "Defend the Base"
@@ -56,6 +58,7 @@ var projectiles: Array = []
 
 # Roster slots UI
 var roster_slots: Array = []    # {troop_data, btn, placed}
+var sandbox_roster_hbox: HBoxContainer = null   # stored so sandbox_add_to_roster can append buttons live
 var selected_roster_idx: int = -1
 var place_cooldown: float = 0.0
 
@@ -71,12 +74,31 @@ var base_hp_bar: ColorRect
 func _ready() -> void:
 	_load_battle_context()
 	_plan_wave()
+	_apply_defense_sandbox()   # no-op when AdminPanel sandbox is off
 	_build_ui()
 	_build_field()
 	_spawn_battle_force()
 	_build_roster_ui()
 	_refresh_hud()
 	_show_wave_preview()
+	TutorialRouter.resolve_current_step(self)
+
+# Applies AdminPanel.defense_sandbox overrides if enabled — replaces
+# the wave rolled by _plan_wave() and scales base HP/dmg. Safe to call
+# even if AdminPanel isn't loaded (checks has_node first).
+func _apply_defense_sandbox() -> void:
+	if not Engine.has_singleton("AdminPanel"):
+		return
+	var sb = Engine.get_singleton("AdminPanel").defense_sandbox
+	if not sb.get("enabled", false):
+		return
+	var custom_wave = Engine.get_singleton("AdminPanel").get_defense_sandbox_wave()
+	if not custom_wave.is_empty():
+		planned_wave = custom_wave
+	base_max_hp = int(base_max_hp * sb.get("hp_mult", 1.0))
+	base_max_hp = max(1, base_max_hp)
+	base_hp = base_max_hp
+	_enemy_dmg_mult_override = sb.get("dmg_mult", 1.0)
 
 func _load_battle_context() -> void:
 	battle_zone_id = PlayerInventory.current_battle_zone
@@ -87,6 +109,8 @@ func _load_battle_context() -> void:
 
 	# Scale base HP by force multiplier
 	base_max_hp = int(20 * max(0.5, attack_force_mult))
+	if PlayerInventory.unlocked_talents.get("buildings_fortified_walls", false):
+		base_max_hp = int(base_max_hp * 1.30)
 	base_hp = base_max_hp
 
 # -------------------------------------------------------
@@ -162,12 +186,19 @@ func _build_ui() -> void:
 	back_btn.text = "Retreat"
 	back_btn.pressed.connect(_on_retreat)
 	top_hbox.add_child(back_btn)
+	retreat_btn = back_btn
+	# The tutorial's scripted defense is deliberately winnable by a wide
+	# margin and exists specifically to teach placement + Begin Battle —
+	# retreating here would let the player skip that lesson entirely
+	# without ever placing a unit or fighting, so it's not offered.
+	if PlayerInventory.tutorial_active:
+		retreat_btn.visible = false
 
 	# Bottom roster panel
 	var bottom = PanelContainer.new()
 	bottom.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	bottom.size.y = 110
-	bottom.position.y = -110
+	bottom.size.y = 160
+	bottom.position.y = -160
 	hud.add_child(bottom)
 
 	var roster_vbox = VBoxContainer.new()
@@ -182,6 +213,7 @@ func _build_ui() -> void:
 	var roster_hbox = HBoxContainer.new()
 	roster_hbox.add_theme_constant_override("separation", 6)
 	roster_vbox.add_child(roster_hbox)
+	sandbox_roster_hbox = roster_hbox
 
 	# Build a slot button for each troop available to this battle
 	var available_troops = _get_battle_roster()
@@ -190,7 +222,7 @@ func _build_ui() -> void:
 		var eff = troop.get_effective_stats()
 		var col = TROOP_COLORS.get(troop.get_type_name(), Color.WHITE)
 
-		var btn = Button.new()
+		var btn = DraggableRosterButton.new()
 		btn.custom_minimum_size = Vector2(130, 72)
 		btn.text = "%s\n[%s]\nHP:%d ATK:%d\nDEF:%d SPD:%d" % [
 			troop.troop_name, troop.get_type_name(),
@@ -199,15 +231,20 @@ func _build_ui() -> void:
 		]
 		btn.add_theme_color_override("font_color", col)
 		btn.add_theme_font_size_override("font_size", 11)
+		btn.roster_idx = i
+		btn.troop_name = troop.troop_name
+		btn.display_color = col
 		btn.pressed.connect(_on_roster_selected.bind(i))
 		roster_hbox.add_child(btn)
 		roster_slots.append({"troop": troop, "btn": btn, "placed": false})
 
 	if available_troops.is_empty():
 		var warn = Label.new()
-		warn.text = "No troops stationed here! You'll have to fight with whatever you brought \\u2014 nothing."
+		warn.text = "No troops stationed here! You'll have to fight with whatever you brought \u2014 nothing."
 		warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
 		roster_hbox.add_child(warn)
+
+	_build_sandbox_bar(roster_vbox)
 
 # Returns the troops eligible for this battle.
 # If a zone is set, only troops stationed at that zone (by name) can be placed.
@@ -230,6 +267,27 @@ func _build_field() -> void:
 	field_node = Node2D.new()
 	field_node.position = Vector2(0, 52)   # below top HUD bar
 	add_child(field_node)
+
+	# Drag-and-drop placement zone — Godot's drag/drop callbacks
+	# (_can_drop_data/_drop_data) only exist on Control, not Node2D, so
+	# this invisible Control sits on top of field_node's placeable area
+	# specifically to catch drops. It mirrors the exact same boundary
+	# the existing click-to-place _input() handler already uses
+	# (BASE_X+30 to FIELD_W/2, y from 10 to FIELD_H-120), so dragging
+	# and clicking always agree on what counts as a valid spot.
+	var drop_zone = PlacementDropZone.new()
+	drop_zone.position = field_node.position + Vector2(BASE_X + 30, 10)
+	drop_zone.size = Vector2(FIELD_W / 2.0 - (BASE_X + 30), FIELD_H - 120 - 10)
+	# STOP is correct here, not PASS: the existing click-to-place
+	# fallback (_input() in this script) fires regardless of any
+	# Control's mouse_filter or whether it's obscured — _input is
+	# independent of the GUI/mouse_filter system entirely. So this zone
+	# can freely claim drag-and-drop input for itself without any risk
+	# of blocking that fallback path.
+	drop_zone.mouse_filter = Control.MOUSE_FILTER_STOP
+	drop_zone.field_node_ref = field_node
+	drop_zone.on_drop_callback = _on_roster_dropped
+	add_child(drop_zone)
 
 	# Ground
 	var ground = ColorRect.new()
@@ -308,6 +366,18 @@ func _input(event: InputEvent) -> void:
 			and click_pos.y > 10 and click_pos.y < FIELD_H - 120:
 				_place_troop(selected_roster_idx, click_pos)
 
+# Drag-and-drop placement — same effect as the click flow above, just
+# reached by dragging a roster button onto PlacementDropZone instead.
+# field_relative_pos is already converted to field_node-relative
+# coordinates by the drop zone, and since that zone is sized to exactly
+# match the click path's own boundary check, no boundary re-check is
+# needed here — anywhere inside the zone is already valid.
+func _on_roster_dropped(roster_idx: int, field_relative_pos: Vector2) -> void:
+	if game_over: return
+	if place_cooldown > 0: return
+	if roster_idx < 0 or roster_idx >= roster_slots.size(): return
+	_place_troop(roster_idx, field_relative_pos)
+
 # -------------------------------------------------------
 # Troop placement
 # -------------------------------------------------------
@@ -334,7 +404,9 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 	var col = TROOP_COLORS.get(type_name, Color.WHITE)
 	var sz = 30.0
 
-	# Sprite (procedural shape-based placeholder, swap for real art later)
+	# UnitSprite picks real animated art automatically if that troop type
+	# has an entry in unit_sprite.gd's SPRITE_KEYS — falls back to the
+	# procedural shape otherwise, no changes needed here either way.
 	var unit_type_map = {
 		"KNIGHT": UnitSprite.UnitType.KNIGHT, "ARCHER": UnitSprite.UnitType.ARCHER,
 		"MAGE": UnitSprite.UnitType.MAGE, "HEALER": UnitSprite.UnitType.HEALER,
@@ -433,6 +505,22 @@ const ENEMY_ARCHETYPES = {
 	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2), "symbol": "✪", "label": "Buffer" },
 	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 2.5,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
 }
+
+# Which UnitSprite art each enemy archetype displays as — mirrors the
+# same mapping used in the action dungeon for MELEE/RANGED/CHARGER/BUFFER,
+# so a given creature reads the same way in both modes. TANK gets Bull
+# (heavy/tough fits the role). ROGUE and BOSS have no dedicated forest
+# art yet, so they're left out here entirely and fall back to the
+# procedural shape (ENEMY_BASIC / ENEMY_BOSS) until/unless art is added
+# for them specifically — same "swap in gradually" pattern as everywhere
+# else in UnitSprite.
+const ARCHETYPE_UNIT_TYPES = {
+	"MELEE":   UnitSprite.UnitType.TREANT,
+	"TANK":    UnitSprite.UnitType.BULL,
+	"RANGED":  UnitSprite.UnitType.FAERIE,
+	"CHARGER": UnitSprite.UnitType.SPORE_BOMBER,
+	"BUFFER":  UnitSprite.UnitType.ANCIENT_TOTEM,
+}
 const RANGED_ATTACK_RANGE = 260.0
 const CHARGER_BURST_RANGE = 50.0
 const BUFFER_AURA_RANGE = 180.0
@@ -476,6 +564,13 @@ var planned_wave: Array = []   # pre-rolled archetype list for this battle, set 
 # consumes this same list rather than rolling fresh per-enemy, so what
 # the player sees in the preview is exactly what they'll actually fight.
 func _plan_wave() -> void:
+	# Tutorial uses a fixed small-but-hard wave so the Knight gets genuinely
+	# threatened. The high force_mult would otherwise roll 17+ enemies, which
+	# is overwhelming and not tutorial-appropriate.
+	if PlayerInventory.tutorial_active:
+		planned_wave = ["MELEE", "MELEE", "MELEE", "RANGED", "CHARGER"]
+		return
+
 	var stage = PlayerInventory.current_stage
 	var base_count = 6 + stage
 	var count = max(5, int(base_count * attack_force_mult))
@@ -605,15 +700,15 @@ func _spawn_one_enemy(stage: int, archetype: String, spawn_pos: Vector2) -> void
 	var sz = 50.0 if is_boss else 24.0
 	var max_hp = int((18 + stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult) * profile["hp_mult"])
 	var spd = (45.0 + stage * 4.0) * profile["speed_mult"]
-	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"])
+	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"] * _enemy_dmg_mult_override)
 
 	var ex = spawn_pos.x
 	var ey = spawn_pos.y
 
 	var rect = UnitSprite.new()
 	var sprite_color = Color(1, 0.2, 0.1) if is_boss else profile["color"]
-	rect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
-		sprite_color, sz)
+	var enemy_unit_type = UnitSprite.UnitType.ENEMY_BOSS if is_boss else ARCHETYPE_UNIT_TYPES.get(archetype, UnitSprite.UnitType.ENEMY_BASIC)
+	rect.setup(enemy_unit_type, sprite_color, sz)
 	rect.position = Vector2(ex - sz/2, ey - sz/2)
 	field_node.add_child(rect)
 
@@ -712,6 +807,7 @@ func _process_enemies(delta: float) -> void:
 
 		if target_troop and real_dist <= attack_range:
 			# In range — stop and fight (melee swing or ranged shot)
+			e["rect"].set_moving(false)
 			e["attack_t"] -= delta
 			if e["attack_t"] <= 0:
 				if enemy_type == "RANGED":
@@ -732,17 +828,20 @@ func _process_enemies(delta: float) -> void:
 			# Move toward target troop
 			var dir = (target_troop["pos"] - e["pos"]).normalized()
 			e["pos"] += dir * e["speed"] * delta
+			e["rect"].set_moving(true)
 			# Keep enemy inside the field bounds
 			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
 			e["pos"].y = clamp(e["pos"].y, 10, FIELD_H - 130)
 		elif e["pos"].x <= BASE_X + 30:
 			# No troops left — attack base
+			e["rect"].set_moving(false)
 			e["attack_t"] -= delta
 			if e["attack_t"] <= 0:
 				_damage_base(effective_atk)
 				e["attack_t"] = 1.0
 		else:
 			# No troops — march toward base
+			e["rect"].set_moving(true)
 			e["pos"].x -= e["speed"] * delta
 
 		# Reached base
@@ -793,6 +892,7 @@ func _find_enemy_target(e: Dictionary, enemy_type: String) -> Dictionary:
 # priority-kill target rather than just another body in the wave.
 func _process_buffer_enemy(e: Dictionary, delta: float) -> void:
 	# Drift slowly toward the action rather than standing frozen at spawn
+	var drifting = false
 	if placed_troops.size() > 0:
 		var nearest_troop_dist = INF
 		for t in placed_troops:
@@ -801,6 +901,9 @@ func _process_buffer_enemy(e: Dictionary, delta: float) -> void:
 		if nearest_troop_dist > BUFFER_AURA_RANGE * 1.5:
 			e["pos"].x -= e["speed"] * delta * 0.6
 			e["pos"].x = clamp(e["pos"].x, BASE_X, FIELD_W - 20)
+			drifting = true
+	if is_instance_valid(e["rect"]):
+		e["rect"].set_moving(drifting)
 
 	e["buff_t"] -= delta
 	if e["buff_t"] <= 0:
@@ -811,23 +914,30 @@ func _process_buffer_enemy(e: Dictionary, delta: float) -> void:
 				other["dmg_boost_t"] = BUFFER_DMG_BOOST_DURATION
 
 func _process_troops(delta: float) -> void:
+	var last_stand_unlocked = PlayerInventory.unlocked_talents.get("combat_last_stand", false)
 	for t in placed_troops:
 		if t["hp"] <= 0: continue
+
+		var ls_mult = 1.5 if last_stand_unlocked and t["hp"] < t["max_hp"] * 0.25 else 1.0
+		var t_atk = int(t["attack"] * ls_mult)
 
 		match t["type"]:
 			"KNIGHT":
 				# Tank — melee, also taunts: enemies within range prefer to target knights
-				_melee_engage(t, delta, 120.0, 70.0, t["attack"], 1.0)
+				_melee_engage(t, delta, 120.0, 70.0, t_atk, 1.0, _nearest_enemy_anywhere)
 			"ROGUE":
-				# Fast melee striker — short range but hits hard and fast, no taunt
-				_melee_engage(t, delta, 90.0, 95.0, int(t["attack"] * 1.3), 0.6)
+				# Fast melee striker — short range but hits hard and fast, no taunt.
+				# Bypasses front-line enemies to chase RANGED/BUFFER targets
+				# specifically, mirroring the enemy-side Rogue's own "Bypasser"
+				# behavior — falls back to nearest-any-enemy if neither is present.
+				_melee_engage(t, delta, 90.0, 95.0, int(t_atk * 1.3), 0.6, _nearest_priority_enemy_for_rogue)
 			"ARCHER":
 				# Ranged — shoots nearest enemy anywhere on the field, doesn't need to move
 				t["attack_t"] -= delta
 				if t["attack_t"] <= 0:
 					var nearest = _nearest_enemy(t["pos"], 500)
 					if nearest:
-						_fire_proj(t["pos"], nearest["pos"], t["attack"], true, t)
+						_fire_proj(t["pos"], nearest["pos"], t_atk, true, t)
 						t["attack_t"] = t["attack_interval"]
 			"MAGE":
 				# AoE — damages all enemies in a large radius.
@@ -846,11 +956,14 @@ func _process_troops(delta: float) -> void:
 						t["pos"] += dir * 40.0 * delta   # slow drift, much slower than melee
 						t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
 						t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
+						if is_instance_valid(t["rect"]): t["rect"].set_moving(true)
+				elif is_instance_valid(t["rect"]):
+					t["rect"].set_moving(false)
 
 				t["attack_t"] -= delta
 				if t["attack_t"] <= 0:
 					var hit_any = false
-					var spell_dmg = int(t["attack"] * 0.7 * (1.0 + t.get("spell_power", 0.0)))
+					var spell_dmg = int(t_atk * 0.7 * (1.0 + t.get("spell_power", 0.0)))
 					for e in enemies:
 						if t["pos"].distance_to(e["pos"]) < 250:
 							_damage_enemy(e, spell_dmg, t)
@@ -865,13 +978,13 @@ func _process_troops(delta: float) -> void:
 				if t["attack_t"] <= 0:
 					var nearest = _nearest_enemy(t["pos"], 200)
 					if nearest:
-						_fire_proj(t["pos"], nearest["pos"], int(t["attack"] * 0.4), true, t)
+						_fire_proj(t["pos"], nearest["pos"], int(t_atk * 0.4), true, t)
 					t["attack_t"] = t["attack_interval"]
 				t["heal_t"] -= delta
 				if t["heal_t"] <= 0:
 					var target = _nearest_wounded_troop(t["pos"])
 					if target:
-						var heal = max(5, int(t["attack"] * 0.5 * (1.0 + t.get("spell_power", 0.0))))
+						var heal = max(5, int(t_atk * 0.5 * (1.0 + t.get("spell_power", 0.0))))
 						target["hp"] = min(target["hp"] + heal, target["max_hp"])
 						_show_heal_effect(target["pos"])
 						_update_troop_hp_bar(target)
@@ -986,7 +1099,8 @@ func _show_heal_effect(pos: Vector2) -> void:
 	lbl.add_theme_font_size_override("font_size", 12)
 	lbl.position = pos - Vector2(12, 30)
 	field_node.add_child(lbl)
-	get_tree().create_timer(0.6).timeout.connect(func(): if is_instance_valid(lbl): lbl.queue_free())
+	get_tree().create_timer(0.6).timeout.connect(func():
+		if is_instance_valid(lbl): lbl.queue_free())
 
 # -------------------------------------------------------
 # Targeting helpers
@@ -1015,16 +1129,42 @@ func _nearest_enemy_anywhere(from: Vector2) -> Dictionary:
 			nearest = e
 	return nearest
 
+# The player's Rogue mirrors the enemy-side "Bypasser" Rogue's own
+# targeting (see _find_enemy_target above): rather than always engaging
+# whatever's nearest, it specifically hunts RANGED and BUFFER enemies —
+# the closest enemy-side equivalent of a player's own backline roles —
+# regardless of distance, only falling back to nearest-any-enemy if
+# neither archetype is present on the field.
+func _nearest_priority_enemy_for_rogue(from: Vector2) -> Dictionary:
+	var priority_target = {}
+	var priority_dist = INF
+	for e in enemies:
+		if e["hp"] <= 0: continue
+		if e["enemy_type"] in ["RANGED", "BUFFER"]:
+			var d = from.distance_to(e["pos"])
+			if d < priority_dist:
+				priority_dist = d
+				priority_target = e
+	if not priority_target.is_empty():
+		return priority_target
+	return _nearest_enemy_anywhere(from)
+
 # Shared logic for melee troops (Knight, Rogue): walk toward the nearest
 # enemy if out of range, attack if in range. Mirrors how enemies already
 # behave, so both sides actively close the distance and engage.
+# target_finder is always passed explicitly by the caller (rather than
+# relying on a default parameter value here) — Knight passes
+# _nearest_enemy_anywhere, Rogue passes its own priority-targeting
+# function, so it bypasses front-line enemies to chase RANGED/BUFFER
+# targets specifically.
 func _melee_engage(t: Dictionary, delta: float, attack_range: float, move_speed: float,
-		dmg: int, attack_speed_mult: float) -> void:
-	var target = _nearest_enemy_anywhere(t["pos"])
+		dmg: int, attack_speed_mult: float, target_finder: Callable) -> void:
+	var target = target_finder.call(t["pos"])
 	if target.is_empty(): return
 
 	var dist = t["pos"].distance_to(target["pos"])
 	if dist <= attack_range:
+		if is_instance_valid(t["rect"]): t["rect"].set_moving(false)
 		t["attack_t"] -= delta
 		if t["attack_t"] <= 0:
 			_damage_enemy(target, dmg, t)
@@ -1036,6 +1176,7 @@ func _melee_engage(t: Dictionary, delta: float, attack_range: float, move_speed:
 		# distance; ranged/stationary units rarely hit this branch at all.
 		var effective_speed = move_speed * (1.0 + t.get("move_speed_bonus", 0.0))
 		t["pos"] += dir * effective_speed * delta
+		if is_instance_valid(t["rect"]): t["rect"].set_moving(true)
 		# Keep troop inside the battlefield bounds
 		t["pos"].x = clamp(t["pos"].x, BASE_X + 10, FIELD_W - 20)
 		t["pos"].y = clamp(t["pos"].y, 10, FIELD_H - 130)
@@ -1118,6 +1259,9 @@ func _set_status(msg: String) -> void:
 
 func _on_begin_battle_pressed() -> void:
 	if battle_active: return
+	if PlayerInventory.tutorial_active and placed_troops.is_empty():
+		_set_status("Place at least one unit before beginning the battle!")
+		return
 	battle_started = true
 	_set_status("Charge!")
 
@@ -1150,6 +1294,10 @@ func _on_retreat() -> void:
 		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
 
 func _on_return() -> void:
+	if PlayerInventory.tutorial_active:
+		TutorialRouter.advance_step("defense_battle")
+		get_tree().change_scene_to_file("res://scenes/management_screen.tscn")
+		return
 	if battle_zone_id >= 0:
 		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
 	else:
@@ -1160,7 +1308,21 @@ func _on_return() -> void:
 # -------------------------------------------------------
 func _on_victory() -> void:
 	game_over = true
+	# Tutorial: guarantee the Knight is nearly dead so food-healing becomes
+	# an organic teaching moment on the management screen. The actual battle
+	# already threatens the Knight, but this is the safety net for edge cases.
+	if PlayerInventory.tutorial_active:
+		for t in placed_troops:
+			if t["type"] == "KNIGHT":
+				t["hp"] = 1
+				break
 	_persist_troop_hp()
+	if PlayerInventory.unlocked_talents.get("combat_veterans_grit", false):
+		for t in placed_troops:
+			if t["hp"] > 0 and t.get("troop") != null:
+				var troop: TroopData = t["troop"]
+				if troop.veteran_hp_bonus < 15:
+					troop.veteran_hp_bonus = min(15, troop.veteran_hp_bonus + 5)
 	PlayerInventory.current_stage += 1
 	if PlayerInventory.current_stage in [3, 5, 8]:
 		PlayerInventory.unlock_troop_slot()
@@ -1282,3 +1444,132 @@ func _show_end_screen(won: bool) -> void:
 	btn.custom_minimum_size = Vector2(220, 44)
 	btn.pressed.connect(_on_return)
 	vbox.add_child(btn)
+
+# -------------------------------------------------------
+# Sandbox bar — always visible at bottom of screen, no
+# admin panel needed. Built once from _build_ui().
+# -------------------------------------------------------
+const SANDBOX_TROOP_STATS = {
+	"KNIGHT": {"hp": 130, "attack": 20, "defense": 12, "speed": 2},
+	"ARCHER": {"hp":  80, "attack": 24, "defense":  5, "speed": 4},
+	"MAGE":   {"hp":  70, "attack": 32, "defense":  4, "speed": 3, "spell_power": 0.3},
+	"HEALER": {"hp":  95, "attack":  8, "defense":  6, "speed": 3},
+	"ROGUE":  {"hp":  75, "attack": 26, "defense":  5, "speed": 6},
+}
+
+func _build_sandbox_bar(parent: VBoxContainer) -> void:
+	var sep = HSeparator.new()
+	parent.add_child(sep)
+
+	var bar = HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 4)
+	parent.add_child(bar)
+
+	var ally_lbl = Label.new()
+	ally_lbl.text = "Add:"
+	ally_lbl.add_theme_font_size_override("font_size", 11)
+	ally_lbl.add_theme_color_override("font_color", Color(0.5, 0.9, 0.5))
+	ally_lbl.custom_minimum_size = Vector2(30, 0)
+	bar.add_child(ally_lbl)
+
+	for type_name in ["KNIGHT", "ARCHER", "MAGE", "HEALER", "ROGUE"]:
+		var btn = Button.new()
+		btn.text = type_name.capitalize()
+		btn.custom_minimum_size = Vector2(62, 26)
+		btn.add_theme_font_size_override("font_size", 11)
+		btn.add_theme_color_override("font_color", TROOP_COLORS.get(type_name, Color.WHITE))
+		btn.pressed.connect(sandbox_add_to_roster.bind(type_name))
+		bar.add_child(btn)
+
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(10, 0)
+	bar.add_child(spacer)
+
+	var enemy_lbl = Label.new()
+	enemy_lbl.text = "Spawn:"
+	enemy_lbl.add_theme_font_size_override("font_size", 11)
+	enemy_lbl.add_theme_color_override("font_color", Color(0.9, 0.4, 0.4))
+	enemy_lbl.custom_minimum_size = Vector2(44, 0)
+	bar.add_child(enemy_lbl)
+
+	for archetype in ["MELEE", "RANGED", "ROGUE", "TANK", "CHARGER", "BUFFER", "BOSS"]:
+		var btn = Button.new()
+		btn.text = archetype.capitalize()
+		btn.custom_minimum_size = Vector2(60, 26)
+		btn.add_theme_font_size_override("font_size", 11)
+		btn.add_theme_color_override("font_color", Color(0.9, 0.5, 0.4))
+		btn.pressed.connect(sandbox_spawn_enemy.bind(archetype))
+		bar.add_child(btn)
+
+# Adds a new placeable troop entry to the roster list — same flow as a
+# real troop so the player clicks it then clicks the field to place.
+# Each press creates one new placeable slot; press again for another.
+func sandbox_add_to_roster(type_name: String) -> void:
+	if game_over or sandbox_roster_hbox == null: return
+	var stats = SANDBOX_TROOP_STATS.get(type_name, SANDBOX_TROOP_STATS["KNIGHT"])
+	var troop = TroopData.new()
+	troop.troop_name = type_name.capitalize()
+	troop.troop_type = TroopData.TroopType[type_name]
+	troop.base_stats = stats.duplicate()
+
+	var col = TROOP_COLORS.get(type_name, Color.WHITE)
+	var idx = roster_slots.size()
+
+	var btn = DraggableRosterButton.new()
+	btn.custom_minimum_size = Vector2(110, 60)
+	btn.text = "%s\n[SANDBOX]\nHP:%d ATK:%d" % [
+		type_name.capitalize(), stats.get("hp", 0), stats.get("attack", 0)
+	]
+	btn.add_theme_color_override("font_color", col)
+	btn.add_theme_font_size_override("font_size", 11)
+	btn.roster_idx = idx
+	btn.troop_name = troop.troop_name
+	btn.display_color = col
+	btn.pressed.connect(_on_roster_selected.bind(idx))
+	sandbox_roster_hbox.add_child(btn)
+	roster_slots.append({"troop": troop, "btn": btn, "placed": false, "sandbox": true})
+
+func sandbox_spawn_enemy(archetype: String) -> void:
+	if game_over: return
+	var stage = PlayerInventory.current_stage
+	var ex = randf_range(FIELD_W / 2.0 + 30, FIELD_W - 50)
+	var ey = randf_range(30, FIELD_H - 140)
+	_spawn_one_enemy(stage, archetype, Vector2(ex, ey))
+
+func sandbox_set_base_hp(value: int) -> void:
+	base_hp = clamp(value, 1, base_max_hp)
+	_refresh_hud()
+	if base_hp_bar and is_instance_valid(base_hp_bar):
+		base_hp_bar.size.x = 40.0 * float(base_hp) / float(base_max_hp)
+
+func sandbox_repeat_wave() -> void:
+	# Clear enemies
+	for e in enemies:
+		if is_instance_valid(e.get("rect")): e["rect"].queue_free()
+		if is_instance_valid(e.get("hp_bar")): e["hp_bar"].queue_free()
+		if is_instance_valid(e.get("hp_bar_bg")): e["hp_bar_bg"].queue_free()
+		if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+	enemies.clear()
+
+	# Clear projectiles
+	for p in projectiles:
+		if is_instance_valid(p.get("rect")): p["rect"].queue_free()
+	projectiles.clear()
+
+	# Restore base HP
+	base_hp = base_max_hp
+
+	# Restore placed troop HP and reset attack timers
+	for t in placed_troops:
+		t["hp"] = t["max_hp"]
+		t["attack_t"] = 1.5
+		t["heal_t"] = 0.0
+
+	# Reset battle state and re-spawn the same planned_wave
+	game_over = false
+	battle_active = true
+	if begin_battle_btn and is_instance_valid(begin_battle_btn):
+		begin_battle_btn.visible = false
+	_spawn_battle_force()
+	_refresh_hud()
+	_set_status("Wave restarted!")

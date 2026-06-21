@@ -21,6 +21,13 @@ PlayerInventory="*uid://cewhaluufihh0"
 GearGenerator="*uid://b322eaoltpu55"
 SaveManager="*uid://b2v5ggfaybckn"
 AdminPanel="*uid://b3diep401blyh"
+TutorialOverlay="*uid://bm7hoq5fo7x1l"
+TutorialRouter="*uid://8thbemslu845"
+_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
 
 [physics]
 

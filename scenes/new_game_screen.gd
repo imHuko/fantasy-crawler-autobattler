@@ -256,6 +256,8 @@ func _on_start() -> void:
 	SaveManager.new_game()
 
 	if PlayerInventory.play_tutorial:
-		get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")
+		TutorialRouter.start_tutorial()
+		get_tree().change_scene_to_file("res://scenes/world_map.tscn")
 	else:
+		TutorialRouter.skip_tutorial()
 		get_tree().change_scene_to_file("res://scenes/recruit_choice_screen.tscn")

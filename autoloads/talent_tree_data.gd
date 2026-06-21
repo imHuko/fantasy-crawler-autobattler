@@ -10,7 +10,7 @@ class_name TalentTreeData
 # 3-choice recruiting, Hero's Resolve) sit at the end of their chains.
 # -------------------------------------------------------
 
-const BRANCHES = ["Gear", "Buildings", "Recruiting", "Combat", "Economy", "Standalone"]
+const BRANCHES = ["Gear", "Buildings", "Recruiting", "Combat", "Economy", "Standalone", "Dungeon"]
 
 const NODES = {
 	# --- GEAR ---
@@ -24,7 +24,7 @@ const NODES = {
 	},
 	"gear_awakened_quality": {
 		"name": "Awakened Quality", "branch": "Gear", "cost": 250, "prereq": "gear_set_seeker", "min_stage": 3,
-		"desc": "Unlocks a chance for Epic/Legendary gear to roll Awakened quality \\u2014 stats above the normal ceiling.",
+		"desc": "Unlocks a chance for Epic/Legendary gear to roll Awakened quality — stats above the normal ceiling.",
 	},
 	"gear_ascendant_quality": {
 		"name": "Ascendant Quality", "branch": "Gear", "cost": 450, "prereq": "gear_awakened_quality", "min_stage": 6,
@@ -32,7 +32,7 @@ const NODES = {
 	},
 	"gear_transcendent_quality": {
 		"name": "Transcendent Quality", "branch": "Gear", "cost": 800, "prereq": "gear_ascendant_quality", "min_stage": 10,
-		"desc": "Unlocks a rare chance for Legendary gear to roll Transcendent quality \\u2014 the absolute pinnacle.",
+		"desc": "Unlocks a rare chance for Legendary gear to roll Transcendent quality — the absolute pinnacle.",
 	},
 
 	# --- BUILDINGS ---
@@ -102,11 +102,95 @@ const NODES = {
 	# --- STANDALONE ---
 	"diplomatic_tongue": {
 		"name": "Diplomatic Tongue", "branch": "Standalone", "cost": 200, "prereq": "", "min_stage": 3,
-		"desc": "Conquest battles are slightly easier \\u2014 the zone's defenders fight at reduced strength.",
+		"desc": "Conquest battles are slightly easier — the zone's defenders fight at reduced strength.",
 	},
 	"toggle_invasions": {
 		"name": "Wilds Pact", "branch": "Standalone", "cost": 0, "prereq": "", "min_stage": 0,
-		"desc": "Free. Once unlocked, lets you turn random wilderness attacks on or off entirely \\u2014 only on Easy and Normal difficulty. Hard and Nightmare always keep attacks on regardless of this setting.",
+		"desc": "Free. Once unlocked, lets you turn random wilderness attacks on or off entirely — only on Easy and Normal difficulty. Hard and Nightmare always keep attacks on regardless of this setting.",
+	},
+
+	# --- GEAR additions ---
+	"gear_salvage_mastery": {
+		"name": "Salvage Mastery", "branch": "Gear", "cost": 150, "prereq": "gear_sharper_eye", "min_stage": 0,
+		"desc": "Salvaging gear yields 50% more material.",
+	},
+
+	# --- BUILDINGS additions ---
+	"buildings_fortified_walls": {
+		"name": "Fortified Walls", "branch": "Buildings", "cost": 250, "prereq": "buildings_reinforced_towers", "min_stage": 0,
+		"desc": "Your base starts each defense battle with 30% more HP.",
+	},
+
+	# --- RECRUITING additions ---
+	"recruiting_veteran_enrollment": {
+		"name": "Veteran Enrollment", "branch": "Recruiting", "cost": 200, "prereq": "recruiting_talent_scout", "min_stage": 2,
+		"desc": "Newly recruited units start with one stat already boosted by 15%.",
+	},
+
+	# --- COMBAT additions ---
+	"combat_veterans_grit": {
+		"name": "Veterans' Grit", "branch": "Combat", "cost": 200, "prereq": "combat_hardened_ranks", "min_stage": 0,
+		"desc": "Troops who survive a defense battle permanently gain +5 max HP, up to 3 times each.",
+	},
+	"combat_last_stand": {
+		"name": "Last Stand", "branch": "Combat", "cost": 200, "prereq": "combat_sharpened_blades", "min_stage": 0,
+		"desc": "Troops below 25% HP deal 50% more damage.",
+	},
+
+	# --- ECONOMY additions ---
+	"economy_guild_contracts": {
+		"name": "Guild Contracts", "branch": "Economy", "cost": 200, "prereq": "economy_steady_coffers", "min_stage": 0,
+		"desc": "Selling gear at the shop yields 20% more Gold.",
+	},
+	"economy_supply_network": {
+		"name": "Supply Network", "branch": "Economy", "cost": 350, "prereq": "economy_trade_routes", "min_stage": 0,
+		"desc": "The passive Gold trickle from Trade Routes is doubled on all zones you own.",
+	},
+
+	# --- DUNGEON ---
+	"dungeon_extended_campaign": {
+		"name": "Extended Campaign", "branch": "Dungeon", "cost": 100, "prereq": "", "min_stage": 0,
+		"desc": "Your dungeon runs last 90 seconds longer.",
+	},
+	"dungeon_marathon_runner": {
+		"name": "Marathon Runner", "branch": "Dungeon", "cost": 250, "prereq": "dungeon_extended_campaign", "min_stage": 5,
+		"desc": "An additional 120 seconds added to your dungeon run timer.",
+	},
+	"dungeon_quick_study": {
+		"name": "Quick Study", "branch": "Dungeon", "cost": 100, "prereq": "", "min_stage": 0,
+		"desc": "Your Commander earns 30% more XP per kill in the dungeon.",
+	},
+	"dungeon_skill_mastery": {
+		"name": "Skill Mastery", "branch": "Dungeon", "cost": 200, "prereq": "dungeon_quick_study", "min_stage": 0,
+		"desc": "On level-up in the dungeon, choose from 4 skill options instead of 3.",
+	},
+	"dungeon_opening_gambit": {
+		"name": "Opening Gambit", "branch": "Dungeon", "cost": 300, "prereq": "dungeon_skill_mastery", "min_stage": 4,
+		"desc": "Your Commander starts each dungeon run with one random skill already active.",
+	},
+	"dungeon_veteran_commander": {
+		"name": "Veteran Commander", "branch": "Dungeon", "cost": 100, "prereq": "", "min_stage": 0,
+		"desc": "Your Commander enters the dungeon with +20 max HP.",
+	},
+	"dungeon_relentless": {
+		"name": "Relentless", "branch": "Dungeon", "cost": 200, "prereq": "dungeon_veteran_commander", "min_stage": 0,
+		"desc": "Your Commander recovers 15 HP each time they level up in the dungeon.",
+	},
+	"dungeon_iron_will": {
+		"name": "Iron Will", "branch": "Dungeon", "cost": 400, "prereq": "dungeon_relentless", "min_stage": 7,
+		"desc": "Once per run, a killing blow leaves your Commander at 1 HP instead.",
+	},
+	"dungeon_combat_drilling": {
+		"name": "Combat Drilling", "branch": "Dungeon", "cost": 100, "prereq": "", "min_stage": 0,
+		"desc": "Your Commander enters the dungeon with +10 base attack.",
+	},
+	"dungeon_treasure_hunter": {
+		"name": "Treasure Hunter", "branch": "Dungeon", "cost": 150, "prereq": "dungeon_combat_drilling", "min_stage": 0,
+		"desc": "Each enemy kill has a 10% chance to drop 1 bonus Gold.",
+	},
+	"dungeon_spoils": {
+		"name": "Dungeon Spoils", "branch": "Dungeon", "cost": 250, "prereq": "dungeon_treasure_hunter", "min_stage": 3,
+		"desc": "At the end of a run, earn bonus Gold equal to 2× your kill count.",
 	},
 }
 

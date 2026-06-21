@@ -19,6 +19,11 @@ func _init() -> void:
 # it's actually read via get_current_hp().
 @export var current_hp: int = -1
 
+# Bonus max HP earned by surviving defense battles (Veterans' Grit talent).
+# Stacks up to 3 times (+5 each = +15 max), tracked separately so it
+# persists correctly across saves and isn't reset when gear changes.
+@export var veteran_hp_bonus: int = 0
+
 # Gear slots: keyed by slot name, value is a GearItem or null
 var equipped_gear: Dictionary = {
 	"WEAPON": null,
@@ -52,6 +57,8 @@ func get_effective_stats() -> Dictionary:
 	if is_hero and PlayerInventory.unlocked_talents.get("combat_heros_resolve", false):
 		effective["hp"] = effective.get("hp", 0) + 30
 		effective["attack"] = effective.get("attack", 0) + 8
+	if veteran_hp_bonus > 0 and PlayerInventory.unlocked_talents.get("combat_veterans_grit", false):
+		effective["hp"] = effective.get("hp", 0) + veteran_hp_bonus
 
 	return effective
 

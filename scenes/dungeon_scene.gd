@@ -204,7 +204,7 @@ func _build_ui() -> void:
 
 	if available_troops.is_empty():
 		var warn = Label.new()
-		warn.text = "No troops stationed here! You'll have to fight with whatever you brought \\u2014 nothing."
+		warn.text = "No troops stationed here! You'll have to fight with whatever you brought — nothing."
 		warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
 		roster_hbox.add_child(warn)
 
