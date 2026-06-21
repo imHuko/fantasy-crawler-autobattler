@@ -156,6 +156,10 @@ const NODES = {
 		"name": "Marathon Runner", "branch": "Dungeon", "cost": 250, "prereq": "dungeon_extended_campaign", "min_stage": 5,
 		"desc": "An additional 120 seconds added to your dungeon run timer.",
 	},
+	"dungeon_loaded_dice": {
+		"name": "Loaded Dice", "branch": "Dungeon", "cost": 200, "prereq": "dungeon_marathon_runner", "min_stage": 5,
+		"desc": "On level-up in the dungeon, gain 2 Rerolls and 1 Banish per run to shape your skill picks.",
+	},
 	"dungeon_quick_study": {
 		"name": "Quick Study", "branch": "Dungeon", "cost": 100, "prereq": "", "min_stage": 0,
 		"desc": "Your Commander earns 30% more XP per kill in the dungeon.",
@@ -210,6 +214,11 @@ static func stage_met(node_id: String) -> bool:
 
 # Returns true if the node can currently be purchased (not already owned,
 # prereq met, stage met, affordable).
+static func get_scaled_cost(node_id: String) -> int:
+	var base = NODES[node_id]["cost"]
+	var mult = PlayerInventory.difficulty_settings.get("talent_cost_mult", 1.0)
+	return int(base * mult)
+
 static func can_purchase(node_id: String) -> bool:
 	if PlayerInventory.unlocked_talents.get(node_id, false):
 		return false
@@ -217,8 +226,8 @@ static func can_purchase(node_id: String) -> bool:
 		return false
 	if not stage_met(node_id):
 		return false
-	var cost = NODES[node_id]["cost"]
-	return PlayerInventory.can_afford({"food": 0, "gold": cost})
+	var total = get_scaled_cost(node_id)
+	return PlayerInventory.can_afford({"food": total / 2, "gold": total / 2})
 
 # Purchases a node: deducts cost, marks it unlocked, and applies any
 # immediate one-time effects (most effects are read live via
@@ -228,9 +237,16 @@ static func purchase(node_id: String) -> bool:
 	if not can_purchase(node_id):
 		return false
 
-	var cost = NODES[node_id]["cost"]
-	PlayerInventory.spend_resources({"food": 0, "gold": cost})
+	var cost = get_scaled_cost(node_id)
+	PlayerInventory.spend_resources({"food": cost / 2, "gold": cost / 2})
 	PlayerInventory.unlocked_talents[node_id] = true
+	Telemetry.log_event("talent_purchased", {
+		"talent": node_id,
+		"cost": cost,
+		"stage": PlayerInventory.current_stage,
+		"food": int(PlayerInventory.resources.get("food", 0)),
+		"gold": int(PlayerInventory.resources.get("gold", 0)),
+	})
 
 	# Direct one-time effects
 	if node_id == "buildings_expanded_lots":

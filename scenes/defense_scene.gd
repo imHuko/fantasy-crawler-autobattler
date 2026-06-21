@@ -39,6 +39,8 @@ var game_over: bool = false
 var base_hp: int = 20
 var base_max_hp: int = 20
 var _enemy_dmg_mult_override: float = 1.0   # set by _apply_defense_sandbox(); 1.0 = no change
+var _sandbox_base_god_mode: bool = false
+var _sandbox_stage_override: int = -1   # -1 = use PlayerInventory.current_stage; 1–10 = override
 
 # Zone context — set by world map before launching this scene
 var battle_zone_id: int = -1
@@ -48,6 +50,13 @@ var retreat_btn: Button = null
 var is_conquering: bool = false
 var attack_force_mult: float = 1.0
 var battle_title: String = "Defend the Base"
+
+# Autotest — self-playing balance simulation. Flip to false when done.
+var autotest_mode := false
+var _at_stages := [1, 3, 5, 7, 10]
+var _at_idx := 0
+var _at_print_timer := 0.0
+var _at_results := []
 
 # Troops placed on field: {data:TroopData, pos, hp, max_hp, attack_t, heal_t, rect, type_name}
 var placed_troops: Array = []
@@ -82,6 +91,8 @@ func _ready() -> void:
 	_refresh_hud()
 	_show_wave_preview()
 	TutorialRouter.resolve_current_step(self)
+	if autotest_mode:
+		call_deferred("_autotest_next_stage")
 
 # Applies AdminPanel.defense_sandbox overrides if enabled — replaces
 # the wave rolled by _plan_wave() and scales base HP/dmg. Safe to call
@@ -99,6 +110,11 @@ func _apply_defense_sandbox() -> void:
 	base_max_hp = max(1, base_max_hp)
 	base_hp = base_max_hp
 	_enemy_dmg_mult_override = sb.get("dmg_mult", 1.0)
+	if sb.get("stage_override", 0) >= 1:
+		_sandbox_stage_override = sb["stage_override"]
+	var force_mult_override = sb.get("force_mult", -1.0)
+	if force_mult_override > 0.0:
+		attack_force_mult = force_mult_override
 
 func _load_battle_context() -> void:
 	battle_zone_id = PlayerInventory.current_battle_zone
@@ -108,7 +124,7 @@ func _load_battle_context() -> void:
 	battle_title = "Conquer Zone" if is_conquering else "Defend the Base"
 
 	# Scale base HP by force multiplier
-	base_max_hp = int(20 * max(0.5, attack_force_mult))
+	base_max_hp = int((20 + PlayerInventory.current_stage * 3) * max(0.5, attack_force_mult))
 	if PlayerInventory.unlocked_talents.get("buildings_fortified_walls", false):
 		base_max_hp = int(base_max_hp * 1.30)
 	base_hp = base_max_hp
@@ -231,6 +247,17 @@ func _build_ui() -> void:
 		]
 		btn.add_theme_color_override("font_color", col)
 		btn.add_theme_font_size_override("font_size", 11)
+		var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
+		if ResourceLoader.exists(portrait_path):
+			var portrait = TextureRect.new()
+			portrait.texture = load(portrait_path)
+			portrait.custom_minimum_size = Vector2(48, 48)
+			portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			portrait.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
+			portrait.offset_left = -52.0
+			portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			btn.add_child(portrait)
 		btn.roster_idx = i
 		btn.troop_name = troop.troop_name
 		btn.display_color = col
@@ -468,7 +495,7 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 		"troop": troop, "pos": pos,
 		"hp": starting_hp, "max_hp": max_hp,
 		"attack": attack_val,
-		"defense": eff.get("defense", 5),
+		"defense": eff.get("defense", 5) + eff.get("armor", 0),
 		"spell_power": spell_power_pct,
 		"lifesteal": lifesteal_pct,
 		"thorns": thorns_val,
@@ -500,10 +527,10 @@ var _enemies_pending_spawn: int = 0
 const ENEMY_ARCHETYPES = {
 	"MELEE":   { "hp_mult": 1.0,  "dmg_mult": 1.0,  "speed_mult": 1.0,  "color": Color(0.7, 0.25, 0.25), "symbol": "⚔", "label": "Melee" },
 	"RANGED":  { "hp_mult": 0.75, "dmg_mult": 0.9,  "speed_mult": 0.9,  "color": Color(0.25, 0.6, 0.3), "symbol": "➹", "label": "Ranged" },
-	"ROGUE":   { "hp_mult": 0.6,  "dmg_mult": 1.3,  "speed_mult": 1.6,  "color": Color(0.55, 0.2, 0.65), "symbol": "✦", "label": "Bypasser" },
+	"ROGUE":   { "hp_mult": 0.6,  "dmg_mult": 1.3,  "speed_mult": 1.5,  "color": Color(0.55, 0.2, 0.65), "symbol": "✦", "label": "Bypasser" },
 	"TANK":    { "hp_mult": 2.6,  "dmg_mult": 0.55, "speed_mult": 0.55, "color": Color(0.4, 0.4, 0.45), "symbol": "▣", "label": "Tank" },
 	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2), "symbol": "✪", "label": "Buffer" },
-	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 2.5,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
+	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 1.8,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
 }
 
 # Which UnitSprite art each enemy archetype displays as — mirrors the
@@ -533,9 +560,9 @@ const BUFFER_DMG_BOOST_DURATION = 3.0
 # introduced gradually so the player isn't hit with everything at once.
 func _get_archetype_weights(stage: int) -> Dictionary:
 	if stage <= 1:
-		return {"MELEE": 100}
+		return {"MELEE": 75, "RANGED": 25}
 	elif stage <= 2:
-		return {"MELEE": 70, "RANGED": 30}
+		return {"MELEE": 65, "RANGED": 35}
 	elif stage <= 3:
 		return {"MELEE": 55, "RANGED": 25, "ROGUE": 20}
 	elif stage <= 4:
@@ -582,6 +609,19 @@ func _plan_wave() -> void:
 		var is_boss = (i == count - 1) and count >= 4
 		planned_wave.append("BOSS" if is_boss else _roll_archetype(stage))
 
+	# Cap degenerate compositions that become unplayable even with gear.
+	# Rogues all dive the same backline target simultaneously; 4+ is a guaranteed wipe.
+	# Chargers are one-shot burst; 3+ at stage 7+ can eliminate the whole team in seconds.
+	var rogue_count = planned_wave.count("ROGUE")
+	var charger_count = planned_wave.count("CHARGER")
+	for i in range(planned_wave.size()):
+		if planned_wave[i] == "ROGUE" and rogue_count > 3:
+			planned_wave[i] = "MELEE"
+			rogue_count -= 1
+		elif planned_wave[i] == "CHARGER" and charger_count > 2:
+			planned_wave[i] = "RANGED"
+			charger_count -= 1
+
 func _get_wave_composition_counts() -> Dictionary:
 	var counts = {}
 	for archetype in planned_wave:
@@ -593,6 +633,7 @@ func _get_wave_composition_counts() -> Dictionary:
 # this just dismisses it — troop placement and Begin Battle work exactly
 # as before underneath it.
 func _show_wave_preview() -> void:
+	if autotest_mode: return
 	var overlay = CanvasLayer.new()
 	add_child(overlay)
 
@@ -694,13 +735,14 @@ func _spawn_battle_force() -> void:
 		_spawn_one_enemy(stage, archetype, Vector2(ex, ey))
 
 func _spawn_one_enemy(stage: int, archetype: String, spawn_pos: Vector2) -> void:
+	var effective_stage = _sandbox_stage_override if _sandbox_stage_override >= 1 else stage
 	var is_boss = archetype == "BOSS"
 	var profile = ENEMY_ARCHETYPES["MELEE"] if is_boss else ENEMY_ARCHETYPES[archetype]
 
 	var sz = 50.0 if is_boss else 24.0
-	var max_hp = int((18 + stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult) * profile["hp_mult"])
-	var spd = (45.0 + stage * 4.0) * profile["speed_mult"]
-	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"] * _enemy_dmg_mult_override)
+	var max_hp = int((18 + effective_stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult) * profile["hp_mult"])
+	var spd = (45.0 + effective_stage * 4.0) * profile["speed_mult"]
+	var atk = int((3 + effective_stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"] * _enemy_dmg_mult_override)
 
 	var ex = spawn_pos.x
 	var ey = spawn_pos.y
@@ -768,6 +810,13 @@ func _process(delta: float) -> void:
 		_process_enemies(delta)
 		_process_troops(delta)
 		_move_projectiles(delta)
+		if autotest_mode:
+			_at_print_timer -= delta
+			if _at_print_timer <= 0.0:
+				_at_print_timer = 4.0
+				var alive_troops = placed_troops.filter(func(t): return t["hp"] > 0).size()
+				print("[AT] stage=%d  enemies=%d  troops_alive=%d  base=%d/%d" % [
+					_at_stages[_at_idx], enemies.size(), alive_troops, base_hp, base_max_hp])
 	_update_visuals()
 
 	# Check battle won — all enemies cleared, including any still in spawn queue
@@ -945,7 +994,7 @@ func _process_troops(delta: float) -> void:
 				# of staying frozen at its placement spot forever.
 				var in_range = false
 				for e in enemies:
-					if t["pos"].distance_to(e["pos"]) < 250:
+					if t["pos"].distance_to(e["pos"]) < 180:
 						in_range = true
 						break
 
@@ -965,7 +1014,7 @@ func _process_troops(delta: float) -> void:
 					var hit_any = false
 					var spell_dmg = int(t_atk * 0.7 * (1.0 + t.get("spell_power", 0.0)))
 					for e in enemies:
-						if t["pos"].distance_to(e["pos"]) < 250:
+						if t["pos"].distance_to(e["pos"]) < 180:
 							_damage_enemy(e, spell_dmg, t)
 							hit_any = true
 					if hit_any:
@@ -984,7 +1033,7 @@ func _process_troops(delta: float) -> void:
 				if t["heal_t"] <= 0:
 					var target = _nearest_wounded_troop(t["pos"])
 					if target:
-						var heal = max(5, int(t_atk * 0.5 * (1.0 + t.get("spell_power", 0.0))))
+						var heal = max(15, int(t_atk * 1.5 * (1.0 + t.get("spell_power", 0.0))))
 						target["hp"] = min(target["hp"] + heal, target["max_hp"])
 						_show_heal_effect(target["pos"])
 						_update_troop_hp_bar(target)
@@ -1057,7 +1106,10 @@ func _damage_enemy(e: Dictionary, amount: int, source_troop: Dictionary = {}) ->
 		_update_enemy_hp_bar(e)
 
 func _damage_troop(t: Dictionary, amount: int, source_enemy: Dictionary = {}) -> void:
-	var reduced = max(1, amount - int(t["defense"] * 0.4))
+	# Percentage-based mitigation with diminishing returns so gear armor
+	# never trivializes combat. 100 defense = 50% reduction; each extra
+	# 100 adds less. Formula: dmg * (100 / (100 + defense))
+	var reduced = max(1, int(amount * 100.0 / (100.0 + t["defense"])))
 	t["hp"] -= reduced
 
 	# Thorns — reflects flat damage back to a melee attacker. Only passed
@@ -1074,6 +1126,7 @@ func _damage_troop(t: Dictionary, amount: int, source_enemy: Dictionary = {}) ->
 	_update_troop_hp_bar(t)
 
 func _damage_base(amount: int) -> void:
+	if _sandbox_base_god_mode: return
 	base_hp -= amount
 	base_hp = max(0, base_hp)
 	_refresh_hud()
@@ -1264,6 +1317,12 @@ func _on_begin_battle_pressed() -> void:
 		return
 	battle_started = true
 	_set_status("Charge!")
+	Telemetry.log_event("defense_started", {
+		"zone_id": battle_zone_id,
+		"stage": PlayerInventory.current_stage,
+		"is_conquest": is_conquering,
+		"troops": placed_troops.map(func(t): return t["type"]),
+	})
 
 # Writes each placed troop's HP at the end of this battle back to their
 # persistent TroopData, so wounds carry over outside of battle. Troops
@@ -1285,6 +1344,15 @@ func _persist_troop_hp() -> void:
 
 func _on_retreat() -> void:
 	_persist_troop_hp()
+	Telemetry.log_event("defense_result", {
+		"outcome": "retreat",
+		"zone_id": battle_zone_id,
+		"stage": PlayerInventory.current_stage,
+		"is_conquest": is_conquering,
+		"base_hp_pct": int(100.0 * base_hp / max(1, base_max_hp)),
+		"troops_alive": placed_troops.filter(func(t): return t["hp"] > 0).size(),
+		"troops_total": placed_troops.size(),
+	})
 	if battle_zone_id >= 0:
 		PlayerInventory.last_battle_result = "retreat"
 		PlayerInventory.last_battle_zone = battle_zone_id
@@ -1308,6 +1376,15 @@ func _on_return() -> void:
 # -------------------------------------------------------
 func _on_victory() -> void:
 	game_over = true
+	if autotest_mode:
+		var alive = placed_troops.filter(func(t): return t["hp"] > 0).size()
+		var hp_pcts = placed_troops.map(func(t): return "%s=%d%%" % [t["type"], int(100.0*t["hp"]/t["max_hp"])])
+		print("[AT] STAGE %d: WIN | base=%d/%d | troops=%s" % [_at_stages[_at_idx], base_hp, base_max_hp, str(hp_pcts)])
+		_at_results.append({"stage": _at_stages[_at_idx], "result": "WIN", "base_hp": base_hp, "base_max": base_max_hp, "alive": alive})
+		_at_idx += 1
+		await get_tree().create_timer(0.3).timeout
+		_autotest_next_stage()
+		return
 	# Tutorial: guarantee the Knight is nearly dead so food-healing becomes
 	# an organic teaching moment on the management screen. The actual battle
 	# already threatens the Knight, but this is the safety net for edge cases.
@@ -1323,9 +1400,27 @@ func _on_victory() -> void:
 				var troop: TroopData = t["troop"]
 				if troop.veteran_hp_bonus < 15:
 					troop.veteran_hp_bonus = min(15, troop.veteran_hp_bonus + 5)
-	PlayerInventory.current_stage += 1
-	if PlayerInventory.current_stage in [3, 5, 8]:
-		PlayerInventory.unlock_troop_slot()
+	# Unlock troop slots when the player first conquers zones at increasing
+	# difficulty thresholds. Guarded by current slot count so repeated
+	# conquests of the same zone never double-unlock.
+	if is_conquering:
+		var strength = PlayerInventory.current_stage  # set to zone enemy_strength by world_map
+		var target_slots = 3
+		if strength >= 3: target_slots = 4
+		if strength >= 5: target_slots = 5
+		if strength >= 8: target_slots = 6
+		while PlayerInventory.unlocked_troop_slots < target_slots:
+			PlayerInventory.unlock_troop_slot()
+
+	Telemetry.log_event("defense_result", {
+		"outcome": "won",
+		"zone_id": battle_zone_id,
+		"stage": PlayerInventory.current_stage,
+		"is_conquest": is_conquering,
+		"base_hp_pct": int(100.0 * base_hp / max(1, base_max_hp)),
+		"troops_alive": placed_troops.filter(func(t): return t["hp"] > 0).size(),
+		"troops_total": placed_troops.size(),
+	})
 
 	# Report result to map
 	if battle_zone_id >= 0:
@@ -1338,7 +1433,25 @@ func _on_victory() -> void:
 
 func _on_defeat() -> void:
 	game_over = true
+	if autotest_mode:
+		var alive = placed_troops.filter(func(t): return t["hp"] > 0).size()
+		var hp_pcts = placed_troops.map(func(t): return "%s=%d%%" % [t["type"], int(100.0*t["hp"]/t["max_hp"])])
+		print("[AT] STAGE %d: DEFEAT | base=%d/%d | troops=%s" % [_at_stages[_at_idx], base_hp, base_max_hp, str(hp_pcts)])
+		_at_results.append({"stage": _at_stages[_at_idx], "result": "DEFEAT", "base_hp": 0, "base_max": base_max_hp, "alive": alive})
+		_at_idx += 1
+		await get_tree().create_timer(0.3).timeout
+		_autotest_next_stage()
+		return
 	_persist_troop_hp()
+	Telemetry.log_event("defense_result", {
+		"outcome": "lost",
+		"zone_id": battle_zone_id,
+		"stage": PlayerInventory.current_stage,
+		"is_conquest": is_conquering,
+		"base_hp_pct": 0,
+		"troops_alive": placed_troops.filter(func(t): return t["hp"] > 0).size(),
+		"troops_total": placed_troops.size(),
+	})
 
 	# Losing a defense of your home zone (zone 0) specifically is a real
 	# campaign-ending event, distinct from any other lost fight. Skip the
@@ -1573,3 +1686,192 @@ func sandbox_repeat_wave() -> void:
 	_spawn_battle_force()
 	_refresh_hud()
 	_set_status("Wave restarted!")
+
+# -------------------------------------------------------
+# Sandbox — callable by AdminPanel for live testing.
+# All methods are safe to call at any time during a battle.
+# -------------------------------------------------------
+
+# Returns a snapshot of current battle state for the admin panel's stats display.
+func sandbox_get_battle_stats() -> Dictionary:
+	var enemy_counts: Dictionary = {}
+	for e in enemies:
+		var et = e.get("enemy_type", "MELEE")
+		enemy_counts[et] = enemy_counts.get(et, 0) + 1
+
+	var troop_lines: Array = []
+	for t in placed_troops:
+		var name_str = t["troop"].troop_name if t.get("troop") else "?"
+		troop_lines.append("%s %s  %d/%d HP" % [
+			t["type"].capitalize(), name_str, t["hp"], t["max_hp"]
+		])
+
+	var state_str: String
+	if game_over:
+		state_str = "Over"
+	elif battle_active:
+		state_str = "Active"
+	else:
+		state_str = "Placing"
+
+	return {
+		"state": state_str,
+		"base_hp": base_hp,
+		"base_max_hp": base_max_hp,
+		"god_mode": _sandbox_base_god_mode,
+		"enemies_alive": enemies.size(),
+		"enemy_counts": enemy_counts,
+		"troops_placed": placed_troops.size(),
+		"troop_lines": troop_lines,
+		"effective_stage": _sandbox_stage_override if _sandbox_stage_override >= 1 else PlayerInventory.current_stage,
+		"attack_force_mult": attack_force_mult,
+	}
+
+# Instantly removes all enemies and projectiles from the field.
+func sandbox_kill_all_enemies() -> void:
+	for e in enemies:
+		if is_instance_valid(e.get("rect")): e["rect"].queue_free()
+		if is_instance_valid(e.get("hp_bar")): e["hp_bar"].queue_free()
+		if is_instance_valid(e.get("hp_bar_bg")): e["hp_bar_bg"].queue_free()
+		if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+	enemies.clear()
+	for p in projectiles:
+		if is_instance_valid(p.get("rect")): p["rect"].queue_free()
+	projectiles.clear()
+
+# Restores all placed troops to full HP mid-battle.
+func sandbox_heal_placed_troops() -> void:
+	for t in placed_troops:
+		t["hp"] = t["max_hp"]
+		_update_troop_hp_bar(t)
+
+# Toggles god mode: when on, the base takes no damage from any source.
+func sandbox_toggle_base_god_mode() -> bool:
+	_sandbox_base_god_mode = not _sandbox_base_god_mode
+	return _sandbox_base_god_mode
+
+# Overrides the stage used for enemy stat scaling on the next spawn or sandbox_repeat_wave.
+# Does NOT change PlayerInventory.current_stage.
+func sandbox_set_stage(stage: int) -> void:
+	_sandbox_stage_override = max(1, stage)
+
+# Triggers victory immediately (clears enemies first so _on_victory() doesn't skip).
+func sandbox_force_win() -> void:
+	if game_over: return
+	sandbox_kill_all_enemies()
+	_on_victory()
+
+# Triggers defeat immediately.
+func sandbox_force_loss() -> void:
+	if game_over: return
+	base_hp = 0
+	_on_defeat()
+
+# -------------------------------------------------------
+# Autotest — self-running balance sim. Disabled when autotest_mode = false.
+# Lineup: K/A/M/H/R using SANDBOX_TROOP_STATS (no gear).
+# Stages tested: 1, 3, 5, 7, 10.
+# -------------------------------------------------------
+func _autotest_next_stage() -> void:
+	if _at_idx >= _at_stages.size():
+		_autotest_summary()
+		return
+	var stage = _at_stages[_at_idx]
+	PlayerInventory.current_stage = stage
+	_sandbox_stage_override = stage
+	base_max_hp = int((20 + stage * 3) * max(0.5, attack_force_mult))
+	base_hp = base_max_hp
+	game_over = false
+	battle_active = false
+	battle_started = false
+	_autotest_clear_field()
+	_autotest_place_troop("KNIGHT", Vector2(220, 200))
+	_autotest_place_troop("ARCHER", Vector2(160, 155))
+	_autotest_place_troop("MAGE",   Vector2(160, 245))
+	_autotest_place_troop("HEALER", Vector2(110, 200))
+	_autotest_place_troop("ROGUE",  Vector2(195, 130))
+	_plan_wave()
+	_spawn_battle_force()
+	battle_active = true
+	_at_print_timer = 0.0
+	_refresh_hud()
+	if begin_battle_btn and is_instance_valid(begin_battle_btn):
+		begin_battle_btn.visible = false
+	print("[AT] === STAGE %d START | base_max_hp=%d | wave: %s ===" % [
+		stage, base_max_hp, str(_get_wave_composition_counts())])
+
+func _autotest_clear_field() -> void:
+	for t in placed_troops:
+		if is_instance_valid(t.get("rect")): t["rect"].queue_free()
+		if is_instance_valid(t.get("hp_bar")): t["hp_bar"].queue_free()
+		if is_instance_valid(t.get("hp_bar_bg")): t["hp_bar_bg"].queue_free()
+		if is_instance_valid(t.get("label")): t["label"].queue_free()
+	placed_troops.clear()
+	for e in enemies:
+		if is_instance_valid(e.get("rect")): e["rect"].queue_free()
+		if is_instance_valid(e.get("hp_bar")): e["hp_bar"].queue_free()
+		if is_instance_valid(e.get("hp_bar_bg")): e["hp_bar_bg"].queue_free()
+		if is_instance_valid(e.get("type_lbl")): e["type_lbl"].queue_free()
+	enemies.clear()
+	for p in projectiles:
+		if is_instance_valid(p.get("rect")): p["rect"].queue_free()
+	projectiles.clear()
+
+func _autotest_place_troop(type_name: String, pos: Vector2) -> void:
+	var stats = SANDBOX_TROOP_STATS.get(type_name, SANDBOX_TROOP_STATS["KNIGHT"])
+	var troop = TroopData.new()
+	troop.troop_name = type_name.capitalize()
+	troop.troop_type = TroopData.TroopType[type_name]
+	troop.base_stats = stats.duplicate()
+	var col = TROOP_COLORS.get(type_name, Color.WHITE)
+	var sz = 30.0
+	var unit_type_map = {
+		"KNIGHT": UnitSprite.UnitType.KNIGHT, "ARCHER": UnitSprite.UnitType.ARCHER,
+		"MAGE":   UnitSprite.UnitType.MAGE,   "HEALER": UnitSprite.UnitType.HEALER,
+		"ROGUE":  UnitSprite.UnitType.ROGUE,
+	}
+	var rect = UnitSprite.new()
+	rect.setup(unit_type_map.get(type_name, UnitSprite.UnitType.KNIGHT), col, sz)
+	rect.position = pos - Vector2(sz/2, sz/2)
+	field_node.add_child(rect)
+	var lbl = Label.new()
+	lbl.text = type_name.left(4)
+	lbl.add_theme_font_size_override("font_size", 9)
+	lbl.add_theme_color_override("font_color", Color.WHITE)
+	lbl.position = pos - Vector2(20, sz/2 + 14)
+	field_node.add_child(lbl)
+	var hpbg = ColorRect.new()
+	hpbg.color = Color(0.3, 0.1, 0.1)
+	hpbg.size = Vector2(sz, 5)
+	hpbg.position = pos - Vector2(sz/2, sz/2 + 7)
+	field_node.add_child(hpbg)
+	var hpbar = ColorRect.new()
+	hpbar.color = Color(0.3, 0.9, 0.3)
+	hpbar.size = Vector2(sz, 5)
+	hpbar.position = pos - Vector2(sz/2, sz/2 + 7)
+	field_node.add_child(hpbar)
+	var max_hp = stats.get("hp", 100)
+	var spd = stats.get("speed", 3)
+	var attack_speed = max(0.5, 2.5 - spd * 0.15)
+	placed_troops.append({
+		"troop": troop, "pos": pos,
+		"hp": max_hp, "max_hp": max_hp,
+		"attack": stats.get("attack", 10),
+		"defense": stats.get("defense", 5),
+		"spell_power": stats.get("spell_power", 0.0),
+		"lifesteal": 0.0, "thorns": 0.0, "move_speed_bonus": 0.0,
+		"type": type_name,
+		"attack_t": attack_speed, "attack_interval": attack_speed,
+		"heal_t": 3.0,
+		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "label": lbl,
+		"sz": sz,
+	})
+
+func _autotest_summary() -> void:
+	print("\n[AT] ========== BALANCE SUMMARY (ungeared) ==========")
+	for r in _at_results:
+		var base_pct = int(100.0 * r["base_hp"] / max(1, r["base_max"]))
+		print("[AT]  Stage %2d: %s | base_hp_remaining=%d%%" % [r["stage"], r["result"], base_pct])
+	print("[AT] ====================================================")
+	print("[AT] Note: above uses SANDBOX_TROOP_STATS (no gear).")
+	print("[AT] Gear is intended to be critical at stage 5+.")

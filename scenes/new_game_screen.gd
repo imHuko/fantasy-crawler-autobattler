@@ -15,6 +15,8 @@ const DIFFICULTIES = {
 		"zone_count": 10,
 		"color": Color(0.3, 0.9, 0.3),
 		"invasions_toggleable": true,
+		"talent_cost_mult": 0.75,
+		"income_mult": 1.2,
 	},
 	"Normal": {
 		"desc": "Balanced challenge. Moderate attack frequency, one zone at a time.\nRecommended for first playthrough.",
@@ -25,6 +27,8 @@ const DIFFICULTIES = {
 		"zone_count": 13,
 		"color": Color(0.4, 0.7, 1.0),
 		"invasions_toggleable": true,
+		"talent_cost_mult": 1.0,
+		"income_mult": 1.0,
 	},
 	"Hard": {
 		"desc": "Frequent attacks. Occasionally two zones threatened at once \u2014 you'll need to choose where to commit.",
@@ -35,6 +39,8 @@ const DIFFICULTIES = {
 		"zone_count": 18,
 		"color": Color(1.0, 0.65, 0.1),
 		"invasions_toggleable": false,
+		"talent_cost_mult": 1.5,
+		"income_mult": 0.85,
 	},
 	"Nightmare": {
 		"desc": "A larger world under constant pressure. Up to three zones can be threatened simultaneously \u2014 spreading your forces thin is a losing strategy.",
@@ -45,6 +51,8 @@ const DIFFICULTIES = {
 		"zone_count": 24,
 		"color": Color(0.9, 0.2, 0.2),
 		"invasions_toggleable": false,
+		"talent_cost_mult": 2.5,
+		"income_mult": 0.7,
 	},
 }
 

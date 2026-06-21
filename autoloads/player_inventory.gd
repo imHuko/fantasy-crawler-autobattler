@@ -57,6 +57,10 @@ var conquering_zone: bool = false
 var dungeon_tier: String = "Standard"   # "Quick", "Standard", "Deep Delve"
 var dungeon_duration_seconds: float = 600.0   # how long the next survival run should last, set by the duration picker
 var commander_class: String = "ARCHER"   # class profile the Commander uses in dungeon runs
+var commander_gear: Dictionary = {
+	"WEAPON": null,
+	"RING": null,
+}
 
 # Resources — banked for spending (recruiting, rerolling, talents, etc).
 # Food and Gold are interchangeable for spending purposes — costs are

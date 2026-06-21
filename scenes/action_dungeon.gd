@@ -33,11 +33,13 @@ const MIN_SPAWN_DIST_FROM_HERO = 220.0  # enemies never spawn closer than this t
 # Class multipliers applied on top of hero base stats.
 # interval_mult < 1.0 = faster attacks. range 99999 = effectively unlimited (ranged classes).
 const CLASS_PROFILES = {
-	"KNIGHT": { "hp_mult": 1.5,  "dmg_mult": 0.7,  "interval_mult": 1.0, "range": 220.0,   "self_heal": false },
-	"ARCHER": { "hp_mult": 1.0,  "dmg_mult": 0.75, "interval_mult": 0.6, "range": 99999.0, "self_heal": false },
-	"MAGE":   { "hp_mult": 0.85, "dmg_mult": 1.8,  "interval_mult": 1.4, "range": 99999.0, "self_heal": false },
-	"ROGUE":  { "hp_mult": 0.7,  "dmg_mult": 1.6,  "interval_mult": 0.8, "range": 220.0,   "self_heal": false },
-	"HEALER": { "hp_mult": 0.8,  "dmg_mult": 0.5,  "interval_mult": 1.0, "range": 99999.0, "self_heal": true  },
+	# melee=true: attacks are instant damage in range (no projectile)
+	# melee=false: attacks fire a traveling projectile
+	"KNIGHT": { "hp_mult": 1.5,  "dmg_mult": 1.0,  "interval_mult": 1.0, "range": 220.0,   "self_heal": false, "melee": true  },
+	"ARCHER": { "hp_mult": 1.0,  "dmg_mult": 0.75, "interval_mult": 0.6, "range": 99999.0, "self_heal": false, "melee": false },
+	"MAGE":   { "hp_mult": 0.85, "dmg_mult": 1.8,  "interval_mult": 1.4, "range": 99999.0, "self_heal": false, "melee": false },
+	"ROGUE":  { "hp_mult": 0.7,  "dmg_mult": 0.8,  "interval_mult": 0.5, "range": 220.0,   "self_heal": false, "melee": true  },
+	"HEALER": { "hp_mult": 0.8,  "dmg_mult": 0.5,  "interval_mult": 1.0, "range": 99999.0, "self_heal": true,  "melee": false },
 }
 const HEALER_SELF_HEAL_INTERVAL = 3.0   # seconds between passive self-heal ticks
 const HEALER_SELF_HEAL_PCT      = 0.08  # % of max HP healed per tick
@@ -208,6 +210,12 @@ var hero_crit_damage: int = 0
 var hero_attack_range: float = 99999.0
 var hero_attack_interval: float = ATTACK_INTERVAL
 var hero_self_heal: bool = false
+var hero_is_melee: bool = false
+var hero_dodge_chance: float = 0.0
+var hero_hp_regen: float = 0.0
+var hero_on_kill_heal: int = 0
+var hero_melee_power: float = 0.0
+var hero_chain_crit: bool = false
 var self_heal_timer: float = HEALER_SELF_HEAL_INTERVAL
 var attack_timer: float = 0.0
 var invincible_timer: float = 0.0
@@ -252,6 +260,9 @@ var hero_level: int = 0
 var xp_to_next: int = XP_BASE
 var skills_taken: Dictionary = {}   # skill_id -> stack count
 var pending_level_ups: int = 0
+var run_rerolls: int = 0
+var run_banishes: int = 0
+var banished_skill_ids: Array = []
 
 # Skill effect accumulators / flags
 var skill_drop_bonus: float = 0.0      # lucky
@@ -312,7 +323,49 @@ func _load_hero_stats() -> void:
 	hero_attack_range    = profile["range"]
 	hero_attack_interval = ATTACK_INTERVAL * profile["interval_mult"]
 	hero_self_heal       = profile["self_heal"]
-	hero_hp              = hero_max_hp
+	hero_is_melee        = profile.get("melee", false)
+
+	# Apply equipped Commander gear on top of base/talent stats
+	for slot_key in PlayerInventory.commander_gear:
+		var g: GearItem = PlayerInventory.commander_gear[slot_key]
+		if g == null: continue
+		var gs = g.get_effective_stats()
+		hero_attack        += gs.get("attack", 0)
+		hero_max_hp        += gs.get("hp", 0)
+		hero_armor         += gs.get("armor", 0)
+		hero_crit_chance   += gs.get("crit_chance", 0.0)
+		hero_crit_damage   += gs.get("crit_damage", 0)
+		hero_dodge_chance  += gs.get("dodge_chance", 0.0)
+		hero_hp_regen      += gs.get("hp_regen", 0.0)
+		hero_on_kill_heal  += gs.get("on_kill_heal", 0)
+		skill_lifesteal    += gs.get("lifesteal", 0.0)
+		if gs.has("attack_speed"):
+			hero_attack_interval *= max(0.3, 1.0 - gs["attack_speed"])
+		if hero_is_melee:
+			hero_melee_power += gs.get("melee_power", 0.0)
+
+	# Commander set bonuses (max 2-piece — only WEAPON + RING slots available)
+	var cmdr_set_counts: Dictionary = {}
+	for slot_key in PlayerInventory.commander_gear:
+		var g: GearItem = PlayerInventory.commander_gear[slot_key]
+		if g != null and g.set_name != "":
+			cmdr_set_counts[g.set_name] = cmdr_set_counts.get(g.set_name, 0) + 1
+	for set_name in cmdr_set_counts:
+		var count = cmdr_set_counts[set_name]
+		var bonuses = GearGenerator.SET_BONUSES.get(set_name, {})
+		for threshold in bonuses:
+			if count >= threshold:
+				for key in bonuses[threshold]:
+					match key:
+						"hp_pct":       hero_max_hp    = int(hero_max_hp * (1.0 + bonuses[threshold][key]))
+						"armor":        hero_armor     += int(bonuses[threshold][key])
+						"crit_chance":  hero_crit_chance += bonuses[threshold][key]
+						"dodge_chance": hero_dodge_chance += bonuses[threshold][key]
+						"on_kill_heal": hero_on_kill_heal += int(bonuses[threshold][key])
+						"chain_crit":   hero_chain_crit = true
+						# spell_power only affects Mage/Healer — not a Commander stat yet
+
+	hero_hp = hero_max_hp
 
 # Admin sandbox — swaps which class profile + art the Commander uses this run.
 func sandbox_set_hero_class(class_key: String) -> void:
@@ -426,6 +479,12 @@ func _start_run() -> void:
 	game_over = false
 	hero_pos = Vector2(ARENA_W/2, ARENA_H/2)
 	secured_gear.clear()
+	var class_key = _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
+	Telemetry.log_event("dungeon_started", {
+		"class": class_key,
+		"stage": PlayerInventory.current_stage,
+		"tier": PlayerInventory.dungeon_tier,
+	})
 
 	# Reset skill state for this run
 	hero_xp = 0
@@ -451,6 +510,15 @@ func _start_run() -> void:
 	skill_second_wind_ready = false
 	skill_lifesteal = 0.0
 	iron_will_used = false
+	hero_dodge_chance = 0.0
+	hero_hp_regen     = 0.0
+	hero_on_kill_heal = 0
+	hero_melee_power  = 0.0
+	hero_chain_crit   = false
+	banished_skill_ids.clear()
+	var has_loaded_dice = PlayerInventory.unlocked_talents.get("dungeon_loaded_dice", false)
+	run_rerolls = 2 if has_loaded_dice else 0
+	run_banishes = 1 if has_loaded_dice else 0
 	_enemy_id_counter = 0
 
 	enemies.clear()
@@ -764,6 +832,13 @@ func _process(delta: float) -> void:
 # is itself the win condition the save zone risk was building toward.
 func _on_survival_complete() -> void:
 	game_over = true
+	Telemetry.log_event("dungeon_result", {
+		"outcome": "survived",
+		"kills": kill_count,
+		"level_reached": hero_level,
+		"skills": skills_taken.keys(),
+		"gear_secured": secured_gear.size() + banked_gear.size() + run_gear.size(),
+	})
 	for gear in banked_gear:
 		PlayerInventory.add_gear(gear)
 		secured_gear.append(gear)
@@ -826,13 +901,18 @@ func _spawn_miniboss() -> void:
 # Healer's actual strength in the dungeon despite being the weakest
 # attacker by far: outlasting a fight rather than winning it quickly.
 func _self_heal_tick(delta: float) -> void:
-	if not hero_self_heal or hero_hp <= 0: return
-	self_heal_timer -= delta
-	if self_heal_timer <= 0:
-		self_heal_timer = HEALER_SELF_HEAL_INTERVAL
-		var healed = max(1, int(hero_max_hp * HEALER_SELF_HEAL_PCT))
-		hero_hp = min(hero_hp + healed, hero_max_hp)
-		_refresh_hud()
+	if hero_hp <= 0: return
+	# Healer class passive heal
+	if hero_self_heal:
+		self_heal_timer -= delta
+		if self_heal_timer <= 0:
+			self_heal_timer = HEALER_SELF_HEAL_INTERVAL
+			var healed = max(1, int(hero_max_hp * HEALER_SELF_HEAL_PCT))
+			hero_hp = min(hero_hp + healed, hero_max_hp)
+			_refresh_hud()
+	# hp_regen gear stat (all classes)
+	if hero_hp_regen > 0.0 and hero_hp < hero_max_hp:
+		hero_hp = min(hero_hp + int(hero_hp_regen * delta), hero_max_hp)
 
 const MOUSE_MOVE_DEAD_ZONE = 20.0   # pixels from hero before mouse movement kicks in
 
@@ -885,7 +965,6 @@ func _attack_tick(delta: float) -> void:
 			nearest = e
 
 	if nearest and nearest_dist <= hero_attack_range:
-		# Berserker: attack up to 40% faster as HP drops
 		var effective_interval = hero_attack_interval
 		if skill_berserker:
 			var missing_pct = 1.0 - float(hero_hp) / float(hero_max_hp)
@@ -893,17 +972,76 @@ func _attack_tick(delta: float) -> void:
 		attack_timer = effective_interval
 
 		var dmg = hero_attack
-		if randf() < hero_crit_chance:
+		if hero_is_melee and hero_melee_power > 0.0:
+			dmg = int(dmg * (1.0 + hero_melee_power))
+		var is_crit = randf() < hero_crit_chance
+		if is_crit:
 			dmg = int(dmg * (1.0 + hero_crit_damage / 100.0))
-		_fire(hero_pos, nearest["pos"], true, dmg, hero_rect)
 
-		# Multishot: additional projectiles with a small angular spread
-		for k in range(skill_extra_projs):
-			var sign = 1 if k % 2 == 0 else -1
-			var spread = deg_to_rad(18.0 * (k / 2 + 1) * sign)
-			var base_dir = (nearest["pos"] - hero_pos).normalized()
-			var spread_target = hero_pos + base_dir.rotated(spread) * 200.0
-			_fire(hero_pos, spread_target, true, dmg, null)
+		if hero_is_melee:
+			# Collect targets first (safe: avoid modifying enemies during iteration)
+			var targets: Array = [nearest]
+			if skill_extra_projs > 0:
+				var extra = skill_extra_projs
+				for e in enemies:
+					if extra <= 0: break
+					if e == nearest: continue
+					if hero_pos.distance_to(e["pos"]) <= hero_attack_range:
+						targets.append(e)
+						extra -= 1
+			if hero_rect and is_instance_valid(hero_rect):
+				hero_rect.face((nearest["pos"] - hero_pos).normalized())
+				hero_rect.play_attack()
+			for t in targets:
+				_melee_strike(t, dmg)
+		else:
+			_fire(hero_pos, nearest["pos"], true, dmg, hero_rect)
+			# Multishot: additional projectiles with a small angular spread
+			for k in range(skill_extra_projs):
+				var sign = 1 if k % 2 == 0 else -1
+				var spread = deg_to_rad(18.0 * (k / 2 + 1) * sign)
+				var base_dir = (nearest["pos"] - hero_pos).normalized()
+				var spread_target = hero_pos + base_dir.rotated(spread) * 200.0
+				_fire(hero_pos, spread_target, true, dmg, null)
+
+		# Storm Aegis 4-piece: crits arc to the nearest other enemy for 40% damage
+		if is_crit and hero_chain_crit:
+			var chain_target = null
+			var chain_dist = INF
+			for e in enemies:
+				if e == nearest: continue
+				var d = hero_pos.distance_to(e["pos"])
+				if d < chain_dist:
+					chain_dist = d
+					chain_target = e
+			if chain_target:
+				_melee_strike(chain_target, int(dmg * 0.40))
+
+func _melee_strike(e: Dictionary, dmg: int) -> void:
+	var eidx = enemies.find(e)
+	if eidx < 0: return  # already dead/removed
+
+	e["hp"] -= dmg
+	_update_boss_bar(e)
+
+	if skill_lifesteal > 0.0:
+		hero_hp = min(hero_hp + max(1, int(dmg * skill_lifesteal)), hero_max_hp)
+	if skill_explosive:
+		_trigger_explosion(e["pos"], int(dmg * 0.4), eidx)
+
+	var flash = ColorRect.new()
+	flash.size = Vector2(22, 22)
+	flash.color = Color(1.0, 0.95, 0.4, 0.9)
+	flash.position = e["pos"] - Vector2(11, 11)
+	arena_node.add_child(flash)
+	var tw = flash.create_tween()
+	tw.tween_property(flash, "modulate:a", 0.0, 0.15)
+	tw.tween_callback(flash.queue_free)
+
+	if e["hp"] <= 0:
+		var kill_idx = enemies.find(e)
+		if kill_idx >= 0:
+			_kill_enemy(kill_idx)
 
 func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_sprite: UnitSprite = null) -> void:
 	var dir = (toward - from).normalized()
@@ -1239,9 +1377,11 @@ func _kill_enemy(idx: int) -> void:
 	var xp_gain = XP_PER_BOSS_KILL if e["is_boss"] else XP_PER_NORMAL_KILL
 	_grant_xp(xp_gain)
 
-	# Vampiric: heal on kill
+	# Vampiric skill + on_kill_heal gear stat both heal on kill
 	if skill_vampiric_hp > 0:
 		hero_hp = min(hero_hp + skill_vampiric_hp, hero_max_hp)
+	if hero_on_kill_heal > 0:
+		hero_hp = min(hero_hp + hero_on_kill_heal, hero_max_hp)
 
 	# Death Rattle: small AoE explosion at the kill site
 	if skill_death_rattle:
@@ -1260,6 +1400,7 @@ func _kill_enemy(idx: int) -> void:
 
 func _take_damage(amount: int) -> void:
 	if _sandbox_god_mode or invincible_timer > 0 or is_paused: return
+	if hero_dodge_chance > 0.0 and randf() < hero_dodge_chance: return
 	var reduced = max(1, amount - int(hero_armor * 0.5))
 
 	# Iron Will: one-time kill-blow intercept from the talent tree
@@ -1303,6 +1444,13 @@ func _play_death_visual() -> void:
 	tw.tween_callback(_on_death_resolved)
 
 func _on_death_resolved() -> void:
+	Telemetry.log_event("dungeon_result", {
+		"outcome": "died",
+		"kills": kill_count,
+		"level_reached": hero_level,
+		"skills": skills_taken.keys(),
+		"gear_secured": secured_gear.size(),
+	})
 	_apply_death_penalty()
 	_show_end_screen("lost")
 
@@ -1510,6 +1658,13 @@ func _show_retreat_confirm() -> void:
 
 func _do_retreat() -> void:
 	game_over = true
+	Telemetry.log_event("dungeon_result", {
+		"outcome": "retreated",
+		"kills": kill_count,
+		"level_reached": hero_level,
+		"skills": skills_taken.keys(),
+		"gear_secured": secured_gear.size() + banked_gear.size(),
+	})
 	# Banked gear is committed to the permanent inventory now. Unbanked
 	# (held) gear is forfeited, per the retreat loot rule.
 	for gear in banked_gear:
@@ -1643,6 +1798,10 @@ func _show_skill_pick() -> void:
 		hero_hp = min(hero_hp + 15, hero_max_hp)
 	var skill_offer_count = 4 if PlayerInventory.unlocked_talents.get("dungeon_skill_mastery", false) else 3
 	var choices = _get_random_skills(skill_offer_count)
+	Telemetry.log_event("dungeon_skills_offered", {
+		"level": hero_level,
+		"offered": choices.map(func(s): return s["id"]),
+	})
 	var hbox = HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 14)
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -1671,6 +1830,16 @@ func _show_skill_pick() -> void:
 	for skill in choices:
 		var card = _build_skill_card(skill, overlay)
 		hbox.add_child(card)
+
+	if run_rerolls > 0:
+		var reroll_btn = Button.new()
+		reroll_btn.text = "Reroll  (%d left)" % run_rerolls
+		reroll_btn.custom_minimum_size = Vector2(180, 36)
+		reroll_btn.pressed.connect(func():
+			run_rerolls -= 1
+			overlay.queue_free()
+			_show_skill_pick())
+		vbox.add_child(reroll_btn)
 
 func _build_skill_card(skill: Dictionary, overlay: Node) -> PanelContainer:
 	var panel = PanelContainer.new()
@@ -1710,6 +1879,7 @@ func _build_skill_card(skill: Dictionary, overlay: Node) -> PanelContainer:
 	pick_btn.text = "Choose"
 	pick_btn.custom_minimum_size = Vector2(150, 36)
 	pick_btn.pressed.connect(func():
+		Telemetry.log_event("dungeon_skill_chosen", {"skill": skill["id"], "level": hero_level})
 		overlay.queue_free()
 		_apply_skill(skill["id"])
 		if pending_level_ups > 0:
@@ -1719,13 +1889,26 @@ func _build_skill_card(skill: Dictionary, overlay: Node) -> PanelContainer:
 			is_paused = false)
 	inner.add_child(pick_btn)
 
+	if run_banishes > 0:
+		var banish_btn = Button.new()
+		banish_btn.text = "Banish"
+		banish_btn.custom_minimum_size = Vector2(150, 28)
+		banish_btn.add_theme_color_override("font_color", Color(1.0, 0.45, 0.35))
+		banish_btn.pressed.connect(func():
+			banished_skill_ids.append(skill["id"])
+			run_banishes -= 1
+			overlay.queue_free()
+			_show_skill_pick())
+		inner.add_child(banish_btn)
+
 	return panel
 
 func _get_random_skills(count: int) -> Array:
 	var available: Array = []
 	for skill in SKILL_POOL:
 		if skills_taken.get(skill["id"], 0) < skill["max_stacks"]:
-			available.append(skill)
+			if not banished_skill_ids.has(skill["id"]):
+				available.append(skill)
 	available.shuffle()
 	return available.slice(0, min(count, available.size()))
 

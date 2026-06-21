@@ -5,7 +5,7 @@ extends Node
 # -------------------------------------------------------
 const RARITY_WEIGHTS = {
 	1:  { "COMMON": 915, "RARE": 70,  "EPIC": 10, "LEGENDARY": 5   },
-	2:  { "COMMON": 880, "RARE": 100, "EPIC": 18, "LEGENDARY": 2   },
+	2:  { "COMMON": 874, "RARE": 100, "EPIC": 18, "LEGENDARY": 8   },
 	3:  { "COMMON": 82,  "RARE": 14,  "EPIC": 3,  "LEGENDARY": 1   },
 	4:  { "COMMON": 72,  "RARE": 20,  "EPIC": 6,  "LEGENDARY": 2   },
 	5:  { "COMMON": 60,  "RARE": 25,  "EPIC": 11, "LEGENDARY": 4   },
@@ -57,13 +57,13 @@ func _get_stack_mult(occurrence_index: int) -> float:
 	return STACK_DIMINISH[min(occurrence_index, STACK_DIMINISH.size() - 1)]
 
 const SLOT_STATS = {
-	"WEAPON":    ["attack", "attack_speed", "crit_chance", "crit_damage", "spell_power", "lifesteal", "thorns", "move_speed"],
-	"ARMOR":     ["hp", "armor", "attack_speed", "spell_power", "lifesteal", "thorns", "move_speed"],
-	"RING":      ["attack", "crit_chance", "crit_damage", "hp", "spell_power", "lifesteal", "thorns", "move_speed"],
-	"ACCESSORY": ["hp", "armor", "attack", "crit_chance", "spell_power", "lifesteal", "thorns", "move_speed"],
+	"WEAPON":    ["attack", "attack_speed", "crit_chance", "crit_damage", "spell_power", "lifesteal", "thorns", "move_speed", "on_kill_heal", "melee_power", "armor_penetration"],
+	"ARMOR":     ["hp", "armor", "attack_speed", "spell_power", "lifesteal", "thorns", "move_speed", "hp_regen", "dodge_chance"],
+	"RING":      ["attack", "crit_chance", "crit_damage", "hp", "spell_power", "lifesteal", "thorns", "move_speed", "on_kill_heal", "armor_penetration"],
+	"ACCESSORY": ["hp", "armor", "attack", "crit_chance", "spell_power", "lifesteal", "thorns", "move_speed", "hp_regen", "dodge_chance"],
 }
 
-const FLOAT_STATS = ["crit_chance", "attack_speed", "spell_power", "lifesteal", "move_speed"]
+const FLOAT_STATS = ["crit_chance", "attack_speed", "spell_power", "lifesteal", "move_speed", "hp_regen", "dodge_chance", "melee_power", "armor_penetration"]
 const FLOAT_RANGES = {
 	"crit_chance": {
 		"COMMON":    {"min": 0.02, "max": 0.05},
@@ -101,6 +101,36 @@ const FLOAT_RANGES = {
 		"EPIC":      {"min": 0.18, "max": 0.32},
 		"LEGENDARY": {"min": 0.28, "max": 0.45},
 	},
+	# Flat HP healed per second passively. Useful on all classes.
+	"hp_regen": {
+		"COMMON":    {"min": 0.3, "max": 0.8},
+		"RARE":      {"min": 0.6, "max": 1.5},
+		"EPIC":      {"min": 1.2, "max": 2.5},
+		"LEGENDARY": {"min": 2.0, "max": 4.0},
+	},
+	# % chance to completely negate an incoming hit. Especially good on
+	# fragile classes (Rogue) that lack armor to absorb hits naturally.
+	"dodge_chance": {
+		"COMMON":    {"min": 0.02, "max": 0.05},
+		"RARE":      {"min": 0.04, "max": 0.08},
+		"EPIC":      {"min": 0.06, "max": 0.12},
+		"LEGENDARY": {"min": 0.10, "max": 0.18},
+	},
+	# % bonus to melee attack damage only. Dead weight on Archer/Mage/Healer.
+	"melee_power": {
+		"COMMON":    {"min": 0.05, "max": 0.10},
+		"RARE":      {"min": 0.08, "max": 0.16},
+		"EPIC":      {"min": 0.14, "max": 0.24},
+		"LEGENDARY": {"min": 0.20, "max": 0.35},
+	},
+	# % of target's defense ignored when dealing damage. Situational —
+	# dead weight at low stages where defense barely matters.
+	"armor_penetration": {
+		"COMMON":    {"min": 0.05, "max": 0.12},
+		"RARE":      {"min": 0.10, "max": 0.20},
+		"EPIC":      {"min": 0.16, "max": 0.30},
+		"LEGENDARY": {"min": 0.25, "max": 0.45},
+	},
 }
 const CRIT_DMG_RANGES = {
 	"COMMON":    {"min": 8,  "max": 18},
@@ -116,6 +146,14 @@ const THORNS_RANGES = {
 	"RARE":      {"min": 4,  "max": 9},
 	"EPIC":      {"min": 7,  "max": 15},
 	"LEGENDARY": {"min": 12, "max": 24},
+}
+# Flat HP restored on each kill. Better on melee (constant kill contact)
+# than on ranged classes that kite from a distance.
+const ON_KILL_HEAL_RANGES = {
+	"COMMON":    {"min": 1, "max": 2},
+	"RARE":      {"min": 2, "max": 4},
+	"EPIC":      {"min": 3, "max": 7},
+	"LEGENDARY": {"min": 6, "max": 12},
 }
 
 const SETS = {
@@ -145,6 +183,33 @@ const BIOME_SET_WEIGHTS = {
 	"crypt":        {"Dragon Scale": 10, "Iron Oath": 20, "Emberborn": 15, "Shadow Veil": 40, "Storm Aegis": 15},
 	"forest_ruins": {"Dragon Scale": 25, "Iron Oath": 30, "Emberborn": 20, "Shadow Veil": 15, "Storm Aegis": 10},
 	"dragon_lair":  {"Dragon Scale": 50, "Iron Oath": 10, "Emberborn": 25, "Shadow Veil": 5,  "Storm Aegis": 10},
+}
+
+# Set bonuses apply per-troop (or per-Commander) based on how many pieces
+# of that set they personally have equipped. Both thresholds stack —
+# having 4 pieces grants the 2-piece AND 4-piece bonus simultaneously.
+# Special keys: "hp_pct" multiplies current HP, "chain_crit" is a bool flag.
+const SET_BONUSES = {
+	"Dragon Scale": {
+		2: {"hp_pct": 0.06},
+		4: {"on_kill_heal": 4},
+	},
+	"Iron Oath": {
+		2: {"armor": 5},
+		4: {"armor": 20},
+	},
+	"Emberborn": {
+		2: {"spell_power": 0.06},
+		4: {"spell_power": 0.06},
+	},
+	"Shadow Veil": {
+		2: {"dodge_chance": 0.05},
+		4: {"dodge_chance": 0.07},
+	},
+	"Storm Aegis": {
+		2: {"crit_chance": 0.05},
+		4: {"chain_crit": true},
+	},
 }
 
 const GENERIC_NAMES = {
@@ -288,6 +353,12 @@ func _roll_single_stat(stat: String, rarity_name: String, quality_name: String,
 		rolled_val = randi_range(min(q_min, range_max), range_max)
 	elif stat == "thorns":
 		var r = THORNS_RANGES[rarity_name]
+		range_min = int(r["min"] * lvl_mult * stack_mult)
+		range_max = int(r["max"] * q_mult["max_mult"] * lvl_mult * stack_mult)
+		var q_min = int(r["max"] * q_mult["min_mult"] * lvl_mult * stack_mult) if quality_name != "NORMAL" else range_min
+		rolled_val = randi_range(min(q_min, range_max), range_max)
+	elif stat == "on_kill_heal":
+		var r = ON_KILL_HEAL_RANGES[rarity_name]
 		range_min = int(r["min"] * lvl_mult * stack_mult)
 		range_max = int(r["max"] * q_mult["max_mult"] * lvl_mult * stack_mult)
 		var q_min = int(r["max"] * q_mult["min_mult"] * lvl_mult * stack_mult) if quality_name != "NORMAL" else range_min

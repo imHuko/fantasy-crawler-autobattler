@@ -26,8 +26,10 @@ var status_label: Label = null
 var defense_sandbox: Dictionary = {
 	"enabled": false,
 	"wave_counts": { "BOSS": 0, "TANK": 0, "MELEE": 3, "RANGED": 2, "ROGUE": 0, "CHARGER": 0, "BUFFER": 0 },
-	"hp_mult": 1.0,
-	"dmg_mult": 1.0,
+	"hp_mult": 1.0,       # scales enemy max HP
+	"dmg_mult": 1.0,      # scales enemy attack damage
+	"force_mult": -1.0,   # overrides attack_force_mult (enemy stat scaling); -1 = don't override
+	"stage_override": 0,  # 0 = use PlayerInventory.current_stage; 1–10 = force this stage
 }
 
 var dungeon_sandbox: Dictionary = {
@@ -48,6 +50,25 @@ func get_defense_sandbox_wave() -> Array:
 			wave.append(archetype)
 	wave.shuffle()
 	return wave
+
+var _toggle_btn: Button = null
+var _toggle_btn_layer: CanvasLayer = null
+
+func _ready() -> void:
+	_toggle_btn_layer = CanvasLayer.new()
+	_toggle_btn_layer.layer = 99
+	add_child(_toggle_btn_layer)
+
+	_toggle_btn = Button.new()
+	_toggle_btn.text = "⚙"
+	_toggle_btn.tooltip_text = "Admin Panel (Shift+F9)"
+	_toggle_btn.custom_minimum_size = Vector2(34, 34)
+	_toggle_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_toggle_btn.position = Vector2(-38, 4)
+	_toggle_btn.add_theme_font_size_override("font_size", 18)
+	_toggle_btn.add_theme_color_override("font_color", Color(1, 0.7, 0.2))
+	_toggle_btn.pressed.connect(_toggle_panel)
+	_toggle_btn_layer.add_child(_toggle_btn)
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == TOGGLE_KEY and event.shift_pressed:
@@ -108,7 +129,7 @@ func _open_panel() -> void:
 	# Detect current scene — sandbox live controls go FIRST so they're
 	# immediately visible without scrolling when you're inside a battle.
 	var scene = get_tree().current_scene
-	var in_defense = scene and scene.has_method("sandbox_place_troop")
+	var in_defense = scene and scene.has_method("sandbox_add_to_roster")
 	var in_dungeon = scene and scene.scene_file_path.ends_with("action_dungeon.tscn")
 
 	if in_defense:
@@ -170,11 +191,42 @@ func _open_panel() -> void:
 # Defense — live (in-scene) controls
 # -------------------------------------------------------
 func _build_defense_live_controls(vbox: VBoxContainer, scene: Node) -> void:
-	var ally_lbl = Label.new()
-	ally_lbl.text = "Add Ally (drops at random friendly position)"
-	ally_lbl.add_theme_font_size_override("font_size", 11)
-	ally_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	vbox.add_child(ally_lbl)
+	# --- Live stats ---
+	_add_section_label(vbox, "Live Battle Stats")
+
+	var stats_lbl = Label.new()
+	stats_lbl.add_theme_font_size_override("font_size", 11)
+	stats_lbl.add_theme_color_override("font_color", Color(0.85, 0.95, 0.85))
+	stats_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD
+
+	var _refresh_stats = func():
+		var s = scene.sandbox_get_battle_stats()
+		var lines: Array = []
+		lines.append("State: %s  |  Stage: %d  |  Force ×%.1f" % [
+			s["state"], s["effective_stage"], s["attack_force_mult"]])
+		lines.append("Base HP: %d / %d  %s" % [
+			s["base_hp"], s["base_max_hp"],
+			"[GOD]" if s["god_mode"] else ""])
+		lines.append("Enemies alive: %d" % s["enemies_alive"])
+		var ec: Dictionary = s["enemy_counts"]
+		if not ec.is_empty():
+			var parts: Array = []
+			for k in ["BOSS", "TANK", "MELEE", "RANGED", "ROGUE", "CHARGER", "BUFFER"]:
+				if ec.has(k): parts.append("%s×%d" % [k.capitalize(), ec[k]])
+			lines.append("  " + "  ".join(parts))
+		lines.append("Troops placed: %d" % s["troops_placed"])
+		for tl in s["troop_lines"]:
+			lines.append("  " + tl)
+		stats_lbl.text = "\n".join(lines)
+
+	_refresh_stats.call()
+	vbox.add_child(stats_lbl)
+	_add_button(vbox, "Refresh Stats", func(): _refresh_stats.call())
+
+	vbox.add_child(HSeparator.new())
+
+	# --- Troop / battle controls ---
+	_add_section_label(vbox, "Add Ally  (adds to roster, then click field to place)")
 
 	var ally_row = HBoxContainer.new()
 	ally_row.add_theme_constant_override("separation", 4)
@@ -185,16 +237,29 @@ func _build_defense_live_controls(vbox: VBoxContainer, scene: Node) -> void:
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		btn.custom_minimum_size = Vector2(0, 28)
 		btn.add_theme_font_size_override("font_size", 11)
-		btn.pressed.connect(func(): scene.sandbox_place_troop(type_name))
+		btn.pressed.connect(func(): scene.sandbox_add_to_roster(type_name))
 		ally_row.add_child(btn)
 
-	_add_button(vbox, "Repeat Wave (same composition, full reset)", func(): scene.sandbox_repeat_wave())
+	_add_button(vbox, "Heal All Placed Troops", func():
+		scene.sandbox_heal_placed_troops()
+		_refresh_stats.call())
 
-	var base_hp_lbl = Label.new()
-	base_hp_lbl.text = "Set Base HP"
-	base_hp_lbl.add_theme_font_size_override("font_size", 11)
-	base_hp_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	vbox.add_child(base_hp_lbl)
+	var god_btn = Button.new()
+	god_btn.text = "Base God Mode: %s" % ("ON" if scene.get("_sandbox_base_god_mode") else "OFF")
+	god_btn.add_theme_color_override("font_color",
+		Color(0.4, 0.9, 0.4) if scene.get("_sandbox_base_god_mode") else Color(0.7, 0.7, 0.7))
+	god_btn.pressed.connect(func():
+		var on = scene.sandbox_toggle_base_god_mode()
+		god_btn.text = "Base God Mode: %s" % ("ON" if on else "OFF")
+		god_btn.add_theme_color_override("font_color",
+			Color(0.4, 0.9, 0.4) if on else Color(0.7, 0.7, 0.7))
+		_refresh_stats.call())
+	vbox.add_child(god_btn)
+
+	vbox.add_child(HSeparator.new())
+
+	# --- Base HP controls ---
+	_add_section_label(vbox, "Set Base HP")
 
 	var base_hp_row = HBoxContainer.new()
 	base_hp_row.add_theme_constant_override("separation", 4)
@@ -218,7 +283,8 @@ func _build_defense_live_controls(vbox: VBoxContainer, scene: Node) -> void:
 			if val == -1: val = max(1, max_hp / 2)
 			elif val == -2: val = max_hp
 			scene.sandbox_set_base_hp(val)
-			cur_lbl.text = "(%d)" % scene.get("base_hp"))
+			cur_lbl.text = "(%d)" % scene.get("base_hp")
+			_refresh_stats.call())
 		base_hp_row.add_child(btn)
 
 	var minus_btn = Button.new()
@@ -227,7 +293,8 @@ func _build_defense_live_controls(vbox: VBoxContainer, scene: Node) -> void:
 	minus_btn.add_theme_font_size_override("font_size", 12)
 	minus_btn.pressed.connect(func():
 		scene.sandbox_set_base_hp(scene.get("base_hp") - 5)
-		cur_lbl.text = "(%d)" % scene.get("base_hp"))
+		cur_lbl.text = "(%d)" % scene.get("base_hp")
+		_refresh_stats.call())
 	base_hp_row.add_child(minus_btn)
 
 	base_hp_row.add_child(cur_lbl)
@@ -238,16 +305,44 @@ func _build_defense_live_controls(vbox: VBoxContainer, scene: Node) -> void:
 	plus_btn.add_theme_font_size_override("font_size", 12)
 	plus_btn.pressed.connect(func():
 		scene.sandbox_set_base_hp(scene.get("base_hp") + 5)
-		cur_lbl.text = "(%d)" % scene.get("base_hp"))
+		cur_lbl.text = "(%d)" % scene.get("base_hp")
+		_refresh_stats.call())
 	base_hp_row.add_child(plus_btn)
 
 	vbox.add_child(HSeparator.new())
 
-	var enemy_lbl = Label.new()
-	enemy_lbl.text = "Spawn Enemy (drops into enemy zone)"
-	enemy_lbl.add_theme_font_size_override("font_size", 11)
-	enemy_lbl.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
-	vbox.add_child(enemy_lbl)
+	# --- Stage override (live, takes effect on next sandbox_repeat_wave) ---
+	_add_section_label(vbox, "Stage Override  (takes effect on Repeat Wave)")
+
+	var stage_hint = Label.new()
+	stage_hint.text = "Current effective stage: %d" % scene.sandbox_get_battle_stats()["effective_stage"]
+	stage_hint.add_theme_font_size_override("font_size", 11)
+	stage_hint.add_theme_color_override("font_color", Color(0.55, 0.55, 0.55))
+	vbox.add_child(stage_hint)
+
+	var stage_row = HBoxContainer.new()
+	stage_row.add_theme_constant_override("separation", 4)
+	vbox.add_child(stage_row)
+	for s_val in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+		var btn = Button.new()
+		btn.text = str(s_val)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.custom_minimum_size = Vector2(0, 26)
+		btn.add_theme_font_size_override("font_size", 11)
+		btn.pressed.connect(func():
+			scene.sandbox_set_stage(s_val)
+			stage_hint.text = "Current effective stage: %d" % s_val)
+		stage_row.add_child(btn)
+
+	_add_button(vbox, "Repeat Wave (same composition, full HP reset)", func():
+		scene.sandbox_repeat_wave()
+		_refresh_stats.call()
+		stage_hint.text = "Current effective stage: %d" % scene.sandbox_get_battle_stats()["effective_stage"])
+
+	vbox.add_child(HSeparator.new())
+
+	# --- Enemy controls ---
+	_add_section_label(vbox, "Spawn Enemy")
 
 	var enemy_row1 = HBoxContainer.new()
 	enemy_row1.add_theme_constant_override("separation", 4)
@@ -273,6 +368,35 @@ func _build_defense_live_controls(vbox: VBoxContainer, scene: Node) -> void:
 		btn.pressed.connect(func(): scene.sandbox_spawn_enemy(archetype))
 		enemy_row2.add_child(btn)
 
+	_add_button(vbox, "Kill All Enemies", func():
+		scene.sandbox_kill_all_enemies()
+		_refresh_stats.call())
+
+	vbox.add_child(HSeparator.new())
+
+	# --- End state shortcuts ---
+	_add_section_label(vbox, "Force End State")
+
+	var end_row = HBoxContainer.new()
+	end_row.add_theme_constant_override("separation", 4)
+	vbox.add_child(end_row)
+
+	var win_btn = Button.new()
+	win_btn.text = "Force Win"
+	win_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	win_btn.custom_minimum_size = Vector2(0, 30)
+	win_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
+	win_btn.pressed.connect(func(): scene.sandbox_force_win())
+	end_row.add_child(win_btn)
+
+	var loss_btn = Button.new()
+	loss_btn.text = "Force Loss"
+	loss_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	loss_btn.custom_minimum_size = Vector2(0, 30)
+	loss_btn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
+	loss_btn.pressed.connect(func(): scene.sandbox_force_loss())
+	end_row.add_child(loss_btn)
+
 # -------------------------------------------------------
 # Defense — pre-launch config (not yet in a defense scene)
 # -------------------------------------------------------
@@ -293,12 +417,22 @@ func _build_defense_prelaunch(vbox: VBoxContainer) -> void:
 		_close_panel(); _open_panel())
 	vbox.add_child(def_enable_btn)
 
+	# Wave composition
+	_add_section_label(vbox, "Wave Composition")
 	for archetype in ["BOSS", "TANK", "MELEE", "RANGED", "ROGUE", "CHARGER", "BUFFER"]:
 		_add_counter_row(vbox, archetype, defense_sandbox["wave_counts"], archetype, 0, 30)
 
-	_add_float_row(vbox, "Enemy HP Mult", defense_sandbox, "hp_mult", 0.1, 10.0, 0.25)
-	_add_float_row(vbox, "Enemy Dmg Mult", defense_sandbox, "dmg_mult", 0.1, 10.0, 0.25)
+	# Enemy scaling
+	_add_section_label(vbox, "Enemy Scaling")
+	_add_float_row(vbox, "HP Mult", defense_sandbox, "hp_mult", 0.1, 10.0, 0.25)
+	_add_float_row(vbox, "Dmg Mult", defense_sandbox, "dmg_mult", 0.1, 10.0, 0.25)
+	_add_float_row(vbox, "Force Mult  (-1 = use real)", defense_sandbox, "force_mult", -1.0, 5.0, 0.25)
 
+	# Stage override
+	_add_section_label(vbox, "Stage Override  (0 = use real stage)")
+	_add_counter_row(vbox, "Stage", defense_sandbox, "stage_override", 0, 10)
+
+	# Utility buttons
 	var def_clear_btn = Button.new()
 	def_clear_btn.text = "Clear Wave"
 	def_clear_btn.pressed.connect(func():
@@ -306,6 +440,20 @@ func _build_defense_prelaunch(vbox: VBoxContainer) -> void:
 			defense_sandbox["wave_counts"][k] = 0
 		_close_panel(); _open_panel())
 	vbox.add_child(def_clear_btn)
+
+	var def_reset_btn = Button.new()
+	def_reset_btn.text = "Reset All to Default"
+	def_reset_btn.pressed.connect(func():
+		for k in defense_sandbox["wave_counts"]:
+			defense_sandbox["wave_counts"][k] = 0
+		defense_sandbox["wave_counts"]["MELEE"] = 3
+		defense_sandbox["wave_counts"]["RANGED"] = 2
+		defense_sandbox["hp_mult"] = 1.0
+		defense_sandbox["dmg_mult"] = 1.0
+		defense_sandbox["force_mult"] = -1.0
+		defense_sandbox["stage_override"] = 0
+		_close_panel(); _open_panel())
+	vbox.add_child(def_reset_btn)
 
 	_add_button(vbox, "▶ Launch Defense with Custom Wave", func():
 		defense_sandbox["enabled"] = true

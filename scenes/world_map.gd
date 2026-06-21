@@ -85,8 +85,20 @@ var side_panel: PanelContainer = null
 var side_panel_zone_id: int = -1   # which zone the panel is currently showing, -1 = none/hidden
 var side_panel_view: String = "overview"   # "overview" or "build"
 
+const ZONE_ART_ATLAS   = "res://assets/zones/zone_types_a.png"
+const ZONE_ART_COL_W   = 512    # image width 1536 / 3 columns = 512 exactly
+const ZONE_ART_ROW_H   = 205    # image height 1024 / 5 rows ≈ 205 (1px rounding error at seams is invisible)
+const ZONE_ART_ROWS = {
+	"forest":   0,
+	"ruins":    1,
+	"mountain": 2,
+	"dungeon":  3,
+	"city":     4,
+}
+
 # Overview view — built once, contents refreshed per zone
 var sp_header_label: Label
+var sp_zone_art: TextureRect
 var sp_owner_label: Label
 var sp_type_label: Label
 var sp_unit_grid: GridContainer   # the 8-box unit slot display (2 rows of 4), rebuilt per zone in _refresh_side_panel_overview
@@ -240,23 +252,38 @@ func _apply_pending_battle_result() -> void:
 		zones[zone_id]["owner"] = "player"
 		if was_conquest:
 			_notify("Victory! %s is now under your control." % zones[zone_id]["name"])
+			Telemetry.log_event("zone_conquered", {
+				"zone_id": zone_id, "zone_type": zones[zone_id]["type"],
+				"zone_name": zones[zone_id]["name"], "stage": PlayerInventory.current_stage,
+			})
 		else:
 			_notify("%s successfully defended!" % zones[zone_id]["name"])
+			Telemetry.log_event("zone_defended", {
+				"zone_id": zone_id, "zone_type": zones[zone_id]["type"], "stage": PlayerInventory.current_stage,
+			})
 	elif result == "lost":
 		if was_conquest:
 			_notify("The conquest of %s failed. The wilds remain in control." % zones[zone_id]["name"])
-			# Zone stays neutral, no further setback for a failed conquest attempt
+			Telemetry.log_event("conquest_failed", {
+				"zone_id": zone_id, "zone_type": zones[zone_id]["type"], "stage": PlayerInventory.current_stage,
+			})
 		else:
 			# Defending and lost — zone falls back to neutral, troops there are lost
 			zones[zone_id]["owner"] = "neutral"
 			zones[zone_id]["troops"].clear()
 			zones[zone_id]["buildings"].clear()
 			_notify("%s has fallen to the wilds! All stationed troops and buildings lost." % zones[zone_id]["name"])
+			Telemetry.log_event("zone_lost", {
+				"zone_id": zone_id, "zone_type": zones[zone_id]["type"], "stage": PlayerInventory.current_stage,
+			})
 	elif result == "retreat":
 		if not was_conquest:
 			# Retreating from a defense = losing the zone too, but troops survive
 			zones[zone_id]["owner"] = "neutral"
 			_notify("You retreated from %s. The zone has fallen." % zones[zone_id]["name"])
+			Telemetry.log_event("zone_retreat", {
+				"zone_id": zone_id, "zone_type": zones[zone_id]["type"], "stage": PlayerInventory.current_stage,
+			})
 
 	# Clear any pending attack warnings for this zone since it's now resolved
 	var remaining_attacks = []
@@ -576,18 +603,14 @@ func _build_side_panel() -> void:
 	sp_header_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	overview.add_child(sp_header_label)
 
-	# Zone art placeholder, centered beneath the name — no zone-level
-	# art exists yet (only building/unit icons), so this stays an empty
-	# box for now; once zone art exists, swap this ColorRect for a
-	# TextureRect loading res://art/icons/zones/<type>.png or similar,
-	# same convention as the building/unit icons.
 	var art_center = CenterContainer.new()
 	art_center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	overview.add_child(art_center)
-	var picture_box = ColorRect.new()
-	picture_box.color = Color(0.15, 0.15, 0.18)
-	picture_box.custom_minimum_size = Vector2(180, 120)
-	art_center.add_child(picture_box)
+	sp_zone_art = TextureRect.new()
+	sp_zone_art.custom_minimum_size = Vector2(192, 77)
+	sp_zone_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	sp_zone_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	art_center.add_child(sp_zone_art)
 
 	sp_owner_label = Label.new()
 	sp_owner_label.add_theme_font_size_override("font_size", 12)
@@ -782,6 +805,13 @@ func _refresh_side_panel_overview(zone_id: int) -> void:
 	sp_owner_label.add_theme_color_override("font_color", OWNER_COLORS[zone["owner"]])
 
 	sp_type_label.text = "Type: %s  |  Threat: %d" % [zone["type"].capitalize(), zone["enemy_strength"]]
+
+	if sp_zone_art and ResourceLoader.exists(ZONE_ART_ATLAS):
+		var row = ZONE_ART_ROWS.get(zone["type"], 0)
+		var atlas = AtlasTexture.new()
+		atlas.atlas = load(ZONE_ART_ATLAS)
+		atlas.region = Rect2(ZONE_ART_COL_W, row * ZONE_ART_ROW_H, ZONE_ART_COL_W, ZONE_ART_ROW_H)
+		sp_zone_art.texture = atlas
 
 	var stationed_troops: Array[TroopData] = []
 	for troop_id in zone["troops"]:
@@ -1073,7 +1103,10 @@ func _refresh_side_panel_build(zone_id: int) -> void:
 		btn.disabled = at_max or zone_full or cant_afford
 		btn.add_theme_color_override("font_color",
 			Color(0.4, 0.8, 0.4) if at_max else (Color(0.5,0.5,0.5) if (zone_full or cant_afford) else Color(0.85, 0.75, 0.4)))
-		btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
+		if current_level == 0:
+			btn.pressed.connect(_confirm_build.bind(bname, zone_id))
+		else:
+			btn.pressed.connect(_on_build_selected.bind(bname, zone_id))
 		row_vbox.add_child(btn)
 		if bname == "Farm":
 			tutorial_build_farm_btn = btn
@@ -1155,13 +1188,26 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	container.add_child(circle)
 	refs["circle"] = circle
 
-	# Zone type icon
-	var icon = Label.new()
-	icon.text = ZONE_TYPE_ICONS[zone["type"]]
-	icon.add_theme_font_size_override("font_size", 20)
-	icon.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
-	icon.position = Vector2(-10, -16)
-	container.add_child(icon)
+	# Zone type icon — real art when atlas exists, emoji fallback otherwise
+	if ResourceLoader.exists(ZONE_ART_ATLAS):
+		var row = ZONE_ART_ROWS.get(zone["type"], 0)
+		var atlas = AtlasTexture.new()
+		atlas.atlas = load(ZONE_ART_ATLAS)
+		atlas.region = Rect2(0, row * ZONE_ART_ROW_H, ZONE_ART_COL_W, ZONE_ART_ROW_H)
+		var icon_tex = TextureRect.new()
+		icon_tex.texture = atlas
+		icon_tex.size = Vector2(44, 44)
+		icon_tex.position = Vector2(-22, -22)
+		icon_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		container.add_child(icon_tex)
+	else:
+		var icon = Label.new()
+		icon.text = ZONE_TYPE_ICONS[zone["type"]]
+		icon.add_theme_font_size_override("font_size", 20)
+		icon.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
+		icon.position = Vector2(-10, -16)
+		container.add_child(icon)
 
 	# Owner indicator dot
 	var dot = ColorRect.new()
@@ -1379,19 +1425,11 @@ func _start_scripted_tutorial_defense() -> void:
 	var zone = zones[0]
 	_notify("⚔ %s is under attack! You must defend it now." % zone["name"])
 	PlayerInventory.current_battle_zone = 0
+	PlayerInventory.current_stage = zones[0]["enemy_strength"]  # = 1, always gentle
 	PlayerInventory.current_attack_force = TUTORIAL_DEFENSE_FORCE_MULT
 	PlayerInventory.conquering_zone = false
 	PlayerInventory.set_battle_roster_from_zone_troops(zone["troops"])
 	PlayerInventory.set_battle_zone_buffs(get_best_forge_level(0), get_best_shrine_level(0))
-	# defense_scene.gd's victory handler unconditionally increments
-	# current_stage, which is real game progression that scales future
-	# dungeon/enemy difficulty — this scripted, deliberately-trivial
-	# tutorial fight shouldn't count toward that. Stash the pre-battle
-	# value so it can be restored once the player's back; world_map.gd
-	# isn't present while defense_scene.gd runs, so this can't be
-	# corrected from there directly, but resolving the very next
-	# tutorial step (heal_intro, on Management) is the right moment.
-	PlayerInventory.set_meta("tutorial_pre_battle_stage", PlayerInventory.current_stage)
 	SaveManager.save_game()
 	get_tree().change_scene_to_file("res://scenes/defense_scene.tscn")
 
@@ -1515,12 +1553,13 @@ func _on_conquer(zone_id: int) -> void:
 		PlayerInventory.set_battle_zone_buffs(
 			get_best_forge_level(staging_zone_id), get_best_shrine_level(staging_zone_id))
 
-	# Always triggers a battle — zone has guards based on distance
+	# Always triggers a battle — difficulty scales purely with zone distance
 	PlayerInventory.current_battle_zone = int(zone_id)
-	var conquest_force = zones[zone_id]["enemy_strength"] * 0.4
+	PlayerInventory.current_stage = zones[zone_id]["enemy_strength"]
+	var diff_force = PlayerInventory.difficulty_settings.get("force_size", 1.0)
 	if PlayerInventory.unlocked_talents.get("diplomatic_tongue", false):
-		conquest_force *= 0.8
-	PlayerInventory.current_attack_force = max(0.5, conquest_force)
+		diff_force *= 0.8
+	PlayerInventory.current_attack_force = diff_force
 	PlayerInventory.conquering_zone = true
 	PlayerInventory.set_battle_roster_from_zone_troops(staging_troop_ids)
 	SaveManager.save_game()
@@ -1675,6 +1714,59 @@ const BUILDINGS = {
 	},
 }
 
+func _confirm_build(building_name: String, zone_id: int) -> void:
+	# Tutorial-free farm skips confirm to avoid disrupting tutorial flow.
+	var is_tutorial_free = (building_name == "Farm" and zone_id == 0 and PlayerInventory.tutorial_active)
+	if is_tutorial_free:
+		_on_build_selected(building_name, zone_id)
+		return
+
+	_close_popup()
+	popup_panel = PanelContainer.new()
+	popup_panel.position = Vector2(MAP_W / 2 - 160, MAP_H / 2 - 80)
+	popup_panel.custom_minimum_size = Vector2(320, 0)
+	add_child(popup_panel)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	popup_panel.add_child(vbox)
+
+	var title = Label.new()
+	title.text = "Build %s?" % building_name
+	title.add_theme_font_size_override("font_size", 15)
+	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
+	vbox.add_child(title)
+
+	var cost = _get_building_cost(building_name)
+	var msg = Label.new()
+	msg.text = "Cost: %d gold\nBuildings are permanent and cannot be removed." % cost
+	msg.add_theme_font_size_override("font_size", 12)
+	msg.add_theme_color_override("font_color", Color(0.75, 0.75, 0.75))
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD
+	vbox.add_child(msg)
+
+	var btn_row = HBoxContainer.new()
+	btn_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(btn_row)
+
+	var confirm_btn = Button.new()
+	confirm_btn.text = "Confirm"
+	confirm_btn.custom_minimum_size = Vector2(130, 36)
+	confirm_btn.add_theme_font_size_override("font_size", 13)
+	confirm_btn.add_theme_color_override("font_color", Color(0.3, 0.9, 0.3))
+	confirm_btn.pressed.connect(func():
+		_close_popup()
+		_on_build_selected(building_name, zone_id)
+	)
+	btn_row.add_child(confirm_btn)
+
+	var cancel_btn = Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.custom_minimum_size = Vector2(130, 36)
+	cancel_btn.add_theme_font_size_override("font_size", 13)
+	cancel_btn.pressed.connect(_close_popup)
+	btn_row.add_child(cancel_btn)
+
 func _on_build_selected(building_name: String, zone_id: int) -> void:
 	print("[TUTORIAL DEBUG] _on_build_selected FIRED: building=%s zone_id=%d" % [building_name, zone_id])
 	var zone = zones[zone_id]
@@ -1718,8 +1810,15 @@ func _on_build_selected(building_name: String, zone_id: int) -> void:
 
 	if current_level == 0:
 		_notify("Built %s in %s!" % [building_name, zone["name"]])
+		Telemetry.log_event("building_built", {
+			"building": building_name, "zone_type": zone["type"], "stage": PlayerInventory.current_stage,
+		})
 	else:
 		_notify("Upgraded %s to Lv%d in %s!" % [building_name, current_level + 1, zone["name"]])
+		Telemetry.log_event("building_upgraded", {
+			"building": building_name, "level": current_level + 1,
+			"zone_type": zone["type"], "stage": PlayerInventory.current_stage,
+		})
 
 # Returns the resource cost to build/upgrade a building, with the
 # Efficient Construction talent discount applied (-25%, minimum 10).
@@ -1793,11 +1892,11 @@ func _process_resource_generation(delta: float) -> void:
 		if trade_routes and not has_farm and not has_barracks:
 			gold_gain += 2.0 if PlayerInventory.unlocked_talents.get("economy_supply_network", false) else 1.0
 
-	# Converted from "per old turn" to "per second" — divide by the old turn length.
+	var income_mult = PlayerInventory.difficulty_settings.get("income_mult", 1.0)
 	if food_gain > 0:
-		PlayerInventory.resources["food"] += (food_gain / SECONDS_PER_OLD_TURN) * delta
+		PlayerInventory.resources["food"] += (food_gain * income_mult / SECONDS_PER_OLD_TURN) * delta
 	if gold_gain > 0:
-		PlayerInventory.resources["gold"] += (gold_gain / SECONDS_PER_OLD_TURN) * delta
+		PlayerInventory.resources["gold"] += (gold_gain * income_mult / SECONDS_PER_OLD_TURN) * delta
 
 # -------------------------------------------------------
 # Real-Time Clock
@@ -1926,7 +2025,9 @@ func _maybe_spawn_attack() -> void:
 	if targets.is_empty(): return
 
 	var target_id = targets[randi() % targets.size()]
-	var force = diff_settings.get("force_size", 1.0)
+	var base_force = diff_settings.get("force_size", 1.0)
+	var zone_force = zones[target_id]["enemy_strength"] * 0.15
+	var force = max(base_force, zone_force)
 	var effective_warning_turns = warning_turns + get_watchtower_bonus(target_id)
 	var effective_warning_seconds = effective_warning_turns * SECONDS_PER_OLD_TURN
 	pending_attacks.append({
@@ -1963,6 +2064,7 @@ func _launch_next_mandatory_battle() -> void:
 	var zone = zones[int(attack["zone_id"])]
 	_notify("⚔ %s is under attack from the wilds! You must defend it now." % zone["name"])
 	PlayerInventory.current_battle_zone = int(attack["zone_id"])
+	PlayerInventory.current_stage = zones[int(attack["zone_id"])]["enemy_strength"]
 	PlayerInventory.current_attack_force = attack["force_size"]
 	PlayerInventory.conquering_zone = false
 	# Roster is snapshotted NOW, at the moment the attack actually lands —

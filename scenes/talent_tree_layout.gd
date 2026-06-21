@@ -73,6 +73,7 @@ const POSITIONS: Dictionary = {
 	# --- DUNGEON branch (right side, lower half) ---
 	"dungeon_extended_campaign":        {"x": 0.5700, "y": 0.6810},
 	"dungeon_marathon_runner":          {"x": 0.5700, "y": 0.7920},
+	"dungeon_loaded_dice":              {"x": 0.5700, "y": 0.9000},
 	"dungeon_quick_study":              {"x": 0.6900, "y": 0.6810},
 	"dungeon_skill_mastery":            {"x": 0.6900, "y": 0.7920},
 	"dungeon_opening_gambit":           {"x": 0.6900, "y": 0.9000},

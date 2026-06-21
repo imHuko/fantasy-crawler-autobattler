@@ -61,6 +61,16 @@ func _add_recruit_card(parent: HBoxContainer, troop: TroopData) -> void:
 	vbox.add_theme_constant_override("separation", 6)
 	card.add_child(vbox)
 
+	var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
+	if ResourceLoader.exists(portrait_path):
+		var portrait = TextureRect.new()
+		portrait.texture = load(portrait_path)
+		portrait.custom_minimum_size = Vector2(96, 96)
+		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		portrait.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+		portrait.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox.add_child(portrait)
+
 	var name_lbl = Label.new()
 	name_lbl.text = troop.troop_name
 	name_lbl.add_theme_font_size_override("font_size", 16)

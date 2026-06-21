@@ -140,7 +140,7 @@ func _setup_sprite_if_available() -> void:
 	# consistently with the shape fallback and with how callers already
 	# place this node (`position = pos - Vector2(sz/2, sz/2)`).
 	_anim_sprite.centered = true
-	_anim_sprite.modulate = base_color
+	_anim_sprite.modulate = Color.WHITE
 
 	# Scale from the idle frame's actual height, not a hardcoded number —
 	# if you ever re-export the art at a different resolution, this still

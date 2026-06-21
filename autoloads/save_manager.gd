@@ -34,6 +34,7 @@ func save_game() -> void:
 		"tutorial_step_index": PlayerInventory.tutorial_step_index,
 		"gear": [],
 		"troops": [],
+		"commander_gear": {},
 	}
 
 	# Save gear
@@ -78,11 +79,23 @@ func save_game() -> void:
 				}
 		data["troops"].append(t_data)
 
+	# Save commander gear
+	for slot_key in PlayerInventory.commander_gear:
+		var g: GearItem = PlayerInventory.commander_gear[slot_key]
+		if g != null:
+			data["commander_gear"][slot_key] = {
+				"name": g.item_name, "rarity": g.rarity, "slot": g.slot,
+				"quality": g.quality, "item_level": g.item_level,
+				"stats": g.stats, "stat_ranges": g.stat_ranges,
+				"set_name": g.set_name, "upgrade_level": g.upgrade_level,
+			}
+
 	var f = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	f.store_string(JSON.stringify(data, "\t"))
 	f.close()
 	print("[SaveManager] Game saved — Stage %d, %d troops, %d gear" % [
 		data["stage"], data["troops"].size(), data["gear"].size()])
+	Telemetry.flush()
 
 func load_game() -> void:
 	if not FileAccess.file_exists(SAVE_PATH):
@@ -162,6 +175,12 @@ func load_game() -> void:
 			troop.equipped_gear[slot_key] = gear
 		PlayerInventory.troop_roster.append(troop)
 
+	# Load commander gear
+	PlayerInventory.commander_gear = {"WEAPON": null, "RING": null}
+	for slot_key in data.get("commander_gear", {}):
+		if slot_key in PlayerInventory.commander_gear:
+			PlayerInventory.commander_gear[slot_key] = _dict_to_gear(data["commander_gear"][slot_key])
+
 	# Strip any legacy hero troop — Commander is now a separate entity, not a roster slot
 	PlayerInventory.troop_roster = PlayerInventory.troop_roster.filter(func(t): return not t.is_hero)
 
@@ -169,10 +188,18 @@ func load_game() -> void:
 		PlayerInventory.current_stage,
 		PlayerInventory.troop_roster.size(),
 		PlayerInventory.gear_inventory.size()])
+	Telemetry.start_session(PlayerInventory.difficulty, PlayerInventory.current_stage)
+	Telemetry.log_event("game_loaded", {
+		"stage": PlayerInventory.current_stage,
+		"troops": PlayerInventory.troop_roster.size(),
+		"gear": PlayerInventory.gear_inventory.size(),
+		"talents_unlocked": PlayerInventory.unlocked_talents.size(),
+	})
 
 func new_game() -> void:
 	PlayerInventory.current_stage = 1
 	PlayerInventory.unlocked_troop_slots = 3
+	PlayerInventory.commander_gear = {"WEAPON": null, "RING": null}
 	PlayerInventory.gear_inventory.clear()
 	PlayerInventory.troop_roster.clear()
 	PlayerInventory.tutorial_complete = false
@@ -210,6 +237,8 @@ func new_game() -> void:
 			GearGenerator.generate(biomes[randi() % biomes.size()], 1))
 
 	print("[SaveManager] New game started.")
+	Telemetry.start_session(PlayerInventory.difficulty, 1)
+	Telemetry.log_event("game_started", {"difficulty": PlayerInventory.difficulty})
 
 # -------------------------------------------------------
 # Recruitable unit pool — used for tutorial reward and

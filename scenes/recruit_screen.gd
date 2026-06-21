@@ -164,6 +164,16 @@ func _make_candidate_card(troop: TroopData) -> PanelContainer:
 	vbox.add_theme_constant_override("separation", 4)
 	card.add_child(vbox)
 
+	var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
+	if ResourceLoader.exists(portrait_path):
+		var portrait = TextureRect.new()
+		portrait.texture = load(portrait_path)
+		portrait.custom_minimum_size = Vector2(80, 80)
+		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		portrait.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+		portrait.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		vbox.add_child(portrait)
+
 	var name_lbl = Label.new()
 	name_lbl.text = "%s [%s]" % [troop.troop_name, troop.get_type_name()]
 	name_lbl.add_theme_font_size_override("font_size", 13)
@@ -188,6 +198,13 @@ func _make_candidate_card(troop: TroopData) -> PanelContainer:
 
 func _finalize_recruit(troop: TroopData) -> void:
 	PlayerInventory.troop_roster.append(troop)
+	Telemetry.log_event("troop_recruited", {
+		"type": troop.get_type_name(),
+		"hp": troop.base_stats.get("hp", 0),
+		"attack": troop.base_stats.get("attack", 0),
+		"roster_size": PlayerInventory.troop_roster.size(),
+		"stage": PlayerInventory.current_stage,
+	})
 	SaveManager.save_game()
 	_set_status("Recruited a new %s!" % troop.get_type_name())
 	for child in recruit_choices_container.get_children():

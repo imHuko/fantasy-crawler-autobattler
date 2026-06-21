@@ -41,6 +41,7 @@ var troop_list: VBoxContainer
 var gear_list: VBoxContainer
 var status_label: Label
 var set_bonus_label: Label
+var cmdr_slot_buttons: Dictionary = {}   # { "WEAPON": Button, "RING": Button }
 
 func _ready() -> void:
 	_build_ui()
@@ -379,7 +380,10 @@ func _populate_troops() -> void:
 	for child in troop_list.get_children():
 		child.queue_free()
 	all_slot_buttons.clear()
+	cmdr_slot_buttons.clear()
 	tutorial_heal_buttons.clear()
+
+	troop_list.add_child(_make_commander_card())
 
 	var map_label = Label.new()
 	map_label.text = "🗺 TROOPS  (stationed on the world map, fight in defense battles)"
@@ -447,6 +451,116 @@ func _on_sell_gear(gear: GearItem) -> void:
 	_update_status("Sold %s for %d Gold." % [gear.item_name, price])
 	_populate_gear()
 
+func _make_commander_card() -> PanelContainer:
+	var card = PanelContainer.new()
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.12, 0.10, 0.18)
+	style.border_color = Color(0.6, 0.4, 0.9)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(4)
+	card.add_theme_stylebox_override("panel", style)
+
+	var vbox = VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	card.add_child(vbox)
+
+	var header = Label.new()
+	header.text = "COMMANDER  •  %s  (runs the action dungeon)" % PlayerInventory.commander_class
+	header.add_theme_font_size_override("font_size", 13)
+	header.add_theme_color_override("font_color", Color(0.75, 0.55, 1.0))
+	vbox.add_child(header)
+
+	var slots_hbox = HBoxContainer.new()
+	slots_hbox.add_theme_constant_override("separation", 4)
+	vbox.add_child(slots_hbox)
+
+	for slot_key in ["WEAPON", "RING"]:
+		var slot_container = VBoxContainer.new()
+		slot_container.add_theme_constant_override("separation", 2)
+
+		var btn = DroppableSlotButton.new()
+		btn.custom_minimum_size = Vector2(80, 50)
+		btn.set_meta("slot", slot_key)
+		btn.slot_key_ref = slot_key
+		btn.on_drop_callback = _equip_gear_to_commander
+		_refresh_cmdr_slot(btn, slot_key)
+		btn.pressed.connect(_on_cmdr_slot_pressed.bind(btn, slot_key))
+		btn.mouse_entered.connect(_on_cmdr_slot_hover.bind(slot_key, btn))
+		btn.mouse_exited.connect(_on_cmdr_slot_unhover.bind(btn, slot_key))
+		slot_container.add_child(btn)
+		cmdr_slot_buttons[slot_key] = btn
+		all_slot_buttons.append(btn)
+
+		var unequip_btn = Button.new()
+		unequip_btn.text = "Unequip"
+		unequip_btn.custom_minimum_size = Vector2(80, 22)
+		unequip_btn.add_theme_font_size_override("font_size", 10)
+		unequip_btn.pressed.connect(_on_cmdr_unequip.bind(slot_key, btn))
+		slot_container.add_child(unequip_btn)
+
+		slots_hbox.add_child(slot_container)
+
+	return card
+
+func _refresh_cmdr_slot(btn: Button, slot_key: String) -> void:
+	var gear: GearItem = PlayerInventory.commander_gear.get(slot_key)
+	if gear:
+		btn.text = "%s\n%s\n[%s]" % [SLOT_ICONS[slot_key], _short_name(gear.item_name), gear.get_rarity_name()[0]]
+		btn.add_theme_color_override("font_color", RARITY_COLORS.get(gear.get_rarity_name(), Color.WHITE))
+	else:
+		btn.text = SLOT_ICONS[slot_key] + "\n[empty]"
+		btn.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
+
+func _on_cmdr_slot_pressed(btn: Button, slot_key: String) -> void:
+	if selected_slot_button == btn:
+		_clear_selection()
+		_update_status("Selection cleared.")
+		return
+	if selected_gear != null:
+		if selected_gear.get_slot_name() != slot_key:
+			_update_status("Wrong slot! That's a %s piece — Commander's %s slot selected." % [selected_gear.get_slot_name(), slot_key])
+			return
+		_equip_gear_to_commander(selected_gear, null, slot_key, btn)
+		return
+	_clear_selection()
+	selected_troop = null
+	selected_slot = slot_key
+	selected_slot_button = btn
+	btn.add_theme_color_override("font_color", Color(1, 1, 0))
+	_update_status("Selected Commander's %s slot — pick a %s from inventory." % [slot_key, slot_key])
+	_populate_gear()
+
+func _equip_gear_to_commander(gear: GearItem, _troop, slot_key: String, slot_btn: Button) -> void:
+	var old_gear: GearItem = PlayerInventory.commander_gear.get(slot_key)
+	if old_gear:
+		PlayerInventory.add_gear(old_gear)
+	PlayerInventory.commander_gear[slot_key] = gear
+	PlayerInventory.remove_gear(gear)
+	_update_status("Equipped %s on Commander!" % gear.item_name)
+	_clear_selection()
+	_refresh_cmdr_slot(slot_btn, slot_key)
+	_populate_gear()
+	SaveManager.save_game()
+
+func _on_cmdr_unequip(slot_key: String, slot_btn: Button) -> void:
+	var gear: GearItem = PlayerInventory.commander_gear.get(slot_key)
+	if gear == null: return
+	PlayerInventory.add_gear(gear)
+	PlayerInventory.commander_gear[slot_key] = null
+	_refresh_cmdr_slot(slot_btn, slot_key)
+	_populate_gear()
+	SaveManager.save_game()
+
+func _on_cmdr_slot_hover(slot_key: String, btn: Button) -> void:
+	var gear: GearItem = PlayerInventory.commander_gear.get(slot_key)
+	if gear and compare_panel:
+		_show_compare(gear, null, slot_key)
+
+func _on_cmdr_slot_unhover(btn: Button, slot_key: String) -> void:
+	_refresh_cmdr_slot(btn, slot_key)
+	_hide_compare()
+
 func _make_troop_card(troop: TroopData) -> PanelContainer:
 	var card = PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -459,6 +573,15 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	var header_hbox = HBoxContainer.new()
 	header_hbox.add_theme_constant_override("separation", 8)
 	vbox.add_child(header_hbox)
+
+	var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
+	if ResourceLoader.exists(portrait_path):
+		var portrait = TextureRect.new()
+		portrait.texture = load(portrait_path)
+		portrait.custom_minimum_size = Vector2(48, 48)
+		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		portrait.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+		header_hbox.add_child(portrait)
 
 	var header = Label.new()
 	var hero_tag = "⚔ " if troop.is_hero else ""
@@ -774,7 +897,15 @@ func _on_gear_selected(gear: GearItem, btn: Button) -> void:
 		_update_status("Selection cleared.")
 		return
 
-	# If a slot was already selected first, this completes the equip directly
+	# If a Commander slot was already selected first, equip to Commander
+	if selected_troop == null and selected_slot != "":
+		if gear.get_slot_name() != selected_slot:
+			_update_status("Wrong slot! That's a %s piece — Commander's %s slot selected." % [gear.get_slot_name(), selected_slot])
+			return
+		_equip_gear_to_commander(gear, null, selected_slot, selected_slot_button)
+		return
+
+	# If a troop slot was already selected first, this completes the equip directly
 	if selected_troop != null and selected_slot != "":
 		if gear.get_slot_name() != selected_slot:
 			_update_status("Wrong slot! That's a %s piece — you selected a %s slot." % [gear.get_slot_name(), selected_slot])

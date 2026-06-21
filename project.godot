@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Fantasy crawler autobattler"
 run/main_scene="res://scenes/main_menu.tscn"
-config/features=PackedStringArray("4.6", "Forward Plus")
+config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
 
 [autoload]
@@ -23,11 +23,7 @@ SaveManager="*uid://b2v5ggfaybckn"
 AdminPanel="*uid://b3diep401blyh"
 TutorialOverlay="*uid://bm7hoq5fo7x1l"
 TutorialRouter="*uid://8thbemslu845"
-_mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
-
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/godot_ai/plugin.cfg")
+Telemetry="*res://autoloads/telemetry_manager.gd"
 
 [physics]
 

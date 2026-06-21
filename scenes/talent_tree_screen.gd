@@ -39,6 +39,18 @@ const BRANCH_COLOR := {
 }
 
 const ICON_DIVISOR := 0.11   # icon size as a fraction of the smaller grid_area dimension
+
+const TALENT_ICONS := {
+	"gear_sharper_eye":              "res://assets/icons/talents/sharper_eye.png",
+	"recruiting_talent_scout":       "res://assets/icons/talents/scout_eye.png",
+	"combat_hardened_ranks":         "res://assets/icons/talents/hardened_ranks.png",
+	"combat_veterans_grit":          "res://assets/icons/talents/veterans_grit.png",
+	"gear_transcendent_quality":     "res://assets/icons/talents/transcendent.png",
+	"buildings_efficient_construction": "res://assets/icons/talents/efficient_construction.png",
+	"gear_salvage_mastery":          "res://assets/icons/talents/salvage_mastery.png",
+	"buildings_wider_reach":         "res://assets/icons/talents/wider_reach.png",
+	"buildings_reinforced_towers":   "res://assets/icons/talents/watchtower.png",
+}
 const GRID_PADDING := 16.0   # px padding around the whole grid before scaling
 
 # Adjust this to wherever your previous talent screen sent the
@@ -257,6 +269,20 @@ func _make_node_button(node_id: String) -> Button:
 	btn.add_theme_font_size_override("font_size", 11)
 
 	btn.pressed.connect(_on_node_pressed.bind(node_id))
+
+	# Art icon — fills the button background when art exists for this node.
+	# Text is cleared so the icon is the full visual; tooltip carries the name.
+	if TALENT_ICONS.has(node_id):
+		var icon_path: String = TALENT_ICONS[node_id]
+		if ResourceLoader.exists(icon_path):
+			var tex := TextureRect.new()
+			tex.texture = load(icon_path)
+			tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tex.set_anchors_preset(Control.PRESET_FULL_RECT)
+			tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			btn.add_child(tex)
+			btn.text = ""
 
 	# Diagonal "locked" slash overlay — created once per button, hidden
 	# by default, toggled visible in _refresh_node_state(). Lives as a
@@ -508,8 +534,9 @@ func _show_description(node_id: String) -> void:
 	var owned: bool = PlayerInventory.unlocked_talents.get(node_id, false)
 	var prereq_ok: bool = TalentTreeData.prereq_met(node_id)
 	var stage_ok: bool = TalentTreeData.stage_met(node_id)
-	var cost: int = node_data["cost"]
-	var can_afford: bool = PlayerInventory.can_afford({"food": 0, "gold": cost})
+	var cost: int = TalentTreeData.get_scaled_cost(node_id)
+	var half = cost / 2
+	var can_afford: bool = PlayerInventory.can_afford({"food": half, "gold": half})
 
 	var normal_color := Color(0.9, 0.8, 0.4, 1)
 	var red_color := Color(0.9, 0.3, 0.3, 1)
@@ -520,9 +547,7 @@ func _show_description(node_id: String) -> void:
 		desc_requirement.visible = false
 		purchase_button.visible = false
 	else:
-		# Cost line — turns red specifically when resources can't
-		# cover it (separate from prereq/stage gating below).
-		desc_cost.text = "Free" if cost <= 0 else "Cost: %d" % cost
+		desc_cost.text = "Free" if cost <= 0 else "Cost: %d 🌾 + %d 🪙" % [half, half]
 		desc_cost.add_theme_color_override("font_color", red_color if not can_afford else normal_color)
 
 		# Requirement line — only shown (and only red) when a prereq

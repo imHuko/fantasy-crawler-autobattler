@@ -60,6 +60,22 @@ func get_effective_stats() -> Dictionary:
 	if veteran_hp_bonus > 0 and PlayerInventory.unlocked_talents.get("combat_veterans_grit", false):
 		effective["hp"] = effective.get("hp", 0) + veteran_hp_bonus
 
+	# Set bonuses — per-troop based on how many set pieces this troop wears.
+	# Both thresholds stack: 4 pieces grants both the 2-piece and 4-piece bonus.
+	var set_counts = get_set_counts()
+	for set_name in set_counts:
+		var count = set_counts[set_name]
+		var bonuses = GearGenerator.SET_BONUSES.get(set_name, {})
+		for threshold in bonuses:
+			if count >= threshold:
+				for key in bonuses[threshold]:
+					if key == "hp_pct":
+						effective["hp"] = int(effective.get("hp", 0) * (1.0 + bonuses[threshold][key]))
+					elif key == "chain_crit":
+						effective["chain_crit"] = true
+					else:
+						effective[key] = effective.get(key, 0.0) + bonuses[threshold][key]
+
 	return effective
 
 # Current max HP given equipped gear and talents right now. Changes
@@ -96,6 +112,15 @@ func get_equipped_set_names() -> Array:
 		if gear != null and gear.set_name != "":
 			sets.append(gear.set_name)
 	return sets
+
+# Returns { set_name: piece_count } for all sets this troop has equipped
+func get_set_counts() -> Dictionary:
+	var counts = {}
+	for slot_key in equipped_gear:
+		var gear: GearItem = equipped_gear[slot_key]
+		if gear != null and gear.set_name != "":
+			counts[gear.set_name] = counts.get(gear.set_name, 0) + 1
+	return counts
 
 func equip(gear: GearItem) -> void:
 	var slot_key = gear.get_slot_name()
