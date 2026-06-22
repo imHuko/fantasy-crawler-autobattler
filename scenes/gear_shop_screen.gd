@@ -50,6 +50,7 @@ func get_tutorial_target(target_id: String) -> Control:
 		"upgrade_tab_button":
 			result = tab_buttons[2] if tab_buttons.size() > 2 else null
 		"first_upgrade_button":
+			_switch_tab(2)
 			result = _find_first_upgrade_button()
 			relevant_scroll = upgrade_scroll
 		_: result = null
@@ -676,7 +677,7 @@ func _populate_upgrade_list() -> void:
 			var equipped = troop.equipped_gear[slot_key]
 			if equipped == null: continue
 			has_any = true
-			var is_hero_weapon = troop.is_hero and equipped.get_slot_name() == "WEAPON"
+			var is_hero_weapon = (troop == PlayerInventory.troop_roster[0]) and equipped.get_slot_name() == "WEAPON"
 			upgrade_list_container.add_child(_make_upgrade_row(equipped, troop.troop_name, is_hero_weapon))
 
 	for gear in PlayerInventory.gear_inventory:

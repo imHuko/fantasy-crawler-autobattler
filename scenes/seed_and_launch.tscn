@@ -1,6 +1,6 @@
-[gd_scene load_steps=2 format=3 uid="uid://seed_and_launch"]
+[gd_scene format=3 uid="uid://b4yacllchjcjs"]
 
-[ext_resource type="Script" path="res://scenes/seed_and_launch.gd" id="1_seed"]
+[ext_resource type="Script" uid="uid://b4uvi83v51ryg" path="res://scenes/seed_and_launch.gd" id="1_seed"]
 
-[node name="SeedAndLaunch" type="Node"]
+[node name="SeedAndLaunch" type="Node" unique_id=1882711341]
 script = ExtResource("1_seed")

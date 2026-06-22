@@ -192,6 +192,10 @@ const SKILL_POOL = [
 const C_FLOOR    = Color(0.18, 0.16, 0.22)
 const C_WALL     = Color(0.30, 0.25, 0.35)
 const C_HERO     = Color(0.30, 0.70, 1.00)
+# Visual display size for the hero sprite. Larger than the hitbox constant (14)
+# because the 512×512 canvas art needs more room for content to appear at a
+# readable size. Hitbox logic uses the hardcoded radius in _process_homing_melee.
+const HERO_SPRITE_SIZE: float = 96.0
 const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
 const C_SAVE_ZONE = Color(0.3, 0.85, 0.5, 0.35)
@@ -221,6 +225,8 @@ var attack_timer: float = 0.0
 var invincible_timer: float = 0.0
 
 var hero_pos: Vector2 = Vector2(ARENA_W/2, ARENA_H/2)
+var _mouse_target: Vector2 = Vector2.ZERO
+var _has_mouse_target: bool = false
 
 var enemies: Array = []        # {pos, hp, max_hp, speed, attack, shoot_t, is_boss, boss_p, boss_t, boss_a}
 var hero_projs: Array = []     # {pos, dir}
@@ -469,6 +475,41 @@ func _build_arena_visuals() -> void:
 	_add_rect(arena_node, Vector2(-ARENA_WALL_T, -ARENA_WALL_T), Vector2(ARENA_WALL_T, ARENA_H + ARENA_WALL_T*2), C_WALL)
 	_add_rect(arena_node, Vector2(ARENA_W, -ARENA_WALL_T), Vector2(ARENA_WALL_T, ARENA_H + ARENA_WALL_T*2), C_WALL)
 
+	_build_floor_props()
+
+# Scatters small debris rects across the floor so the player can
+# perceive movement against the otherwise-solid background.
+# Purely decorative — fixed seed keeps the layout identical every run.
+func _build_floor_props() -> void:
+	var rng = RandomNumberGenerator.new()
+	rng.seed = 42
+
+	var prop_colors = [
+		Color(0.24, 0.22, 0.28),   # slightly lighter stone
+		Color(0.13, 0.11, 0.17),   # slightly darker shadow
+		Color(0.27, 0.23, 0.22),   # warm brown chip
+		Color(0.21, 0.20, 0.26),   # neutral mid tone
+	]
+
+	var margin = ARENA_WALL_T + 30.0
+	var center = Vector2(ARENA_W / 2.0, ARENA_H / 2.0)
+	var clear_radius = 120.0
+
+	# ~600 props gives the same visual density as the tutorial dungeon
+	# (80 props on 1400×1000) scaled to this 3200×3200 arena.
+	for i in range(600):
+		var pos = Vector2(
+			rng.randf_range(margin, ARENA_W - margin),
+			rng.randf_range(margin, ARENA_H - margin)
+		)
+		if pos.distance_to(center) < clear_radius:
+			continue
+		var sz = Vector2(
+			rng.randf_range(4.0, 14.0),
+			rng.randf_range(3.0, 10.0)
+		)
+		_add_rect(arena_node, pos, sz, prop_colors[rng.randi() % prop_colors.size()])
+
 # -------------------------------------------------------
 # Enter room
 # -------------------------------------------------------
@@ -478,6 +519,7 @@ func _build_arena_visuals() -> void:
 func _start_run() -> void:
 	game_over = false
 	hero_pos = Vector2(ARENA_W/2, ARENA_H/2)
+	_has_mouse_target = false
 	secured_gear.clear()
 	var class_key = _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
 	Telemetry.log_event("dungeon_started", {
@@ -542,9 +584,9 @@ func _build_hero_rect() -> void:
 	hero_rect = UnitSprite.new()
 	var class_key = _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
 	var hero_unit_type = CLASS_UNIT_TYPES.get(class_key, UnitSprite.UnitType.HERO)
-	hero_rect.setup(hero_unit_type, C_HERO, 24.0)
+	hero_rect.setup(hero_unit_type, Color.WHITE, HERO_SPRITE_SIZE)
 	arena_node.add_child(hero_rect)
-	hero_rect.position = hero_pos - Vector2(12, 12)
+	hero_rect.position = hero_pos - Vector2(HERO_SPRITE_SIZE / 2, HERO_SPRITE_SIZE / 2)
 
 # -------------------------------------------------------
 # Save zone — an "extraction point" you channel at to bank held gear.
@@ -914,7 +956,7 @@ func _self_heal_tick(delta: float) -> void:
 	if hero_hp_regen > 0.0 and hero_hp < hero_max_hp:
 		hero_hp = min(hero_hp + int(hero_hp_regen * delta), hero_max_hp)
 
-const MOUSE_MOVE_DEAD_ZONE = 20.0   # pixels from hero before mouse movement kicks in
+const MOUSE_MOVE_DEAD_ZONE = 20.0   # pixels from target before hero stops
 
 func _move_hero(delta: float) -> void:
 	var dir = Vector2.ZERO
@@ -923,11 +965,14 @@ func _move_hero(delta: float) -> void:
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  dir.x -= 1
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): dir.x += 1
 
-	if dir == Vector2.ZERO:
-		var mouse_world = get_global_mouse_position()
-		var to_mouse = mouse_world - hero_pos
-		if to_mouse.length() > MOUSE_MOVE_DEAD_ZONE:
-			dir = to_mouse.normalized()
+	if dir != Vector2.ZERO:
+		_has_mouse_target = false   # keyboard cancels any pending click-target
+	elif _has_mouse_target:
+		var to_target = _mouse_target - hero_pos
+		if to_target.length() > MOUSE_MOVE_DEAD_ZONE:
+			dir = to_target.normalized()
+		else:
+			_has_mouse_target = false
 
 	var is_moving = dir.length() > 0
 
@@ -1483,9 +1528,12 @@ func _apply_death_penalty() -> void:
 # -------------------------------------------------------
 func _update_visuals() -> void:
 	if hero_rect and is_instance_valid(hero_rect):
-		hero_rect.position = hero_pos - Vector2(12, 12)
-		# Flash when invincible
-		hero_rect.set_color(Color(1,1,1) if fmod(invincible_timer, 0.15) > 0.075 else C_HERO)
+		hero_rect.position = hero_pos - Vector2(HERO_SPRITE_SIZE / 2, HERO_SPRITE_SIZE / 2)
+		# Flash blue when invincible; show natural art colors otherwise
+		if invincible_timer > 0:
+			hero_rect.set_color(Color(1,1,1) if fmod(invincible_timer, 0.15) > 0.075 else C_HERO)
+		else:
+			hero_rect.set_color(Color.WHITE)
 
 	for i in range(min(enemies.size(), enemy_rects.size())):
 		var e = enemies[i]
@@ -1514,6 +1562,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_P:
 			_toggle_pause()
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if not game_over and not is_paused:
+			_mouse_target = get_global_mouse_position()
+			_has_mouse_target = true
 
 func _toggle_pause() -> void:
 	if game_over: return

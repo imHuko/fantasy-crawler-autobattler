@@ -250,7 +250,7 @@ const STEPS: Array = [
 		"id": "talents_wilds_pact",
 		"screen": "res://scenes/talent_tree_screen.tscn",
 		"mode": "info",
-		"text": "Wilds Pact is free \u2014 once unlocked, it lets you turn random attacks on or off (on Easy/Normal difficulty).",
+		"text": "Wilds Pact is free \u2014 unlocking it enables random wilderness attacks on Easy/Normal difficulty, and lets you toggle them on or off.",
 		"target_id": "",
 	},
 ]

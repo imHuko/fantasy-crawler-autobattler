@@ -83,6 +83,7 @@ func _ready() -> void:
 	# guarantees real dimensions are available before we position
 	# and size the icon buttons against it.
 	call_deferred("_finish_initial_layout")
+	TutorialRouter.resolve_current_step(self)
 
 	resized.connect(_on_screen_resized)
 	get_viewport().size_changed.connect(_on_screen_resized)

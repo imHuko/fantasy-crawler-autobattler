@@ -38,6 +38,7 @@ var compare_panel: PanelContainer = null
 var all_slot_buttons: Array = []   # every gear slot button across every troop card, for cross-card highlighting
 
 var troop_list: VBoxContainer
+var troop_scroll: ScrollContainer
 var gear_list: VBoxContainer
 var status_label: Label
 var set_bonus_label: Label
@@ -49,6 +50,11 @@ func _ready() -> void:
 	_populate_troops()
 	_populate_gear()
 	_update_status("Select a gear slot on a troop, then choose gear from the right.")
+	# Defer one frame so layout is computed before ensure_control_visible
+	# in get_tutorial_target runs — otherwise scroll offsets are wrong.
+	call_deferred("_resolve_tutorial_step")
+
+func _resolve_tutorial_step() -> void:
 	TutorialRouter.resolve_current_step(self)
 
 # The tutorial's design promises the player will have passively earned
@@ -177,6 +183,8 @@ func _find_slot_button_for_newest_recruit(slot_name: String) -> Control:
 		if not slot_btn.has_meta("troop") or not slot_btn.has_meta("slot"): continue
 		var troop: TroopData = slot_btn.get_meta("troop")
 		if troop == newest and slot_btn.get_meta("slot") == slot_name:
+			if troop_scroll:
+				troop_scroll.ensure_control_visible(slot_btn)
 			return slot_btn
 	return null
 
@@ -237,14 +245,14 @@ func _build_ui() -> void:
 	left_header.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	left.add_child(left_header)
 
-	var left_scroll = ScrollContainer.new()
-	left_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	left.add_child(left_scroll)
+	troop_scroll = ScrollContainer.new()
+	troop_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	left.add_child(troop_scroll)
 
 	troop_list = VBoxContainer.new()
 	troop_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	troop_list.add_theme_constant_override("separation", 6)
-	left_scroll.add_child(troop_list)
+	troop_scroll.add_child(troop_list)
 
 	set_bonus_label = Label.new()
 	set_bonus_label.text = "Sets: none equipped"
@@ -886,6 +894,11 @@ func _on_slot_pressed(btn: Button, troop: TroopData, slot_key: String) -> void:
 	btn.add_theme_color_override("font_color", Color(1, 1, 0))
 	_update_status("Selected %s slot on %s — now pick a %s from inventory." % [slot_key, troop.troop_name, slot_key])
 	_populate_gear()   # re-sort gear list to prioritize this slot type
+	# The tutorial blocks clicks outside the highlighted target. When a slot
+	# is selected but gear isn't yet chosen, the player must also click an
+	# inventory button — unblock so that second click can land.
+	if PlayerInventory.tutorial_active:
+		TutorialOverlay.blocking_enabled = false
 
 func _on_gear_selected(gear: GearItem, btn: Button) -> void:
 	# Clicking the same gear again = deselect.
@@ -984,13 +997,13 @@ func _equip_gear_to_slot(gear: GearItem, troop: TroopData, slot_key: String, slo
 			TutorialRouter.advance_step("equip_recruit_pick_slot")
 
 func _clear_selection() -> void:
-	if selected_slot_button:
+	if selected_slot_button and selected_slot_button.has_meta("troop"):
 		_refresh_slot_button(selected_slot_button,
 			selected_slot_button.get_meta("troop"),
 			selected_slot_button.get_meta("slot"))
-	# Un-highlight any cross-card matched slots
+	# Un-highlight any cross-card matched slots (skip Commander slots — no "troop" meta)
 	for slot_btn in all_slot_buttons:
-		if slot_btn != selected_slot_button:
+		if slot_btn != selected_slot_button and slot_btn.has_meta("troop"):
 			_refresh_slot_button(slot_btn, slot_btn.get_meta("troop"), slot_btn.get_meta("slot"))
 	selected_troop = null
 	selected_slot = ""

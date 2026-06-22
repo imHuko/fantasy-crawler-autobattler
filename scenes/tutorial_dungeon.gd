@@ -41,6 +41,9 @@ var attack_timer: float = 0.0
 var spawn_timer: float = 1.0
 
 var hero_pos: Vector2 = Vector2(ARENA_W / 2, ARENA_H / 2)
+var _mouse_target: Vector2 = Vector2.ZERO
+var _has_mouse_target: bool = false
+
 var enemies: Array = []
 var hero_projs: Array = []
 var enemy_projs: Array = []
@@ -176,12 +179,29 @@ func _handle_spawning(delta: float) -> void:
 		_spawn_enemy()
 		spawn_timer = SPAWN_INTERVAL
 
+const MOUSE_MOVE_DEAD_ZONE = 20.0
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_mouse_target = get_global_mouse_position()
+		_has_mouse_target = true
+
 func _move_hero(delta: float) -> void:
 	var dir = Vector2.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):    dir.y -= 1
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  dir.y += 1
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  dir.x -= 1
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): dir.x += 1
+
+	if dir != Vector2.ZERO:
+		_has_mouse_target = false
+	elif _has_mouse_target:
+		var to_target = _mouse_target - hero_pos
+		if to_target.length() > MOUSE_MOVE_DEAD_ZONE:
+			dir = to_target.normalized()
+		else:
+			_has_mouse_target = false
+
 	if dir.length() > 0: dir = dir.normalized()
 	hero_pos += dir * HERO_SPEED * delta
 	hero_pos.x = clamp(hero_pos.x, WALL_T + 12, ARENA_W - WALL_T - 12)

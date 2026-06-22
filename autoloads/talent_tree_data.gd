@@ -106,7 +106,7 @@ const NODES = {
 	},
 	"toggle_invasions": {
 		"name": "Wilds Pact", "branch": "Standalone", "cost": 0, "prereq": "", "min_stage": 0,
-		"desc": "Free. Once unlocked, lets you turn random wilderness attacks on or off entirely — only on Easy and Normal difficulty. Hard and Nightmare always keep attacks on regardless of this setting.",
+		"desc": "Free. Unlocks random wilderness attacks on Easy and Normal difficulty — and lets you toggle them on or off. Hard and Nightmare always keep attacks on regardless.",
 	},
 
 	# --- GEAR additions ---

@@ -70,6 +70,8 @@ var roster_slots: Array = []    # {troop_data, btn, placed}
 var sandbox_roster_hbox: HBoxContainer = null   # stored so sandbox_add_to_roster can append buttons live
 var selected_roster_idx: int = -1
 var place_cooldown: float = 0.0
+var _drag_troop_idx: int = -1       # index into placed_troops while repositioning
+var _drag_origin: Vector2 = Vector2.ZERO  # position before drag started (for snap-back)
 
 # UI nodes
 var field_node: Node2D
@@ -382,16 +384,49 @@ func _build_roster_ui() -> void:
 
 func _input(event: InputEvent) -> void:
 	if game_over: return
-	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-		if selected_roster_idx >= 0 and place_cooldown <= 0:
-			var click_pos = event.position - field_node.position
-			# Middle of the map is a hard boundary — troops can only be
-			# placed on your half, keeping them clear of the enemy
-			# approach and visible on screen before the battle starts.
-			var placement_limit_x = FIELD_W / 2.0
-			if click_pos.x > BASE_X + 30 and click_pos.x < placement_limit_x \
-			and click_pos.y > 10 and click_pos.y < FIELD_H - 120:
-				_place_troop(selected_roster_idx, click_pos)
+
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		var click_pos = event.position - field_node.position
+
+		if event.pressed:
+			# Pick up an already-placed troop to reposition (pre-battle only).
+			# Roster-select takes priority — if a roster unit is pending placement
+			# that click should land there, not accidentally grab a placed troop.
+			if not battle_active and selected_roster_idx < 0 and _drag_troop_idx < 0:
+				for i in range(placed_troops.size()):
+					var t = placed_troops[i]
+					if click_pos.distance_to(t["pos"]) < t["sz"]:
+						_drag_troop_idx = i
+						_drag_origin = t["pos"]
+						_set_status("Drag to reposition " + t["troop"].troop_name + " — release to drop.")
+						return
+
+			# Place a new troop from the roster.
+			if selected_roster_idx >= 0 and place_cooldown <= 0 and _drag_troop_idx < 0:
+				var placement_limit_x = FIELD_W / 2.0
+				if click_pos.x > BASE_X + 30 and click_pos.x < placement_limit_x \
+				and click_pos.y > 10 and click_pos.y < FIELD_H - 120:
+					_place_troop(selected_roster_idx, click_pos)
+
+		else:
+			# Mouse released — finalise or snap back a drag.
+			if _drag_troop_idx >= 0:
+				var placement_limit_x = FIELD_W / 2.0
+				if click_pos.x > BASE_X + 30 and click_pos.x < placement_limit_x \
+				and click_pos.y > 10 and click_pos.y < FIELD_H - 120:
+					_apply_troop_position(_drag_troop_idx, click_pos)
+					_set_status(placed_troops[_drag_troop_idx]["troop"].troop_name + " repositioned!")
+				else:
+					# Dropped outside the valid zone — snap back.
+					_apply_troop_position(_drag_troop_idx, _drag_origin)
+					_set_status("Can't place there — snapped back.")
+				_drag_troop_idx = -1
+
+	elif event is InputEventMouseMotion:
+		# Live-update the dragged troop under the cursor.
+		if _drag_troop_idx >= 0:
+			var drag_pos = event.position - field_node.position
+			_apply_troop_position(_drag_troop_idx, drag_pos)
 
 # Drag-and-drop placement — same effect as the click flow above, just
 # reached by dragging a roster button onto PlacementDropZone instead.
@@ -515,6 +550,18 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 	place_cooldown = PLACE_COOLDOWN
 	_set_status(troop.troop_name + " placed!")
 
+# Moves a placed troop (by index in placed_troops) to new_pos,
+# updating all of its visual nodes in one shot. Used by both the
+# drag-reposition flow (_input) and snap-back on invalid drops.
+func _apply_troop_position(idx: int, new_pos: Vector2) -> void:
+	var t = placed_troops[idx]
+	var sz = t["sz"]
+	t["pos"] = new_pos
+	t["rect"].position       = new_pos - Vector2(sz / 2, sz / 2)
+	t["label"].position      = new_pos - Vector2(20, sz / 2 + 14)
+	t["hp_bar_bg"].position  = new_pos - Vector2(sz / 2, sz / 2 + 7)
+	t["hp_bar"].position     = new_pos - Vector2(sz / 2, sz / 2 + 7)
+
 # -------------------------------------------------------
 # Wave spawning
 # -------------------------------------------------------
@@ -595,7 +642,9 @@ func _plan_wave() -> void:
 	# threatened. The high force_mult would otherwise roll 17+ enemies, which
 	# is overwhelming and not tutorial-appropriate.
 	if PlayerInventory.tutorial_active:
-		planned_wave = ["MELEE", "MELEE", "MELEE", "RANGED", "CHARGER"]
+		# CHARGER removed — at stage 1 its 2.4× speed bypasses the Knight
+		# before it can be killed, making the fight consistently unwinnable.
+		planned_wave = ["MELEE", "MELEE", "MELEE", "RANGED", "MELEE"]
 		return
 
 	var stage = PlayerInventory.current_stage
@@ -798,6 +847,7 @@ func _process(delta: float) -> void:
 			# field from scene load, this just lets combat logic begin.
 			battle_active = true
 			battle_started = false
+			_drag_troop_idx = -1   # cancel any in-progress reposition drag
 			_refresh_hud()
 			_set_status("Charge!")
 			if begin_battle_btn: begin_battle_btn.visible = false

@@ -87,7 +87,7 @@ var side_panel_view: String = "overview"   # "overview" or "build"
 
 const ZONE_ART_ATLAS   = "res://assets/zones/zone_types_a.png"
 const ZONE_ART_COL_W   = 512    # image width 1536 / 3 columns = 512 exactly
-const ZONE_ART_ROW_H   = 205    # image height 1024 / 5 rows ≈ 205 (1px rounding error at seams is invisible)
+const ZONE_ART_ROW_H   = 204    # image height 1024 / 5 rows = 204.8; using floor to avoid overshooting row bounds
 const ZONE_ART_ROWS = {
 	"forest":   0,
 	"ruins":    1,
@@ -1188,26 +1188,13 @@ func _make_zone_node(zone: Dictionary) -> Control:
 	container.add_child(circle)
 	refs["circle"] = circle
 
-	# Zone type icon — real art when atlas exists, emoji fallback otherwise
-	if ResourceLoader.exists(ZONE_ART_ATLAS):
-		var row = ZONE_ART_ROWS.get(zone["type"], 0)
-		var atlas = AtlasTexture.new()
-		atlas.atlas = load(ZONE_ART_ATLAS)
-		atlas.region = Rect2(0, row * ZONE_ART_ROW_H, ZONE_ART_COL_W, ZONE_ART_ROW_H)
-		var icon_tex = TextureRect.new()
-		icon_tex.texture = atlas
-		icon_tex.size = Vector2(44, 44)
-		icon_tex.position = Vector2(-22, -22)
-		icon_tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon_tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		container.add_child(icon_tex)
-	else:
-		var icon = Label.new()
-		icon.text = ZONE_TYPE_ICONS[zone["type"]]
-		icon.add_theme_font_size_override("font_size", 20)
-		icon.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
-		icon.position = Vector2(-10, -16)
-		container.add_child(icon)
+	# Zone type icon — emoji placeholder (atlas icons TODO)
+	var icon = Label.new()
+	icon.text = ZONE_TYPE_ICONS[zone["type"]]
+	icon.add_theme_font_size_override("font_size", 20)
+	icon.add_theme_color_override("font_color", ZONE_TYPE_COLORS[zone["type"]])
+	icon.position = Vector2(-10, -16)
+	container.add_child(icon)
 
 	# Owner indicator dot
 	var dot = ColorRect.new()
@@ -1395,6 +1382,15 @@ const TUTORIAL_HINTS = {
 }
 
 func _resolve_tutorial_step() -> void:
+	# If a save/reload landed us at the defense_battle step while still
+	# on the world map (the scripted attack already advanced the step but
+	# the scene change hadn't persisted), trigger the attack now instead
+	# of showing a dead-end navigation reminder with no action button.
+	if PlayerInventory.tutorial_active:
+		var step = TutorialSteps.get_step(PlayerInventory.tutorial_step_index)
+		if step.get("id", "") == "defense_battle":
+			_start_scripted_tutorial_defense()
+			return
 	TutorialRouter.resolve_current_step(self)
 
 # Fires on every tutorial step advance while this screen is loaded.
@@ -1413,13 +1409,11 @@ func _on_tutorial_step_advanced() -> void:
 # A guaranteed, scripted attack on the player's own city — winnable by
 # a wide margin, since the tutorial design explicitly requires this
 # fight to never realistically be lost, just to feel like it costs
-# something. defense_scene.gd internally floors this value to 0.5-0.6
-# A higher multiplier makes enemies hit harder — necessary because the
-# Knight's DEF=20 absorbs 8 flat damage per hit, so enemies need ATK > 8
-# to deal more than 1 damage. At 2.5 they deal 4 per swing, which is
-# enough to genuinely threaten the Knight over the course of the fight.
-# The wave count is capped separately in defense_scene._plan_wave().
-const TUTORIAL_DEFENSE_FORCE_MULT = 2.5
+# something. Uses 1.0 (neutral scaling): enemies have baseline ATK/HP,
+# the Knight's percentage-based DEF reduction keeps it alive through
+# the fight, and the base has enough HP to survive if 1-2 enemies slip
+# through. The wave is also capped in defense_scene._plan_wave().
+const TUTORIAL_DEFENSE_FORCE_MULT = 1.0
 
 func _start_scripted_tutorial_defense() -> void:
 	var zone = zones[0]
@@ -1445,7 +1439,12 @@ func get_tutorial_target(target_id: String) -> Control:
 			if zone_dynamic_refs.has(0) and zone_dynamic_refs[0].has("click_btn"):
 				return zone_dynamic_refs[0]["click_btn"]
 			return null
-		"build_here_button": return tutorial_build_here_btn
+		"build_here_button":
+			# If the player hit Next in build_open_zone without clicking the zone,
+			# the side panel was never opened. Open it now so the button exists.
+			if tutorial_build_here_btn == null:
+				_open_side_panel(0)
+			return tutorial_build_here_btn
 		"farm_button": return tutorial_build_farm_btn
 		"mgmt_button": return tutorial_mgmt_btn
 		_: return null
@@ -1994,12 +1993,12 @@ func force_admin_attack() -> String:
 func _maybe_spawn_attack() -> void:
 	var diff_settings = PlayerInventory.difficulty_settings
 
-	# Invasions can be turned off entirely via the free "Wilds Pact" talent,
-	# but only on difficulties that allow it (Easy/Normal) — Hard and
-	# Nightmare always keep attacks on regardless of this setting.
+	# On Easy/Normal, invasions are gated behind the "Wilds Pact" talent — they
+	# don't happen at all until the talent is unlocked. Once unlocked, the player
+	# can also toggle them off. Hard/Nightmare always invade regardless.
 	var can_toggle = diff_settings.get("invasions_toggleable", true)
 	var talent_unlocked = PlayerInventory.unlocked_talents.get("toggle_invasions", false)
-	if can_toggle and talent_unlocked and not PlayerInventory.invasions_enabled:
+	if can_toggle and not (talent_unlocked and PlayerInventory.invasions_enabled):
 		return
 
 	var attack_chance = diff_settings.get("attack_frequency", 0.6) * 0.25

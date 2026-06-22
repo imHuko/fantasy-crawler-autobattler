@@ -78,6 +78,20 @@ func setup(p_unit_type: int, p_color: Color, p_size: float = 28.0) -> void:
 # (walk loop), and <key>_attack1-2.png (attack, played once) — whichever of
 # those files actually exist. Returns null if even the idle frame is missing,
 # which tells the caller to fall back to the procedural shape entirely.
+# Minimum file size (bytes) for a frame PNG to be considered real art.
+# Placeholder/stub frames (tiny icons in a large transparent canvas) are
+# typically < 8 KB; genuine animation frames start at ~40 KB. Using 10 KB
+# as the cutoff cleanly separates the two without touching any files.
+const MIN_FRAME_FILE_BYTES = 10_000
+
+func _png_file_size(path: String) -> int:
+	var f = FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return 0
+	var sz = f.get_length()
+	f.close()
+	return sz
+
 func _build_sprite_frames(key: String) -> SpriteFrames:
 	var idle_path = SPRITE_FOLDER + key + "_walk1.png"
 	if not ResourceLoader.exists(idle_path):
@@ -94,7 +108,7 @@ func _build_sprite_frames(key: String) -> SpriteFrames:
 	frames.set_animation_speed("walk", 8.0)
 	for i in range(2, 6):   # walk2..walk5 — walk1 is reserved for idle above
 		var p = SPRITE_FOLDER + key + "_walk%d.png" % i
-		if ResourceLoader.exists(p):
+		if ResourceLoader.exists(p) and _png_file_size(p) >= MIN_FRAME_FILE_BYTES:
 			frames.add_frame("walk", load(p))
 			_has_walk_anim = true
 	if not _has_walk_anim:
@@ -106,7 +120,7 @@ func _build_sprite_frames(key: String) -> SpriteFrames:
 	frames.set_animation_speed("attack", 8.0)
 	for i in range(1, 3):   # attack1, attack2
 		var p = SPRITE_FOLDER + key + "_attack%d.png" % i
-		if ResourceLoader.exists(p):
+		if ResourceLoader.exists(p) and _png_file_size(p) >= MIN_FRAME_FILE_BYTES:
 			frames.add_frame("attack", load(p))
 			_has_attack_anim = true
 	if not _has_attack_anim:
