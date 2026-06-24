@@ -227,6 +227,7 @@ var invincible_timer: float = 0.0
 var hero_pos: Vector2 = Vector2(ARENA_W/2, ARENA_H/2)
 var _mouse_target: Vector2 = Vector2.ZERO
 var _has_mouse_target: bool = false
+var _dpad: VirtualDpad = null
 
 var enemies: Array = []        # {pos, hp, max_hp, speed, attack, shoot_t, is_boss, boss_p, boss_t, boss_a}
 var hero_projs: Array = []     # {pos, dir}
@@ -302,6 +303,9 @@ func _ready() -> void:
 	_build_arena_visuals()
 	_start_run()
 	_build_hud()
+	if PlayerInventory.mobile_mode:
+		_dpad = VirtualDpad.new()
+		add_child(_dpad)
 
 var _sandbox_class_override: String = ""   # set by sandbox_set_hero_class() — empty means "use commander_class"
 var _sandbox_god_mode: bool = false
@@ -964,9 +968,11 @@ func _move_hero(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  dir.y += 1
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  dir.x -= 1
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): dir.x += 1
+	if _dpad and dir == Vector2.ZERO:
+		dir = _dpad.get_direction()
 
 	if dir != Vector2.ZERO:
-		_has_mouse_target = false   # keyboard cancels any pending click-target
+		_has_mouse_target = false   # keyboard / dpad cancels any pending click-target
 	elif _has_mouse_target:
 		var to_target = _mouse_target - hero_pos
 		if to_target.length() > MOUSE_MOVE_DEAD_ZONE:

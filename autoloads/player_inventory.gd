@@ -6,20 +6,30 @@ func _ready() -> void:
 func _apply_saved_settings() -> void:
 	var config = ConfigFile.new()
 	if config.load("user://settings.cfg") != OK:
-		return   # no saved settings yet, use the project's defaults
+		# First launch — go fullscreen so the game fills whatever screen
+		# this device has. Player can change to windowed in Settings.
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		return
 
 	var width = config.get_value("display", "width", -1)
 	var height = config.get_value("display", "height", -1)
 	var fullscreen = config.get_value("display", "fullscreen", false)
+	var borderless = config.get_value("display", "borderless", false)
 
 	if fullscreen:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	elif borderless:
+		var screen = DisplayServer.screen_get_size()
+		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, true)
+		DisplayServer.window_set_size(screen)
+		DisplayServer.window_set_position(Vector2i.ZERO)
 	elif width > 0 and height > 0:
 		DisplayServer.window_set_size(Vector2i(width, height))
 		var screen_size = DisplayServer.screen_get_size()
 		DisplayServer.window_set_position((screen_size - Vector2i(width, height)) / 2)
 
 	confirm_before_disposing_gear = config.get_value("gameplay", "confirm_before_disposing_gear", true)
+	mobile_mode = config.get_value("controls", "mobile_mode", false)
 
 # All gear the player has collected across runs
 var gear_inventory: Array[GearItem] = []
@@ -47,8 +57,9 @@ var invasions_enabled: bool = true   # player's own preference, only respected w
 
 # Map state
 var current_battle_zone: int = -1
-var settings_return_scene: String = ""   # set right before navigating to Settings, so Back returns to the right place
-var confirm_before_disposing_gear: bool = true   # asks before selling/salvaging when on; loaded from settings.cfg at launch
+var settings_return_scene: String = ""
+var confirm_before_disposing_gear: bool = true
+var mobile_mode: bool = false   # shows on-screen D-pad in dungeon scenes; loaded from settings.cfg
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false
 

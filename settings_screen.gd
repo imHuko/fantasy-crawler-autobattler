@@ -18,9 +18,11 @@ const RESOLUTION_PRESETS = [
 var width_field: LineEdit
 var height_field: LineEdit
 var fullscreen_check: CheckBox
+var borderless_check: CheckBox
 var confirm_dispose_check: CheckBox
 var status_label: Label
 var return_target: String = "res://scenes/world_map.tscn"
+var _ui_updating: bool = false   # guard against recursive checkbox signals
 
 func _ready() -> void:
 	# Remember which screen to return to, so Settings can be opened from
@@ -59,8 +61,18 @@ func _build_ui() -> void:
 	display_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	outer.add_child(display_label)
 
+	# Match Screen — fills a windowed window to the device's actual resolution
+	var screen_res = DisplayServer.screen_get_size()
+	var match_btn = Button.new()
+	match_btn.text = "Match Screen  (%d × %d)" % [screen_res.x, screen_res.y]
+	match_btn.custom_minimum_size = Vector2(0, 36)
+	match_btn.add_theme_color_override("font_color", Color(0.4, 1.0, 0.6))
+	match_btn.pressed.connect(func():
+		_on_preset_pressed(screen_res))
+	outer.add_child(match_btn)
+
 	var preset_label = Label.new()
-	preset_label.text = "Presets:"
+	preset_label.text = "Common presets:"
 	preset_label.add_theme_font_size_override("font_size", 12)
 	outer.add_child(preset_label)
 
@@ -112,8 +124,20 @@ func _build_ui() -> void:
 	fullscreen_hbox.add_child(fullscreen_check)
 
 	var fullscreen_label = Label.new()
-	fullscreen_label.text = "Fullscreen"
+	fullscreen_label.text = "Fullscreen  (exclusive)"
 	fullscreen_hbox.add_child(fullscreen_label)
+
+	var borderless_hbox = HBoxContainer.new()
+	borderless_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(borderless_hbox)
+
+	borderless_check = CheckBox.new()
+	borderless_check.toggled.connect(_on_borderless_toggled)
+	borderless_hbox.add_child(borderless_check)
+
+	var borderless_label = Label.new()
+	borderless_label.text = "Borderless Windowed  (fills screen, no title bar)"
+	borderless_hbox.add_child(borderless_label)
 
 	var hint = Label.new()
 	hint.text = "Tip: when windowed, you can also drag the window's edges or corners to resize freely."
@@ -143,6 +167,28 @@ func _build_ui() -> void:
 	var confirm_label = Label.new()
 	confirm_label.text = "Always confirm before selling or salvaging gear"
 	confirm_hbox.add_child(confirm_label)
+
+	outer.add_child(HSeparator.new())
+
+	# --- Controls ---
+	var controls_label = Label.new()
+	controls_label.text = "Controls"
+	controls_label.add_theme_font_size_override("font_size", 16)
+	controls_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
+	outer.add_child(controls_label)
+
+	var mobile_hbox = HBoxContainer.new()
+	mobile_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(mobile_hbox)
+
+	var mobile_check = CheckBox.new()
+	mobile_check.button_pressed = PlayerInventory.mobile_mode
+	mobile_check.toggled.connect(_on_mobile_mode_toggled)
+	mobile_hbox.add_child(mobile_check)
+
+	var mobile_label = Label.new()
+	mobile_label.text = "Mobile Mode  (shows on-screen D-pad in dungeons)"
+	mobile_hbox.add_child(mobile_label)
 
 	outer.add_child(HSeparator.new())
 
@@ -180,6 +226,7 @@ func _load_current_into_fields() -> void:
 	width_field.text = str(current_size.x)
 	height_field.text = str(current_size.y)
 	fullscreen_check.button_pressed = DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
+	borderless_check.button_pressed = DisplayServer.window_get_flag(DisplayServer.WINDOW_FLAG_BORDERLESS)
 
 func _on_preset_pressed(res: Vector2i) -> void:
 	_apply_resolution(res)
@@ -198,21 +245,50 @@ func _on_apply_custom_resolution() -> void:
 	_apply_resolution(Vector2i(w, h))
 
 func _apply_resolution(res: Vector2i) -> void:
-	# Fullscreen ignores window size, so switch to windowed first if needed
+	_ui_updating = true
 	if DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		fullscreen_check.button_pressed = false
+	if DisplayServer.window_get_flag(DisplayServer.WINDOW_FLAG_BORDERLESS):
+		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
+		borderless_check.button_pressed = false
+	_ui_updating = false
 	DisplayServer.window_set_size(res)
 	_center_window()
 	_save_settings()
 	_set_status("Resolution set to %dx%d." % [res.x, res.y])
 
 func _on_fullscreen_toggled(is_on: bool) -> void:
+	if _ui_updating: return
 	if is_on:
+		_ui_updating = true
+		borderless_check.button_pressed = false
+		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
+		_ui_updating = false
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
 		_set_status("Fullscreen enabled.")
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		_center_window()
+		_set_status("Windowed mode enabled.")
+	_save_settings()
+
+func _on_borderless_toggled(is_on: bool) -> void:
+	if _ui_updating: return
+	if is_on:
+		_ui_updating = true
+		fullscreen_check.button_pressed = false
+		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		_ui_updating = false
+		var screen = DisplayServer.screen_get_size()
+		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, true)
+		DisplayServer.window_set_size(screen)
+		DisplayServer.window_set_position(Vector2i.ZERO)
+		width_field.text = str(screen.x)
+		height_field.text = str(screen.y)
+		_set_status("Borderless windowed enabled.")
+	else:
+		DisplayServer.window_set_flag(DisplayServer.WINDOW_FLAG_BORDERLESS, false)
 		_center_window()
 		_set_status("Windowed mode enabled.")
 	_save_settings()
@@ -226,12 +302,19 @@ func _on_confirm_dispose_toggled(is_on: bool) -> void:
 	PlayerInventory.confirm_before_disposing_gear = is_on
 	_save_settings()
 
+func _on_mobile_mode_toggled(is_on: bool) -> void:
+	PlayerInventory.mobile_mode = is_on
+	_save_settings()
+	_set_status("Mobile mode %s — takes effect next time you enter a dungeon." % ("enabled" if is_on else "disabled"))
+
 func _save_settings() -> void:
 	var config = ConfigFile.new()
 	config.set_value("display", "width", DisplayServer.window_get_size().x)
 	config.set_value("display", "height", DisplayServer.window_get_size().y)
 	config.set_value("display", "fullscreen", DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN)
+	config.set_value("display", "borderless", DisplayServer.window_get_flag(DisplayServer.WINDOW_FLAG_BORDERLESS))
 	config.set_value("gameplay", "confirm_before_disposing_gear", PlayerInventory.confirm_before_disposing_gear)
+	config.set_value("controls", "mobile_mode", PlayerInventory.mobile_mode)
 	config.save(CONFIG_PATH)
 
 func _set_status(msg: String) -> void:

@@ -43,6 +43,7 @@ var spawn_timer: float = 1.0
 var hero_pos: Vector2 = Vector2(ARENA_W / 2, ARENA_H / 2)
 var _mouse_target: Vector2 = Vector2.ZERO
 var _has_mouse_target: bool = false
+var _dpad: VirtualDpad = null
 
 var enemies: Array = []
 var hero_projs: Array = []
@@ -63,7 +64,12 @@ func _ready() -> void:
 	_build_hero()
 	_setup_camera()
 	_build_hud()
-	_set_tip("WASD to move. Get close to enemies — you'll auto-attack the nearest one.")
+	if PlayerInventory.mobile_mode:
+		_dpad = VirtualDpad.new()
+		add_child(_dpad)
+		_set_tip("Tap the D-pad to move. You'll auto-attack the nearest enemy.")
+	else:
+		_set_tip("WASD to move. Get close to enemies — you'll auto-attack the nearest one.")
 	TutorialRouter.resolve_current_step(self)
 
 func _build_arena_visuals() -> void:
@@ -192,6 +198,8 @@ func _move_hero(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  dir.y += 1
 	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  dir.x -= 1
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): dir.x += 1
+	if _dpad and dir == Vector2.ZERO:
+		dir = _dpad.get_direction()
 
 	if dir != Vector2.ZERO:
 		_has_mouse_target = false
