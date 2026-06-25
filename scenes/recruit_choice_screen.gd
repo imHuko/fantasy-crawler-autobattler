@@ -6,7 +6,7 @@ extends Control
 # to fill out the starting roster before heading to the map.
 # -------------------------------------------------------
 
-const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/generated_troops_fixed96/frames/"
 
 func _ready() -> void:
 	_build_ui()
@@ -64,7 +64,7 @@ func _add_recruit_card(parent: HBoxContainer, troop: TroopData) -> void:
 	card.add_child(vbox)
 
 	var portrait_path = _troop_portrait_path(troop.get_type_name())
-	var portrait_texture = _load_png_texture_direct(portrait_path)
+	var portrait_texture = _load_troop_portrait_texture(portrait_path)
 	if portrait_texture != null:
 		var portrait = TextureRect.new()
 		portrait.texture = portrait_texture
@@ -112,14 +112,14 @@ func _troop_portrait_path(type_name: String) -> String:
 		return generated_path
 	return "res://assets/sprites/troops/%s.png" % key
 
-func _load_png_texture_direct(path: String) -> Texture2D:
-	var bytes = FileAccess.get_file_as_bytes(path)
-	if bytes.is_empty():
-		return null
-	var image = Image.new()
-	if image.load_png_from_buffer(bytes) != OK:
-		return null
-	return ImageTexture.create_from_image(image)
+func _load_troop_portrait_texture(path: String) -> Texture2D:
+	if path.begins_with(GENERATED_TROOP_FRAME_FOLDER) and FileAccess.file_exists(path):
+		var bytes = FileAccess.get_file_as_bytes(path)
+		var image = Image.new()
+		if image.load_png_from_buffer(bytes) == OK:
+			return ImageTexture.create_from_image(image)
+	var texture = load(path)
+	return texture as Texture2D
 
 func _on_recruit_chosen(troop: TroopData) -> void:
 	PlayerInventory.troop_roster.append(troop)

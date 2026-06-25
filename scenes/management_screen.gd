@@ -10,7 +10,7 @@ var tutorial_talent_btn: Button = null
 var tutorial_gear_shop_btn: Button = null
 var tutorial_heal_buttons: Dictionary = {}   # TroopData -> Button, rebuilt each time troop cards are drawn
 
-const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/generated_troops_fixed96/frames/"
 
 const RARITY_COLORS = {
 	"COMMON":    Color(0.75, 0.75, 0.75),
@@ -585,7 +585,7 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	vbox.add_child(header_hbox)
 
 	var portrait_path = _troop_portrait_path(troop.get_type_name())
-	var portrait_texture = _load_png_texture_direct(portrait_path)
+	var portrait_texture = _load_troop_portrait_texture(portrait_path)
 	if portrait_texture != null:
 		var portrait = TextureRect.new()
 		portrait.texture = portrait_texture
@@ -690,14 +690,14 @@ func _troop_portrait_path(type_name: String) -> String:
 		return generated_path
 	return "res://assets/sprites/troops/%s.png" % key
 
-func _load_png_texture_direct(path: String) -> Texture2D:
-	var bytes = FileAccess.get_file_as_bytes(path)
-	if bytes.is_empty():
-		return null
-	var image = Image.new()
-	if image.load_png_from_buffer(bytes) != OK:
-		return null
-	return ImageTexture.create_from_image(image)
+func _load_troop_portrait_texture(path: String) -> Texture2D:
+	if path.begins_with(GENERATED_TROOP_FRAME_FOLDER) and FileAccess.file_exists(path):
+		var bytes = FileAccess.get_file_as_bytes(path)
+		var image = Image.new()
+		if image.load_png_from_buffer(bytes) == OK:
+			return ImageTexture.create_from_image(image)
+	var texture = load(path)
+	return texture as Texture2D
 
 func _refresh_stats_text(label: Label, troop: TroopData) -> void:
 	var eff = troop.get_effective_stats()

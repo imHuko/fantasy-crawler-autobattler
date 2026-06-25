@@ -32,21 +32,26 @@ enum UnitType {
 }
 
 # Folder roots where animation frame PNGs live.
-const RECOVERED_FRAME_FOLDER = "res://assets/sprites/sliced_jun18/"
+const GENERATED_TROOP_FRAME_FOLDER = "res://assets/sprites/generated_troops_fixed96/frames/"
+const LEGACY_FRAME_FOLDER = "res://art/sprites/"
+const DEBUG_SPRITE_LOAD := false
 
 # Maps a UnitType to the folder containing idle/walk/attack frame PNGs.
 # Leave a type out entirely to keep using the procedural shape.
 const SPRITE_FOLDERS = {
-	UnitType.KNIGHT:        RECOVERED_FRAME_FOLDER + "knight/",
-	UnitType.ARCHER:        RECOVERED_FRAME_FOLDER + "archer/",
-	UnitType.MAGE:          RECOVERED_FRAME_FOLDER + "mage/",
-	UnitType.HEALER:        RECOVERED_FRAME_FOLDER + "healer/",
-	UnitType.ROGUE:         RECOVERED_FRAME_FOLDER + "rogue/",
-	UnitType.TREANT:        RECOVERED_FRAME_FOLDER + "treant/",
-	UnitType.FAERIE:        RECOVERED_FRAME_FOLDER + "faerie/",
-	UnitType.BULL:          RECOVERED_FRAME_FOLDER + "bull/",
-	UnitType.SPORE_BOMBER:  RECOVERED_FRAME_FOLDER + "spore_bomber/",
-	UnitType.ANCIENT_TOTEM: RECOVERED_FRAME_FOLDER + "ancient_totem/",
+	UnitType.KNIGHT: GENERATED_TROOP_FRAME_FOLDER + "knight/",
+	UnitType.ARCHER: GENERATED_TROOP_FRAME_FOLDER + "archer/",
+	UnitType.MAGE:   GENERATED_TROOP_FRAME_FOLDER + "mage/",
+	UnitType.HEALER: GENERATED_TROOP_FRAME_FOLDER + "healer/",
+	UnitType.ROGUE:  GENERATED_TROOP_FRAME_FOLDER + "rogue/",
+}
+
+const LEGACY_SPRITE_KEYS = {
+	UnitType.TREANT:        "treant",
+	UnitType.FAERIE:        "faerie",
+	UnitType.BULL:          "bull",
+	UnitType.SPORE_BOMBER:  "spore_bomber",
+	UnitType.ANCIENT_TOTEM: "ancient_totem",
 }
 
 var unit_type: int = UnitType.ENEMY_BASIC
@@ -71,23 +76,8 @@ func setup(p_unit_type: int, p_color: Color, p_size: float = 28.0) -> void:
 	_setup_sprite_if_available()
 	queue_redraw()
 
-func _png_has_valid_signature(path: String) -> bool:
+func _load_texture(path: String) -> Texture2D:
 	if not FileAccess.file_exists(path):
-		return false
-	var file = FileAccess.open(path, FileAccess.READ)
-	if file == null:
-		return false
-	if file.get_length() < 8:
-		file.close()
-		return false
-	var bytes = file.get_buffer(8)
-	file.close()
-	if bytes.size() < 8:
-		return false
-	return bytes[0] == 0x89 and bytes[1] == 0x50 and bytes[2] == 0x4E and bytes[3] == 0x47 and bytes[4] == 0x0D and bytes[5] == 0x0A and bytes[6] == 0x1A and bytes[7] == 0x0A
-
-func _load_png_texture_direct(path: String) -> Texture2D:
-	if not _png_has_valid_signature(path):
 		return null
 	var bytes = FileAccess.get_file_as_bytes(path)
 	if bytes.is_empty():
@@ -105,7 +95,7 @@ func _load_png_texture_direct(path: String) -> Texture2D:
 # to the procedural shape entirely.
 func _build_sprite_frames(folder_path: String) -> SpriteFrames:
 	var idle_path = folder_path + "idle.png"
-	var idle_texture = _load_png_texture_direct(idle_path)
+	var idle_texture = _load_texture(idle_path)
 	if idle_texture == null:
 		return null
 
@@ -120,7 +110,7 @@ func _build_sprite_frames(folder_path: String) -> SpriteFrames:
 	frames.set_animation_speed("walk", 8.0)
 	for i in range(1, 5):
 		var p = folder_path + "walk_%02d.png" % i
-		var texture = _load_png_texture_direct(p)
+		var texture = _load_texture(p)
 		if texture != null:
 			frames.add_frame("walk", texture)
 			_has_walk_anim = true
@@ -133,12 +123,51 @@ func _build_sprite_frames(folder_path: String) -> SpriteFrames:
 	frames.set_animation_speed("attack", 8.0)
 	for i in range(1, 3):   # attack1, attack2
 		var p = folder_path + "attack_%02d.png" % i
-		var texture = _load_png_texture_direct(p)
+		var texture = _load_texture(p)
 		if texture != null:
 			frames.add_frame("attack", texture)
 			_has_attack_anim = true
 	if not _has_attack_anim:
 		frames.remove_animation("attack")   # play_attack() will just no-op visually, lunge still happens
+
+	return frames
+
+func _build_legacy_sprite_frames(key: String) -> SpriteFrames:
+	var idle_path = LEGACY_FRAME_FOLDER + key + "_walk1.png"
+	var idle_texture = _load_texture(idle_path)
+	if idle_texture == null:
+		return null
+
+	var frames = SpriteFrames.new()
+	frames.add_animation("idle")
+	frames.set_animation_loop("idle", true)
+	frames.add_frame("idle", idle_texture)
+
+	_has_walk_anim = false
+	frames.add_animation("walk")
+	frames.set_animation_loop("walk", true)
+	frames.set_animation_speed("walk", 8.0)
+	for i in range(2, 6):
+		var p = LEGACY_FRAME_FOLDER + key + "_walk%d.png" % i
+		var texture = _load_texture(p)
+		if texture != null:
+			frames.add_frame("walk", texture)
+			_has_walk_anim = true
+	if not _has_walk_anim:
+		frames.remove_animation("walk")
+
+	_has_attack_anim = false
+	frames.add_animation("attack")
+	frames.set_animation_loop("attack", false)
+	frames.set_animation_speed("attack", 8.0)
+	for i in range(1, 3):
+		var p = LEGACY_FRAME_FOLDER + key + "_attack%d.png" % i
+		var texture = _load_texture(p)
+		if texture != null:
+			frames.add_frame("attack", texture)
+			_has_attack_anim = true
+	if not _has_attack_anim:
+		frames.remove_animation("attack")
 
 	return frames
 
@@ -152,14 +181,25 @@ func _setup_sprite_if_available() -> void:
 		_anim_sprite = null
 
 	if not SPRITE_FOLDERS.has(unit_type):
+		if not LEGACY_SPRITE_KEYS.has(unit_type):
+			return
+		var legacy_key = LEGACY_SPRITE_KEYS[unit_type]
+		var legacy_frames = _build_legacy_sprite_frames(legacy_key)
+		if legacy_frames == null:
+			push_warning("UnitSprite: no idle frame found for legacy key '%s', falling back to shape" % legacy_key)
+			return
+		_apply_sprite_frames(legacy_frames, LEGACY_FRAME_FOLDER + legacy_key)
 		return
 
-	var folder_path = SPRITE_FOLDERS[unit_type]
-	var frames = _build_sprite_frames(folder_path)
+	var folder_path: String = SPRITE_FOLDERS[unit_type]
+	var frames := _build_sprite_frames(folder_path)
 	if frames == null:
 		push_warning("UnitSprite: no idle frame found in '%s', falling back to shape" % folder_path)
 		return
 
+	_apply_sprite_frames(frames, folder_path)
+
+func _apply_sprite_frames(frames: SpriteFrames, source_label: String) -> void:
 	_anim_sprite = AnimatedSprite2D.new()
 	_anim_sprite.sprite_frames = frames
 	_anim_sprite.animation_finished.connect(_on_sprite_animation_finished)
@@ -182,7 +222,9 @@ func _setup_sprite_if_available() -> void:
 
 	add_child(_anim_sprite)
 	_anim_sprite.play("idle")
-	_loaded_art_folder = folder_path
+	_loaded_art_folder = source_label
+	if DEBUG_SPRITE_LOAD:
+		print("UnitSprite loaded art: ", source_label)
 
 func set_color(p_color: Color) -> void:
 	base_color = p_color

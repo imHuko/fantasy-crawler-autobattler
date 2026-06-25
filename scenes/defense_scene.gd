@@ -12,7 +12,7 @@ const FIELD_W = 800
 const FIELD_H = 500
 const BASE_X  = 60
 const SPAWN_X = FIELD_W - 20
-const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/generated_troops_fixed96/frames/"
 
 const C_BG       = Color(0.10, 0.12, 0.08)
 const C_BASE     = Color(0.20, 0.40, 0.80)
@@ -253,7 +253,7 @@ func _build_ui() -> void:
 		btn.add_theme_color_override("font_color", col)
 		btn.add_theme_font_size_override("font_size", 11)
 		var portrait_path = _troop_portrait_path(troop.get_type_name())
-		var portrait_texture = _load_png_texture_direct(portrait_path)
+		var portrait_texture = _load_troop_portrait_texture(portrait_path)
 		if portrait_texture != null:
 			var portrait = TextureRect.new()
 			portrait.texture = portrait_texture
@@ -287,14 +287,14 @@ func _troop_portrait_path(type_name: String) -> String:
 		return generated_path
 	return "res://assets/sprites/troops/%s.png" % key
 
-func _load_png_texture_direct(path: String) -> Texture2D:
-	var bytes = FileAccess.get_file_as_bytes(path)
-	if bytes.is_empty():
-		return null
-	var image = Image.new()
-	if image.load_png_from_buffer(bytes) != OK:
-		return null
-	return ImageTexture.create_from_image(image)
+func _load_troop_portrait_texture(path: String) -> Texture2D:
+	if path.begins_with(GENERATED_TROOP_FRAME_FOLDER) and FileAccess.file_exists(path):
+		var bytes = FileAccess.get_file_as_bytes(path)
+		var image = Image.new()
+		if image.load_png_from_buffer(bytes) == OK:
+			return ImageTexture.create_from_image(image)
+	var texture = load(path)
+	return texture as Texture2D
 
 # Returns the troops eligible for this battle.
 # If a zone is set, only troops stationed at that zone (by name) can be placed.
