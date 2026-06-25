@@ -12,6 +12,8 @@ var status_label: Label = null
 var recruit_choices_container: VBoxContainer = null
 var tutorial_back_btn: Button = null   # "Back to Management" button — exposed so the nav reminder can highlight it
 
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
+
 func get_tutorial_target(target_id: String) -> Control:
 	match target_id:
 		"mgmt_button": return tutorial_back_btn   # nav reminder: "Head to Management" → highlight Back to Management
@@ -164,14 +166,16 @@ func _make_candidate_card(troop: TroopData) -> PanelContainer:
 	vbox.add_theme_constant_override("separation", 4)
 	card.add_child(vbox)
 
-	var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
-	if ResourceLoader.exists(portrait_path):
+	var portrait_path = _troop_portrait_path(troop.get_type_name())
+	var portrait_texture = _load_png_texture_direct(portrait_path)
+	if portrait_texture != null:
 		var portrait = TextureRect.new()
-		portrait.texture = load(portrait_path)
+		portrait.texture = portrait_texture
 		portrait.custom_minimum_size = Vector2(80, 80)
 		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		portrait.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		portrait.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		vbox.add_child(portrait)
 
 	var name_lbl = Label.new()
@@ -195,6 +199,22 @@ func _make_candidate_card(troop: TroopData) -> PanelContainer:
 	vbox.add_child(pick_btn)
 
 	return card
+
+func _troop_portrait_path(type_name: String) -> String:
+	var key := type_name.to_lower()
+	var generated_path := GENERATED_TROOP_FRAME_FOLDER + key + "/idle.png"
+	if FileAccess.file_exists(generated_path):
+		return generated_path
+	return "res://assets/sprites/troops/%s.png" % key
+
+func _load_png_texture_direct(path: String) -> Texture2D:
+	var bytes = FileAccess.get_file_as_bytes(path)
+	if bytes.is_empty():
+		return null
+	var image = Image.new()
+	if image.load_png_from_buffer(bytes) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 func _finalize_recruit(troop: TroopData) -> void:
 	PlayerInventory.troop_roster.append(troop)

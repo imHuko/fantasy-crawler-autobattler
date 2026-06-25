@@ -8,17 +8,17 @@ class_name UnitSprite
 # at a time without anything else in the game needing to change.
 #
 # HOW TO ADD REAL ART FOR A UNIT TYPE:
-# 1. Drop frame PNGs into SPRITE_FOLDER below, named:
-#      <key>_walk1.png ... <key>_walk5.png   (walk1 = idle/standing pose)
-#      <key>_attack1.png, <key>_attack2.png
-#    e.g. res://art/sprites/knight_walk1.png
-# 2. Uncomment that UnitType's line in SPRITE_KEYS below.
+# 1. Drop frame PNGs into a folder, named:
+#      idle.png
+#      walk_01.png ... walk_04.png
+#      attack_01.png, attack_02.png
+# 2. Point that UnitType at the folder in SPRITE_FOLDERS below.
 # 3. Run the game — that unit now plays real animated art instead of
 #    the procedural shape. No other code anywhere needs to change.
-#    Frame 1 of the walk set is used as the idle/standing pose; frames
-#    2-5 play as a looping walk cycle. Either set can be partially
-#    missing (e.g. only an idle frame, no walk/attack yet) and whatever
-#    IS present will still be used — only the idle frame is required.
+#    idle.png is used as the standing pose; walk frames loop while moving.
+#    Either set can be partially missing (e.g. only an idle frame, no
+#    walk/attack yet) and whatever IS present will still be used — only
+#    the idle frame is required.
 #
 # Usage: UnitSprite.new(); sprite.setup(unit_type, base_color, size);
 #        add_child(sprite); sprite.position = wherever
@@ -31,26 +31,22 @@ enum UnitType {
 	TREANT, FAERIE, BULL, SPORE_BOMBER, ANCIENT_TOTEM,
 }
 
-# Folder where animation frame PNGs live — change this one line if you
-# move the art folder later; nothing else needs to change.
-const SPRITE_FOLDER = "res://art/sprites/"
+# Folder roots where animation frame PNGs live.
+const RECOVERED_FRAME_FOLDER = "res://assets/sprites/sliced_jun18/"
 
-# Maps a UnitType to an "art key" — the filename prefix used to find
-# this unit's frames, e.g. "knight" -> res://art/sprites/knight_walk1.png.
-# Leave a type commented out (or out entirely) to keep using the
-# procedural shape for it. Uncomment one line at a time as you import
-# each unit's art — everything else keeps working unchanged either way.
-const SPRITE_KEYS = {
-	UnitType.KNIGHT:       "knight",
-	UnitType.ARCHER:       "archer",
-	UnitType.MAGE:         "mage",
-	UnitType.HEALER:       "healer",
-	UnitType.ROGUE:        "rogue",
-	UnitType.TREANT:       "treant",
-	UnitType.FAERIE:       "faerie",
-	UnitType.BULL:         "bull",
-	UnitType.SPORE_BOMBER: "spore_bomber",
-	UnitType.ANCIENT_TOTEM:"ancient_totem",
+# Maps a UnitType to the folder containing idle/walk/attack frame PNGs.
+# Leave a type out entirely to keep using the procedural shape.
+const SPRITE_FOLDERS = {
+	UnitType.KNIGHT:        RECOVERED_FRAME_FOLDER + "knight/",
+	UnitType.ARCHER:        RECOVERED_FRAME_FOLDER + "archer/",
+	UnitType.MAGE:          RECOVERED_FRAME_FOLDER + "mage/",
+	UnitType.HEALER:        RECOVERED_FRAME_FOLDER + "healer/",
+	UnitType.ROGUE:         RECOVERED_FRAME_FOLDER + "rogue/",
+	UnitType.TREANT:        RECOVERED_FRAME_FOLDER + "treant/",
+	UnitType.FAERIE:        RECOVERED_FRAME_FOLDER + "faerie/",
+	UnitType.BULL:          RECOVERED_FRAME_FOLDER + "bull/",
+	UnitType.SPORE_BOMBER:  RECOVERED_FRAME_FOLDER + "spore_bomber/",
+	UnitType.ANCIENT_TOTEM: RECOVERED_FRAME_FOLDER + "ancient_totem/",
 }
 
 var unit_type: int = UnitType.ENEMY_BASIC
@@ -66,6 +62,7 @@ var _is_moving: bool = false   # set via set_moving() — picks idle vs walk ani
 var _anim_sprite: AnimatedSprite2D = null   # created only if real art frames are found
 var _has_walk_anim: bool = false
 var _has_attack_anim: bool = false
+var _loaded_art_folder: String = ""
 
 func setup(p_unit_type: int, p_color: Color, p_size: float = 28.0) -> void:
 	unit_type = p_unit_type
@@ -74,42 +71,58 @@ func setup(p_unit_type: int, p_color: Color, p_size: float = 28.0) -> void:
 	_setup_sprite_if_available()
 	queue_redraw()
 
-# Builds a SpriteFrames resource from <key>_walk1.png (idle), <key>_walk2-5.png
-# (walk loop), and <key>_attack1-2.png (attack, played once) — whichever of
-# those files actually exist. Returns null if even the idle frame is missing,
-# which tells the caller to fall back to the procedural shape entirely.
-# Minimum file size (bytes) for a frame PNG to be considered real art.
-# Placeholder/stub frames (tiny icons in a large transparent canvas) are
-# typically < 8 KB; genuine animation frames start at ~40 KB. Using 10 KB
-# as the cutoff cleanly separates the two without touching any files.
-const MIN_FRAME_FILE_BYTES = 10_000
+func _png_has_valid_signature(path: String) -> bool:
+	if not FileAccess.file_exists(path):
+		return false
+	var file = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return false
+	if file.get_length() < 8:
+		file.close()
+		return false
+	var bytes = file.get_buffer(8)
+	file.close()
+	if bytes.size() < 8:
+		return false
+	return bytes[0] == 0x89 and bytes[1] == 0x50 and bytes[2] == 0x4E and bytes[3] == 0x47 and bytes[4] == 0x0D and bytes[5] == 0x0A and bytes[6] == 0x1A and bytes[7] == 0x0A
 
-func _png_file_size(path: String) -> int:
-	var f = FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return 0
-	var sz = f.get_length()
-	f.close()
-	return sz
+func _load_png_texture_direct(path: String) -> Texture2D:
+	if not _png_has_valid_signature(path):
+		return null
+	var bytes = FileAccess.get_file_as_bytes(path)
+	if bytes.is_empty():
+		return null
+	var image = Image.new()
+	var err = image.load_png_from_buffer(bytes)
+	if err != OK:
+		push_warning("UnitSprite: PNG decode failed for '%s' with error %d" % [path, err])
+		return null
+	return ImageTexture.create_from_image(image)
 
-func _build_sprite_frames(key: String) -> SpriteFrames:
-	var idle_path = SPRITE_FOLDER + key + "_walk1.png"
-	if not ResourceLoader.exists(idle_path):
+# Builds a SpriteFrames resource from idle.png, walk_01..walk_04.png, and
+# attack_01..attack_02.png — whichever of those files actually exist. Returns
+# null if even the idle frame is missing, which tells the caller to fall back
+# to the procedural shape entirely.
+func _build_sprite_frames(folder_path: String) -> SpriteFrames:
+	var idle_path = folder_path + "idle.png"
+	var idle_texture = _load_png_texture_direct(idle_path)
+	if idle_texture == null:
 		return null
 
 	var frames = SpriteFrames.new()
 	frames.add_animation("idle")
 	frames.set_animation_loop("idle", true)
-	frames.add_frame("idle", load(idle_path))
+	frames.add_frame("idle", idle_texture)
 
 	_has_walk_anim = false
 	frames.add_animation("walk")
 	frames.set_animation_loop("walk", true)
 	frames.set_animation_speed("walk", 8.0)
-	for i in range(2, 6):   # walk2..walk5 — walk1 is reserved for idle above
-		var p = SPRITE_FOLDER + key + "_walk%d.png" % i
-		if ResourceLoader.exists(p) and _png_file_size(p) >= MIN_FRAME_FILE_BYTES:
-			frames.add_frame("walk", load(p))
+	for i in range(1, 5):
+		var p = folder_path + "walk_%02d.png" % i
+		var texture = _load_png_texture_direct(p)
+		if texture != null:
+			frames.add_frame("walk", texture)
 			_has_walk_anim = true
 	if not _has_walk_anim:
 		frames.remove_animation("walk")   # nothing to play — set_moving(true) will just stay on idle
@@ -119,9 +132,10 @@ func _build_sprite_frames(key: String) -> SpriteFrames:
 	frames.set_animation_loop("attack", false)
 	frames.set_animation_speed("attack", 8.0)
 	for i in range(1, 3):   # attack1, attack2
-		var p = SPRITE_FOLDER + key + "_attack%d.png" % i
-		if ResourceLoader.exists(p) and _png_file_size(p) >= MIN_FRAME_FILE_BYTES:
-			frames.add_frame("attack", load(p))
+		var p = folder_path + "attack_%02d.png" % i
+		var texture = _load_png_texture_direct(p)
+		if texture != null:
+			frames.add_frame("attack", texture)
 			_has_attack_anim = true
 	if not _has_attack_anim:
 		frames.remove_animation("attack")   # play_attack() will just no-op visually, lunge still happens
@@ -129,7 +143,7 @@ func _build_sprite_frames(key: String) -> SpriteFrames:
 	return frames
 
 # Builds (or rebuilds) the real-art AnimatedSprite2D child if this unit
-# type has an entry in SPRITE_KEYS AND its idle frame file actually
+# type has an entry in SPRITE_FOLDERS AND its idle frame file actually
 # exists. If not, leaves _anim_sprite null so _draw() falls back to the
 # procedural shape, exactly as before.
 func _setup_sprite_if_available() -> void:
@@ -137,18 +151,20 @@ func _setup_sprite_if_available() -> void:
 		_anim_sprite.queue_free()
 		_anim_sprite = null
 
-	if not SPRITE_KEYS.has(unit_type):
+	if not SPRITE_FOLDERS.has(unit_type):
 		return
 
-	var key = SPRITE_KEYS[unit_type]
-	var frames = _build_sprite_frames(key)
+	var folder_path = SPRITE_FOLDERS[unit_type]
+	var frames = _build_sprite_frames(folder_path)
 	if frames == null:
-		push_warning("UnitSprite: no idle frame found for key '%s' (expected %s%s_walk1.png), falling back to shape" % [key, SPRITE_FOLDER, key])
+		push_warning("UnitSprite: no idle frame found in '%s', falling back to shape" % folder_path)
 		return
 
 	_anim_sprite = AnimatedSprite2D.new()
 	_anim_sprite.sprite_frames = frames
 	_anim_sprite.animation_finished.connect(_on_sprite_animation_finished)
+	_anim_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	_anim_sprite.z_index = 20
 	# Same centered-on-box-middle anchor convention the procedural shapes
 	# use (anchor_center = s/2,s/2 in _draw()) — keeps real art positioned
 	# consistently with the shape fallback and with how callers already
@@ -166,6 +182,7 @@ func _setup_sprite_if_available() -> void:
 
 	add_child(_anim_sprite)
 	_anim_sprite.play("idle")
+	_loaded_art_folder = folder_path
 
 func set_color(p_color: Color) -> void:
 	base_color = p_color

@@ -6,6 +6,8 @@ extends Control
 # to fill out the starting roster before heading to the map.
 # -------------------------------------------------------
 
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
+
 func _ready() -> void:
 	_build_ui()
 
@@ -61,14 +63,16 @@ func _add_recruit_card(parent: HBoxContainer, troop: TroopData) -> void:
 	vbox.add_theme_constant_override("separation", 6)
 	card.add_child(vbox)
 
-	var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
-	if ResourceLoader.exists(portrait_path):
+	var portrait_path = _troop_portrait_path(troop.get_type_name())
+	var portrait_texture = _load_png_texture_direct(portrait_path)
+	if portrait_texture != null:
 		var portrait = TextureRect.new()
-		portrait.texture = load(portrait_path)
+		portrait.texture = portrait_texture
 		portrait.custom_minimum_size = Vector2(96, 96)
 		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		portrait.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
 		portrait.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		vbox.add_child(portrait)
 
 	var name_lbl = Label.new()
@@ -100,6 +104,22 @@ func _add_recruit_card(parent: HBoxContainer, troop: TroopData) -> void:
 	choose_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
 	choose_btn.pressed.connect(_on_recruit_chosen.bind(troop))
 	vbox.add_child(choose_btn)
+
+func _troop_portrait_path(type_name: String) -> String:
+	var key := type_name.to_lower()
+	var generated_path := GENERATED_TROOP_FRAME_FOLDER + key + "/idle.png"
+	if FileAccess.file_exists(generated_path):
+		return generated_path
+	return "res://assets/sprites/troops/%s.png" % key
+
+func _load_png_texture_direct(path: String) -> Texture2D:
+	var bytes = FileAccess.get_file_as_bytes(path)
+	if bytes.is_empty():
+		return null
+	var image = Image.new()
+	if image.load_png_from_buffer(bytes) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 func _on_recruit_chosen(troop: TroopData) -> void:
 	PlayerInventory.troop_roster.append(troop)

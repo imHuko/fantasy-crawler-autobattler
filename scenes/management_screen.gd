@@ -10,6 +10,8 @@ var tutorial_talent_btn: Button = null
 var tutorial_gear_shop_btn: Button = null
 var tutorial_heal_buttons: Dictionary = {}   # TroopData -> Button, rebuilt each time troop cards are drawn
 
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
+
 const RARITY_COLORS = {
 	"COMMON":    Color(0.75, 0.75, 0.75),
 	"RARE":      Color(0.25, 0.50, 1.00),
@@ -582,13 +584,15 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 	header_hbox.add_theme_constant_override("separation", 8)
 	vbox.add_child(header_hbox)
 
-	var portrait_path = "res://assets/sprites/troops/%s.png" % troop.get_type_name().to_lower()
-	if ResourceLoader.exists(portrait_path):
+	var portrait_path = _troop_portrait_path(troop.get_type_name())
+	var portrait_texture = _load_png_texture_direct(portrait_path)
+	if portrait_texture != null:
 		var portrait = TextureRect.new()
-		portrait.texture = load(portrait_path)
+		portrait.texture = portrait_texture
 		portrait.custom_minimum_size = Vector2(48, 48)
 		portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		portrait.expand_mode = TextureRect.EXPAND_FIT_WIDTH_PROPORTIONAL
+		portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 		header_hbox.add_child(portrait)
 
 	var header = Label.new()
@@ -678,6 +682,22 @@ func _make_troop_card(troop: TroopData) -> PanelContainer:
 		slots_hbox.add_child(slot_container)
 
 	return card
+
+func _troop_portrait_path(type_name: String) -> String:
+	var key := type_name.to_lower()
+	var generated_path := GENERATED_TROOP_FRAME_FOLDER + key + "/idle.png"
+	if FileAccess.file_exists(generated_path):
+		return generated_path
+	return "res://assets/sprites/troops/%s.png" % key
+
+func _load_png_texture_direct(path: String) -> Texture2D:
+	var bytes = FileAccess.get_file_as_bytes(path)
+	if bytes.is_empty():
+		return null
+	var image = Image.new()
+	if image.load_png_from_buffer(bytes) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 func _refresh_stats_text(label: Label, troop: TroopData) -> void:
 	var eff = troop.get_effective_stats()
