@@ -1,5 +1,7 @@
 extends Node2D
 
+const UnitSprite := preload("res://resources/unit_sprite.gd")
+
 # -------------------------------------------------------
 # Defense Scene — real-time auto-battler wave defense
 # Place troops on the battlefield, they fight automatically
@@ -10,6 +12,7 @@ const FIELD_W = 800
 const FIELD_H = 500
 const BASE_X  = 60
 const SPAWN_X = FIELD_W - 20
+const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/sliced_jun18/"
 
 const C_BG       = Color(0.10, 0.12, 0.08)
 const C_BASE     = Color(0.20, 0.40, 0.80)
@@ -198,6 +201,19 @@ func _build_ui() -> void:
 		]
 		btn.add_theme_color_override("font_color", col)
 		btn.add_theme_font_size_override("font_size", 11)
+		var portrait_path = _troop_portrait_path(troop.get_type_name())
+		var portrait_texture = _load_png_texture_direct(portrait_path)
+		if portrait_texture != null:
+			var portrait = TextureRect.new()
+			portrait.texture = portrait_texture
+			portrait.custom_minimum_size = Vector2(48, 48)
+			portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+			portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			portrait.set_anchors_preset(Control.PRESET_RIGHT_WIDE)
+			portrait.offset_left = -52.0
+			portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			portrait.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+			btn.add_child(portrait)
 		btn.pressed.connect(_on_roster_selected.bind(i))
 		roster_hbox.add_child(btn)
 		roster_slots.append({"troop": troop, "btn": btn, "placed": false})
@@ -207,6 +223,22 @@ func _build_ui() -> void:
 		warn.text = "No troops stationed here! You'll have to fight with whatever you brought — nothing."
 		warn.add_theme_color_override("font_color", Color(0.9, 0.3, 0.3))
 		roster_hbox.add_child(warn)
+
+func _troop_portrait_path(type_name: String) -> String:
+	var key := type_name.to_lower()
+	var generated_path := GENERATED_TROOP_FRAME_FOLDER + key + "/idle.png"
+	if FileAccess.file_exists(generated_path):
+		return generated_path
+	return "res://assets/sprites/troops/%s.png" % key
+
+func _load_png_texture_direct(path: String) -> Texture2D:
+	var bytes = FileAccess.get_file_as_bytes(path)
+	if bytes.is_empty():
+		return null
+	var image = Image.new()
+	if image.load_png_from_buffer(bytes) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 # Returns the troops eligible for this battle.
 # If a zone is set, only troops stationed at that zone (by name) can be placed.
@@ -311,7 +343,8 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 	var col = TROOP_COLORS.get(type_name, Color.WHITE)
 	var sz = 30.0
 
-	# Sprite (procedural shape-based placeholder, swap for real art later)
+	# UnitSprite uses recovered animated art when available, with a
+	# procedural shape fallback for any type that has no imported frames.
 	var unit_type_map = {
 		"KNIGHT": UnitSprite.UnitType.KNIGHT, "ARCHER": UnitSprite.UnitType.ARCHER,
 		"MAGE": UnitSprite.UnitType.MAGE, "HEALER": UnitSprite.UnitType.HEALER,
@@ -401,6 +434,14 @@ const ENEMY_ARCHETYPES = {
 	"TANK":    { "hp_mult": 2.6,  "dmg_mult": 0.55, "speed_mult": 0.55, "color": Color(0.4, 0.4, 0.45), "symbol": "▣", "label": "Tank" },
 	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2), "symbol": "✪", "label": "Buffer" },
 	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 2.5,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
+}
+
+const ARCHETYPE_UNIT_TYPES = {
+	"MELEE":   UnitSprite.UnitType.TREANT,
+	"TANK":    UnitSprite.UnitType.BULL,
+	"RANGED":  UnitSprite.UnitType.FAERIE,
+	"CHARGER": UnitSprite.UnitType.SPORE_BOMBER,
+	"BUFFER":  UnitSprite.UnitType.ANCIENT_TOTEM,
 }
 const RANGED_ATTACK_RANGE = 260.0
 const CHARGER_BURST_RANGE = 50.0
@@ -561,8 +602,8 @@ func _spawn_one_enemy(stage: int, archetype: String) -> void:
 
 	var rect = UnitSprite.new()
 	var sprite_color = Color(1, 0.2, 0.1) if is_boss else profile["color"]
-	rect.setup(UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC,
-		sprite_color, sz)
+	var unit_type = UnitSprite.UnitType.ENEMY_BOSS if is_boss else ARCHETYPE_UNIT_TYPES.get(archetype, UnitSprite.UnitType.ENEMY_BASIC)
+	rect.setup(unit_type, sprite_color, sz)
 	rect.position = Vector2(SPAWN_X - sz, ey - sz/2)
 	field_node.add_child(rect)
 

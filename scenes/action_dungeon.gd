@@ -1,5 +1,7 @@
 extends Node2D
 
+const UnitSprite := preload("res://resources/unit_sprite.gd")
+
 # -------------------------------------------------------
 # Action Dungeon — Survival Arena
 # One large open scrollable arena, no rooms or doors. Enemies spawn
