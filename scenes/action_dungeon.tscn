@@ -1,6 +1,19 @@
-[gd_scene load_steps=2 format=3 uid="uid://action_dungeon"]
+[gd_scene format=3 uid="uid://b7yvha7dh3ukj"]
 
-[ext_resource type="Script" path="res://scenes/action_dungeon.gd" id="1_act"]
+[ext_resource type="Script" uid="uid://cblp6v5xfvqap" path="res://scenes/action_dungeon.gd" id="1_act"]
+[ext_resource type="Texture2D" uid="uid://cuqsgn4kcrtee" path="res://art/spritesheet/ChatGPT Image Jun 19, 2026, 11_30_09 PM.png" id="2_0evv3"]
 
-[node name="ActionDungeon" type="Node2D"]
+[node name="ActionDungeon" type="Node2D" unique_id=328036697]
+position = Vector2(-1, -1)
 script = ExtResource("1_act")
+
+[node name="ChatGptImageJun19,2026,113009Pm" type="Sprite2D" parent="." unique_id=680827379]
+position = Vector2(632, 580)
+scale = Vector2(355, 214)
+texture = ExtResource("2_0evv3")
+region_enabled = true
+
+[node name="ChatGptImageJun19,2026,113009Pm2" type="Sprite2D" parent="." unique_id=1874252771]
+position = Vector2(612, 595)
+texture = ExtResource("2_0evv3")
+region_enabled = true

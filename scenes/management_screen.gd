@@ -105,7 +105,6 @@ func get_tutorial_target(target_id: String) -> Control:
 		"gear_item_weapon": return _find_gear_button_by_slot("WEAPON")
 		"gear_item_armor": return _find_gear_button_by_slot("ARMOR")
 		"hero_weapon_slot": return _find_slot_button_for_hero("WEAPON")
-		"recruit_weapon_slot": return _find_slot_button_for_newest_recruit("WEAPON")
 		_: return null
 
 # Finds the inventory list button for the (unequipped) item matching a
@@ -172,21 +171,6 @@ func _find_slot_button_for_hero(slot_name: String) -> Control:
 		if not slot_btn.has_meta("troop") or not slot_btn.has_meta("slot"): continue
 		var troop: TroopData = slot_btn.get_meta("troop")
 		if troop == knight and slot_btn.get_meta("slot") == slot_name:
-			return slot_btn
-	return null
-
-# Finds the empty slot button on whichever troop was most recently
-# added to the roster (the tutorial dungeon's free recruit, at this
-# point in the sequence) — rather than the Hero.
-func _find_slot_button_for_newest_recruit(slot_name: String) -> Control:
-	if PlayerInventory.troop_roster.is_empty(): return null
-	var newest: TroopData = PlayerInventory.troop_roster[PlayerInventory.troop_roster.size() - 1]
-	for slot_btn in all_slot_buttons:
-		if not slot_btn.has_meta("troop") or not slot_btn.has_meta("slot"): continue
-		var troop: TroopData = slot_btn.get_meta("troop")
-		if troop == newest and slot_btn.get_meta("slot") == slot_name:
-			if troop_scroll:
-				troop_scroll.ensure_control_visible(slot_btn)
 			return slot_btn
 	return null
 
@@ -965,18 +949,11 @@ func _on_gear_selected(gear: GearItem, btn: Button) -> void:
 
 	# Advance the tutorial LAST, after the list refresh above — see the
 	# matching comment in _equip_gear_to_slot() for why this order matters.
-	# Branches on the tutorial's actual current step id rather than the
-	# clicked item's slot type — both equip steps use WEAPON-slot items
-	# now (hero AND recruit each get a Practice Sword), so slot type
-	# alone can no longer tell the two steps apart the way it used to
-	# when one was a weapon step and the other was an armor step.
 	if PlayerInventory.tutorial_active:
 		var current_step = TutorialSteps.get_step(PlayerInventory.tutorial_step_index)
 		var current_step_id = current_step.get("id", "") if current_step else ""
 		if current_step_id == "equip_hero_pick_item":
 			TutorialRouter.advance_step("equip_hero_pick_item")
-		elif current_step_id == "equip_recruit_pick_item":
-			TutorialRouter.advance_step("equip_recruit_pick_item")
 
 # Shared equip logic used regardless of which was clicked first (slot or gear)
 func _equip_gear_to_slot(gear: GearItem, troop: TroopData, slot_key: String, slot_btn: Button) -> void:
@@ -1013,8 +990,6 @@ func _equip_gear_to_slot(gear: GearItem, troop: TroopData, slot_key: String, slo
 	if PlayerInventory.tutorial_active:
 		if not PlayerInventory.troop_roster.is_empty() and troop == PlayerInventory.troop_roster[0]:
 			TutorialRouter.advance_step("equip_hero_pick_slot")
-		elif troop == PlayerInventory.troop_roster[PlayerInventory.troop_roster.size() - 1]:
-			TutorialRouter.advance_step("equip_recruit_pick_slot")
 
 func _clear_selection() -> void:
 	if selected_slot_button and selected_slot_button.has_meta("troop"):

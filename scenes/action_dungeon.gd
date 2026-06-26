@@ -205,6 +205,10 @@ const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
 const C_SAVE_ZONE = Color(0.3, 0.85, 0.5, 0.35)
 
+const ARROW_PROJECTILE_SHAFT_COLOR = Color(0.74, 0.52, 0.28)
+const ARROW_PROJECTILE_HEAD_COLOR = Color(0.88, 0.86, 0.72)
+const ARROW_PROJECTILE_FLETCH_COLOR = Color(0.55, 0.18, 0.16)
+
 var run_gear: Array = []          # gear currently held but NOT yet banked — lost (partially) on death
 var banked_gear: Array = []       # gear safely banked at the save zone — survives death and retreat
 var secured_gear: Array = []      # everything actually kept by the end of the run, for the end screen — never cleared mid-run
@@ -1104,19 +1108,62 @@ func _melee_strike(e: Dictionary, dmg: int) -> void:
 		if kill_idx >= 0:
 			_kill_enemy(kill_idx)
 
+func _current_class_key() -> String:
+	return _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
+
+func _uses_arrow_projectile(is_hero: bool) -> bool:
+	return is_hero and _current_class_key() == "ARCHER"
+
+func _create_projectile_visual(is_hero: bool, dir: Vector2):
+	if not _uses_arrow_projectile(is_hero):
+		var rect = ColorRect.new()
+		rect.size = Vector2(10, 10)
+		rect.color = C_PROJ_H if is_hero else C_PROJ_E
+		rect.position = -Vector2(5, 5)
+		return rect
+
+	var arrow = Node2D.new()
+	arrow.rotation = dir.angle()
+	arrow.z_index = 30
+
+	var shaft = Line2D.new()
+	shaft.width = 3.0
+	shaft.default_color = ARROW_PROJECTILE_SHAFT_COLOR
+	shaft.points = PackedVector2Array([Vector2(-11, 0), Vector2(8, 0)])
+	arrow.add_child(shaft)
+
+	var head = Polygon2D.new()
+	head.color = ARROW_PROJECTILE_HEAD_COLOR
+	head.polygon = PackedVector2Array([
+		Vector2(13, 0),
+		Vector2(6, -5),
+		Vector2(7, 5),
+	])
+	arrow.add_child(head)
+
+	var fletch = Polygon2D.new()
+	fletch.color = ARROW_PROJECTILE_FLETCH_COLOR
+	fletch.polygon = PackedVector2Array([
+		Vector2(-13, 0),
+		Vector2(-7, -4),
+		Vector2(-8, 0),
+		Vector2(-7, 4),
+	])
+	arrow.add_child(fletch)
+	return arrow
+
 func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_sprite: UnitSprite = null) -> void:
 	var dir = (toward - from).normalized()
 	var proj = {"pos": Vector2(from.x, from.y), "origin": Vector2(from.x, from.y),
-				"dir": dir, "damage": dmg, "is_hero": is_hero, "pierced": {}}
+				"dir": dir, "damage": dmg, "is_hero": is_hero, "pierced": {},
+				"visual": "arrow" if _uses_arrow_projectile(is_hero) else "square"}
 
 	if attacker_sprite and is_instance_valid(attacker_sprite):
 		attacker_sprite.face(dir)
 		attacker_sprite.play_attack()
 
-	var prect = ColorRect.new()
-	prect.size = Vector2(10, 10)
-	prect.color = C_PROJ_H if is_hero else C_PROJ_E
-	prect.position = from - Vector2(5, 5)
+	var prect = _create_projectile_visual(is_hero, dir)
+	prect.position += from
 	arena_node.add_child(prect)
 
 	if is_hero:
@@ -1565,7 +1612,11 @@ func _update_visuals() -> void:
 	for i in range(min(hero_projs.size(), hero_proj_rects.size())):
 		var pr = hero_proj_rects[i]
 		if is_instance_valid(pr):
-			pr.position = hero_projs[i]["pos"] - Vector2(5,5)
+			if hero_projs[i].get("visual", "square") == "arrow":
+				pr.position = hero_projs[i]["pos"]
+				pr.rotation = hero_projs[i]["dir"].angle()
+			else:
+				pr.position = hero_projs[i]["pos"] - Vector2(5,5)
 
 	for i in range(min(enemy_projs.size(), enemy_proj_rects.size())):
 		var pr = enemy_proj_rects[i]

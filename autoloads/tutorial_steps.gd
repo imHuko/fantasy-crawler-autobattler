@@ -134,9 +134,9 @@ const STEPS: Array = [
 		"nav_action_scene": "res://scenes/tutorial_dungeon.tscn",
 	},
 
-	# --- Equipping (each is genuinely 2 clicks: pick the item, then the
-	# slot — split into 2 steps each rather than 1, since the overlay
-	# can only spotlight one target per step) ---
+	# --- Equipping (genuinely 2 clicks: pick the item, then the slot —
+	# split into 2 steps rather than 1, since the overlay can only
+	# spotlight one target per step) ---
 	{
 		"id": "equip_hero_pick_item",
 		"screen": "res://scenes/management_screen.tscn",
@@ -151,21 +151,6 @@ const STEPS: Array = [
 		"text": "Now click your Hero's empty weapon slot to equip it.",
 		"target_id": "hero_weapon_slot",
 	},
-	{
-		"id": "equip_recruit_pick_item",
-		"screen": "res://scenes/management_screen.tscn",
-		"mode": "click",
-		"text": "Click this weapon to select it.",
-		"target_id": "gear_item_weapon",
-	},
-	{
-		"id": "equip_recruit_pick_slot",
-		"screen": "res://scenes/management_screen.tscn",
-		"mode": "click",
-		"text": "Now click your new recruit's empty weapon slot to equip it.",
-		"target_id": "recruit_weapon_slot",
-	},
-
 	# --- Inventory / Selling, Salvaging, Upgrading (all in one gear shop visit) ---
 	{
 		"id": "inventory_sell",

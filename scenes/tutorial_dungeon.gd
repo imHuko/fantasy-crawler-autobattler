@@ -4,9 +4,9 @@ extends Node2D
 # Tutorial Dungeon — a short, scripted version of the real survival
 # arena (open area, camera follows the hero, enemies spawn
 # continuously) rather than the old fixed 3-room layout. Guarantees
-# exactly 4 gear drops (one for each slot) and one free recruit,
+# exactly 3 practice weapon drops,
 # regardless of how the fight actually goes, so the tutorial sequence
-# downstream (equip on hero, equip on recruit, sell, upgrade) always
+# downstream (equip on hero, sell, salvage, upgrade) always
 # has something real to work with.
 #
 # This is intentionally much smaller and tighter than the real
@@ -389,16 +389,16 @@ func _grant_rewards() -> void:
 	# the gear shop's lists only ever show what's granted below.
 	PlayerInventory.gear_inventory.clear()
 
-	# 4 IDENTICAL hand-built weapons — completely bypasses GearGenerator,
+	# 3 IDENTICAL hand-built weapons — completely bypasses GearGenerator,
 	# so there's no random slot/rarity/stat roll that could ever come out
-	# wrong. Every later step (equip x2, sell, salvage) just needs "any
+	# wrong. Every later step (equip, sell, salvage) just needs "any
 	# weapon" rather than one specific named item, which structurally
 	# rules out the whole class of slot-mismatch bug that came up during
 	# testing (an ARMOR step accidentally resolving to a WEAPON item).
-	# Flow: equip on Hero, equip on recruit, sell one, salvage one — the
+	# Flow: equip on Hero, sell one, salvage one — the
 	# upgrade step afterward targets whichever weapon is already equipped
-	# on the Hero, not a 5th loose item.
-	for i in range(4):
+	# on the Hero, not a 4th loose item.
+	for i in range(3):
 		var weapon = GearItem.new()
 		weapon.item_name = "Practice Sword"
 		weapon.rarity = GearItem.Rarity.COMMON
@@ -408,10 +408,7 @@ func _grant_rewards() -> void:
 		weapon.stat_ranges = {}
 		PlayerInventory.add_gear(weapon)
 
-	var recruit = SaveManager.generate_recruit()
-	PlayerInventory.troop_roster.append(recruit)
-
-	_set_tip("Found gear and a new recruit!")
+	_set_tip("Found practice gear!")
 
 # -------------------------------------------------------
 # End states
@@ -473,7 +470,7 @@ func _show_results() -> void:
 	vbox.add_child(title)
 
 	var sub = Label.new()
-	sub.text = "You found 4 pieces of gear and a new recruit. Let's go put them to use."
+	sub.text = "You found practice gear. Let's go put it to use."
 	sub.add_theme_color_override("font_color", Color(0.8,0.8,0.8))
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -488,7 +485,7 @@ func _show_results() -> void:
 
 # Unlike the old tutorial, this does NOT set tutorial_complete or
 # navigate to the World Map directly — the new forced walkthrough has
-# many more steps after the dungeon (equip on hero, equip on recruit,
+# many more steps after the dungeon (equip on hero,
 # sell, the scripted defense battle, healing, talents, upgrade), so
 # finishing here would cut the rest of the sequence off. Just save and
 # hand off to whatever screen the next tutorial step actually needs —

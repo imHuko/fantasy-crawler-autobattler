@@ -516,7 +516,7 @@ func _populate_sell_list() -> void:
 		sell_list_container.add_child(row)
 
 		# Matched by slot, not a specific name — every tutorial weapon is
-		# identical ("Practice Sword" x4), so any one of them works here.
+		# identical ("Practice Sword" x3), so any one of them works here.
 		if gear.get_slot_name() == "WEAPON" and tutorial_sell_item_btn == null:
 			tutorial_sell_item_btn = sell_btn
 
@@ -606,7 +606,7 @@ func _populate_salvage_list() -> void:
 		salvage_list_container.add_child(row)
 
 		# Matched by slot, not a specific name — same reasoning as the
-		# sell list above. Any of the 4 identical tutorial weapons works.
+		# sell list above. Any of the 3 identical tutorial weapons works.
 		if gear.get_slot_name() == "WEAPON" and tutorial_salvage_item_btn == null:
 			tutorial_salvage_item_btn = salvage_btn
 
