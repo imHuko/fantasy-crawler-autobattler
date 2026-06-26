@@ -194,12 +194,13 @@ const SKILL_POOL = [
 const C_FLOOR    = Color(0.18, 0.16, 0.22)
 const C_WALL     = Color(0.30, 0.25, 0.35)
 const C_HERO     = Color(0.30, 0.70, 1.00)
-# Visual display size for the hero sprite. Larger than the hitbox constant (14)
-# because the 512×512 canvas art needs more room for content to appear at a
-# readable size. Hitbox logic uses the hardcoded radius in _process_homing_melee.
+
+# Sprite size tuning. Change these values when the art feels too small/big.
+# Hitbox size is gameplay. Sprite size is visuals only.
 const HERO_SPRITE_SIZE: float = 96.0
 const ENEMY_HITBOX_SIZE: float = 28.0
 const ENEMY_SPRITE_SIZE: float = 56.0
+
 const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
 const C_SAVE_ZONE = Color(0.3, 0.85, 0.5, 0.35)
@@ -775,6 +776,12 @@ func _spawn_enemy_wave(count: int) -> void:
 		var archetype = _roll_archetype()
 		_spawn_one_enemy(archetype, stage, tier_mult, hp_scale, dmg_scale, speed_scale, false)
 
+func _get_enemy_hitbox_size(is_miniboss: bool) -> float:
+	return ENEMY_HITBOX_SIZE * (MINIBOSS_EMPOWERED_SIZE_MULT if is_miniboss else 1.0)
+
+func _get_enemy_sprite_size(is_miniboss: bool) -> float:
+	return ENEMY_SPRITE_SIZE * (MINIBOSS_EMPOWERED_SIZE_MULT if is_miniboss else 1.0)
+
 func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale: float, dmg_scale: float, speed_scale: float, is_miniboss: bool, miniboss_unique: bool = false) -> void:
 	var profile = ARENA_ARCHETYPES.get(archetype, ARENA_ARCHETYPES["MELEE"])
 
@@ -782,15 +789,13 @@ func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale:
 	var base_spd = (ENEMY_SPEED_BASE + stage * ENEMY_SPEED_PER_STAGE) * profile["speed_mult"]
 	var base_atk = (ENEMY_ATK_BASE   + stage * ENEMY_ATK_PER_STAGE)   * tier_mult * profile["dmg_mult"]
 
-	var sz = ENEMY_HITBOX_SIZE
-	var visual_sz = ENEMY_SPRITE_SIZE
+	var sz = _get_enemy_hitbox_size(is_miniboss)
+	var visual_sz = _get_enemy_sprite_size(is_miniboss)
 	var max_hp = int(base_hp * hp_scale)
 	var spd = base_spd * speed_scale
 	var atk = int(base_atk * dmg_scale)
 
 	if is_miniboss:
-		sz *= MINIBOSS_EMPOWERED_SIZE_MULT
-		visual_sz *= MINIBOSS_EMPOWERED_SIZE_MULT
 		max_hp = int(max_hp * MINIBOSS_EMPOWERED_HP_MULT)
 		atk = int(atk * MINIBOSS_EMPOWERED_DMG_MULT)
 
