@@ -33,6 +33,7 @@ enum UnitType {
 
 # Folder roots where animation frame PNGs live.
 const GENERATED_TROOP_FRAME_FOLDER = "res://assets/sprites/generated_troops_fixed96/frames/"
+const GENERATED_ENEMY_FRAME_FOLDER = "res://assets/sprites/enemies/sheet_jun19/"
 const LEGACY_FRAME_FOLDER = "res://art/sprites/"
 const DEBUG_SPRITE_LOAD := false
 
@@ -44,6 +45,11 @@ const SPRITE_FOLDERS = {
 	UnitType.MAGE:   GENERATED_TROOP_FRAME_FOLDER + "mage/",
 	UnitType.HEALER: GENERATED_TROOP_FRAME_FOLDER + "healer/",
 	UnitType.ROGUE:  GENERATED_TROOP_FRAME_FOLDER + "rogue/",
+	UnitType.TREANT:        GENERATED_ENEMY_FRAME_FOLDER + "stone_knight/",
+	UnitType.FAERIE:        GENERATED_ENEMY_FRAME_FOLDER + "skeleton_archer/",
+	UnitType.BULL:          GENERATED_ENEMY_FRAME_FOLDER + "stone_bull/",
+	UnitType.SPORE_BOMBER:  GENERATED_ENEMY_FRAME_FOLDER + "stone_bomber/",
+	UnitType.ANCIENT_TOTEM: GENERATED_ENEMY_FRAME_FOLDER + "stone_mage/",
 }
 
 const LEGACY_SPRITE_KEYS = {
