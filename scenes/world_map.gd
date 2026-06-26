@@ -1075,7 +1075,7 @@ func _refresh_side_panel_build(zone_id: int) -> void:
 		# while the real purchase still charged for it.
 		var is_tutorial_free_farm = (bname == "Farm" and current_level == 0
 			and zone_id == 0 and PlayerInventory.tutorial_active)
-		var cant_afford = (not PlayerInventory.can_afford({"food": 0, "gold": effective_cost})) and not is_tutorial_free_farm
+		var cant_afford = (not PlayerInventory.can_afford({"gold": effective_cost})) and not is_tutorial_free_farm
 
 		var row_vbox = VBoxContainer.new()
 		sp_build_rows_container.add_child(row_vbox)
@@ -1093,7 +1093,7 @@ func _refresh_side_panel_build(zone_id: int) -> void:
 			if is_tutorial_free_farm:
 				btn_text += "  [%s — FREE]" % action
 			else:
-				btn_text += "  [%s — %d 🌾🪙]" % [action, effective_cost]
+				btn_text += "  [%s — %d 🪙]" % [action, effective_cost]
 			if cant_afford:
 				btn_text += " (can't afford)"
 
@@ -1792,10 +1792,10 @@ func _on_build_selected(building_name: String, zone_id: int) -> void:
 		and zone_id == 0 and PlayerInventory.tutorial_active)
 	print("[TUTORIAL DEBUG] is_tutorial_free_farm=%s (is_new_building=%s tutorial_active=%s)" % [is_tutorial_free_farm, is_new_building, PlayerInventory.tutorial_active])
 	if not is_tutorial_free_farm:
-		if not PlayerInventory.can_afford({"food": 0, "gold": cost}):
-			_notify("Not enough resources — need %d combined Food+Gold." % cost)
+		if not PlayerInventory.can_afford({"gold": cost}):
+			_notify("Not enough Gold — need %d." % cost)
 			return
-		PlayerInventory.spend_resources({"food": 0, "gold": cost})
+		PlayerInventory.spend_resources({"gold": cost})
 	zone["buildings"][building_name] = current_level + 1
 	if is_tutorial_free_farm:
 		TutorialRouter.advance_step("build_place_farm")

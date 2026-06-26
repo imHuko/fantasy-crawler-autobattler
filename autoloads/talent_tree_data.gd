@@ -3,7 +3,7 @@ class_name TalentTreeData
 
 # -------------------------------------------------------
 # Talent Tree Definitions
-# Each node: id, display name, description, branch, cost (combined Food+Gold),
+# Each node: id, display name, description, branch, cost (Gold),
 # prereq node id (or "" for none), and a min_stage gate (0 = no gate).
 # Ordered within each branch from cheapest/earliest to most powerful/latest,
 # mirroring normal game progression — big unlocks (Transcendent quality,
@@ -227,7 +227,7 @@ static func can_purchase(node_id: String) -> bool:
 	if not stage_met(node_id):
 		return false
 	var total = get_scaled_cost(node_id)
-	return PlayerInventory.can_afford({"food": total / 2, "gold": total / 2})
+	return PlayerInventory.can_afford({"gold": total})
 
 # Purchases a node: deducts cost, marks it unlocked, and applies any
 # immediate one-time effects (most effects are read live via
@@ -238,7 +238,7 @@ static func purchase(node_id: String) -> bool:
 		return false
 
 	var cost = get_scaled_cost(node_id)
-	PlayerInventory.spend_resources({"food": cost / 2, "gold": cost / 2})
+	PlayerInventory.spend_resources({"gold": cost})
 	PlayerInventory.unlocked_talents[node_id] = true
 	Telemetry.log_event("talent_purchased", {
 		"talent": node_id,

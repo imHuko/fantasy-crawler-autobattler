@@ -284,11 +284,11 @@ func _build_ui() -> void:
 	top_nav_hbox.add_child(map_btn)
 
 	var recruit_btn = Button.new()
-	recruit_btn.text = "🪖 Recruit  (🌾%d 🪙%d)" % [PlayerInventory.resources.get("food", 0), PlayerInventory.resources.get("gold", 0)]
+	recruit_btn.text = "🪖 Recruit  (🪙%d)" % PlayerInventory.resources.get("gold", 0)
 	recruit_btn.custom_minimum_size = Vector2(200, 48)
 	recruit_btn.add_theme_font_size_override("font_size", 15)
 	recruit_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	recruit_btn.tooltip_text = "Spend Food and Gold on recruiting new units"
+	recruit_btn.tooltip_text = "Spend Gold on recruiting new units"
 	recruit_btn.pressed.connect(func():
 		if PlayerInventory.tutorial_active:
 			TutorialRouter.advance_step("recruit_intro")

@@ -536,8 +536,7 @@ func _show_description(node_id: String) -> void:
 	var prereq_ok: bool = TalentTreeData.prereq_met(node_id)
 	var stage_ok: bool = TalentTreeData.stage_met(node_id)
 	var cost: int = TalentTreeData.get_scaled_cost(node_id)
-	var half = cost / 2
-	var can_afford: bool = PlayerInventory.can_afford({"food": half, "gold": half})
+	var can_afford: bool = PlayerInventory.can_afford({"gold": cost})
 
 	var normal_color := Color(0.9, 0.8, 0.4, 1)
 	var red_color := Color(0.9, 0.3, 0.3, 1)
@@ -548,7 +547,7 @@ func _show_description(node_id: String) -> void:
 		desc_requirement.visible = false
 		purchase_button.visible = false
 	else:
-		desc_cost.text = "Free" if cost <= 0 else "Cost: %d 🌾 + %d 🪙" % [half, half]
+		desc_cost.text = "Free" if cost <= 0 else "Cost: %d 🪙" % cost
 		desc_cost.add_theme_color_override("font_color", red_color if not can_afford else normal_color)
 
 		# Requirement line — only shown (and only red) when a prereq
@@ -575,7 +574,7 @@ func _on_purchase_pressed() -> void:
 		_show_description(selected_node_id)
 
 func _refresh_resource_label() -> void:
-	resource_label.text = "Resources: %d" % PlayerInventory.get_total_resources()
+	resource_label.text = "Gold: %d" % int(PlayerInventory.resources.get("gold", 0))
 
 # -------------------------------------------------------
 # Navigation

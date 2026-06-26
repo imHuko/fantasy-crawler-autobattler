@@ -241,7 +241,7 @@ func new_game() -> void:
 	Telemetry.log_event("game_started", {"difficulty": PlayerInventory.difficulty})
 
 # -------------------------------------------------------
-# Recruitable unit pool — used for tutorial reward and
+# Recruitable unit pool — used by recruit screens and
 # any future dungeon recruit events
 # -------------------------------------------------------
 const RECRUIT_NAME_POOL = {
@@ -260,12 +260,12 @@ const RECRUIT_BASE_STATS = {
 	"ROGUE":  { "hp": 110, "attack": 26, "defense": 6,  "speed": 7 },
 }
 
-const RECRUIT_COST = {"food": 15, "gold": 15}
+const RECRUIT_COST = {"gold": 30}
 
-# Returns the recruit cost as a combined Food+Gold total, with the Talent
-# Scout discount applied if unlocked (-20%, minimum 10).
+# Returns the recruit Gold cost, with the Talent Scout discount applied
+# if unlocked (-20%, minimum 10).
 func get_effective_recruit_cost() -> int:
-	var base_cost = RECRUIT_COST["food"] + RECRUIT_COST["gold"]
+	var base_cost = RECRUIT_COST["gold"]
 	if PlayerInventory.unlocked_talents.get("recruiting_talent_scout", false):
 		return max(10, int(base_cost * 0.8))
 	return base_cost

@@ -73,9 +73,8 @@ var commander_gear: Dictionary = {
 	"RING": null,
 }
 
-# Resources — banked for spending (recruiting, rerolling, talents, etc).
-# Food and Gold are interchangeable for spending purposes — costs are
-# checked and paid against their combined total.
+# Resources — banked for spending. Costs require the resource named in
+# their cost dictionary; Food cannot substitute for Gold.
 var resources: Dictionary = {
 	"food": 0,
 	"gold": 0,
@@ -83,7 +82,7 @@ var resources: Dictionary = {
 
 # Salvage materials, one per gear rarity — produced by salvaging gear of
 # that rarity, spent on upgrading gear of that same rarity. Deliberately
-# NOT interchangeable with each other or with Food/Gold, so upgrading a
+# NOT interchangeable with each other or with Food/Gold resources, so upgrading a
 # Legendary always requires having actually salvaged Legendary gear.
 var salvage: Dictionary = {
 	"COMMON": 0,
@@ -92,28 +91,21 @@ var salvage: Dictionary = {
 	"LEGENDARY": 0,
 }
 
-func get_total_resources() -> int:
-	return resources.get("food", 0) + resources.get("gold", 0)
-
-# Checks if a cost dict (e.g. {"food": 15, "gold": 15}) can be paid using
-# the combined Food+Gold total, regardless of which pool the numbers
-# nominally came from.
+# Checks if a cost dict can be paid from the matching resource pools.
 func can_afford(cost: Dictionary) -> bool:
-	var total_cost = cost.get("food", 0) + cost.get("gold", 0)
-	return get_total_resources() >= total_cost
+	for key in cost:
+		if resources.get(key, 0) < cost[key]:
+			return false
+	return true
 
-# Deducts a cost from the combined pool, draining Food first then Gold.
-# Returns false (and deducts nothing) if the combined total can't cover it.
+# Deducts a cost from its matching resource pools.
+# Returns false (and deducts nothing) if any required pool can't cover it.
 func spend_resources(cost: Dictionary) -> bool:
-	var total_cost = cost.get("food", 0) + cost.get("gold", 0)
-	if get_total_resources() < total_cost:
+	if not can_afford(cost):
 		return false
 
-	var remaining = total_cost
-	var from_food = min(remaining, resources.get("food", 0))
-	resources["food"] -= from_food
-	remaining -= from_food
-	resources["gold"] -= remaining
+	for key in cost:
+		resources[key] = resources.get(key, 0) - cost[key]
 	return true
 
 # Per-zone building slot limit. Talents can raise this later.
