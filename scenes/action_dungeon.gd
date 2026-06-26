@@ -198,6 +198,8 @@ const C_HERO     = Color(0.30, 0.70, 1.00)
 # because the 512×512 canvas art needs more room for content to appear at a
 # readable size. Hitbox logic uses the hardcoded radius in _process_homing_melee.
 const HERO_SPRITE_SIZE: float = 96.0
+const ENEMY_HITBOX_SIZE: float = 28.0
+const ENEMY_SPRITE_SIZE: float = 56.0
 const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
 const C_SAVE_ZONE = Color(0.3, 0.85, 0.5, 0.35)
@@ -776,18 +778,19 @@ func _spawn_enemy_wave(count: int) -> void:
 func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale: float, dmg_scale: float, speed_scale: float, is_miniboss: bool, miniboss_unique: bool = false) -> void:
 	var profile = ARENA_ARCHETYPES.get(archetype, ARENA_ARCHETYPES["MELEE"])
 
-	var base_sz = 28.0
 	var base_hp  = (ENEMY_HP_BASE    + stage * ENEMY_HP_PER_STAGE)    * tier_mult * profile["hp_mult"]
 	var base_spd = (ENEMY_SPEED_BASE + stage * ENEMY_SPEED_PER_STAGE) * profile["speed_mult"]
 	var base_atk = (ENEMY_ATK_BASE   + stage * ENEMY_ATK_PER_STAGE)   * tier_mult * profile["dmg_mult"]
 
-	var sz = base_sz
+	var sz = ENEMY_HITBOX_SIZE
+	var visual_sz = ENEMY_SPRITE_SIZE
 	var max_hp = int(base_hp * hp_scale)
 	var spd = base_spd * speed_scale
 	var atk = int(base_atk * dmg_scale)
 
 	if is_miniboss:
 		sz *= MINIBOSS_EMPOWERED_SIZE_MULT
+		visual_sz *= MINIBOSS_EMPOWERED_SIZE_MULT
 		max_hp = int(max_hp * MINIBOSS_EMPOWERED_HP_MULT)
 		atk = int(atk * MINIBOSS_EMPOWERED_DMG_MULT)
 
@@ -810,8 +813,8 @@ func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale:
 
 	var erect = UnitSprite.new()
 	var enemy_unit_type = ARCHETYPE_UNIT_TYPES.get(archetype, UnitSprite.UnitType.ENEMY_BASIC)
-	erect.setup(enemy_unit_type, display_color, sz)
-	erect.position = epos - Vector2(sz/2, sz/2)
+	erect.setup(enemy_unit_type, display_color, visual_sz)
+	erect.position = epos - Vector2(visual_sz/2, visual_sz/2)
 	arena_node.add_child(erect)
 
 	var hp_bar_bg = null
@@ -835,7 +838,7 @@ func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale:
 		"speed": spd, "attack": atk,
 		"shoot_t": randf_range(1.5, 3.0),
 		"archetype": archetype,
-		"is_boss": is_miniboss, "is_miniboss_unique": miniboss_unique, "sz": sz,
+		"is_boss": is_miniboss, "is_miniboss_unique": miniboss_unique, "sz": sz, "visual_sz": visual_sz,
 		"boss_p": 0, "boss_t": 2.0, "boss_a": 0.0,
 		"hp_bar": hp_bar, "hp_bar_bg": hp_bar_bg,
 		# Bull-specific charge state
@@ -1547,7 +1550,8 @@ func _update_visuals() -> void:
 		var e = enemies[i]
 		var er = enemy_rects[i]
 		if is_instance_valid(er):
-			er.position = e["pos"] - Vector2(e["sz"]/2, e["sz"]/2)
+			var visual_sz = e.get("visual_sz", e["sz"])
+			er.position = e["pos"] - Vector2(visual_sz/2, visual_sz/2)
 		if e["hp_bar"] != null and is_instance_valid(e["hp_bar"]):
 			e["hp_bar"].position = e["pos"] - Vector2(40, 44)
 		if e["hp_bar_bg"] != null and is_instance_valid(e["hp_bar_bg"]):

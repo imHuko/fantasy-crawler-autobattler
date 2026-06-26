@@ -17,12 +17,12 @@ config/icon="res://icon.svg"
 
 [autoload]
 
-PlayerInventory="*uid://cewhaluufihh0"
-GearGenerator="*uid://b322eaoltpu55"
-SaveManager="*uid://b2v5ggfaybckn"
-AdminPanel="*uid://b3diep401blyh"
-TutorialOverlay="*uid://bm7hoq5fo7x1l"
-TutorialRouter="*uid://8thbemslu845"
+PlayerInventory="*res://autoloads/player_inventory.gd"
+GearGenerator="*res://autoloads/gear_generator.gd"
+SaveManager="*res://autoloads/save_manager.gd"
+AdminPanel="*res://autoloads/admin_panel.gd"
+TutorialOverlay="*res://autoloads/tutorial_overlay.gd"
+TutorialRouter="*res://autoloads/tutorial_router.gd"
 Telemetry="*res://autoloads/telemetry_manager.gd"
 _mcp_game_helper="*res://addons/godot_ai/runtime/game_helper.gd"
 
