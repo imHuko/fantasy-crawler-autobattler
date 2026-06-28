@@ -1,0 +1,16 @@
+{
+  "sheet": "res://assets/icons/reference_sheets/fantasy_icon_reference_green_bg.png",
+  "size": [
+    1586,
+    992
+  ],
+  "background": "#00FF00",
+  "background_rules": {
+    "color": "#00FF00",
+    "uniform": true,
+    "no_gradient": true,
+    "no_shadow": true,
+    "no_glow_spill": true
+  },
+  "source": "C:\\Users\\ADMINI~1\\AppData\\Local\\Temp\\codex-clipboard-db95fae0-d69f-4afc-96b4-734b390bd17c.png"
+}

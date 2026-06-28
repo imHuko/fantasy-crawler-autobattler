@@ -40,17 +40,7 @@ const BRANCH_COLOR := {
 
 const ICON_DIVISOR := 0.11   # icon size as a fraction of the smaller grid_area dimension
 
-const TALENT_ICONS := {
-	"gear_sharper_eye":              "res://assets/icons/talents/sharper_eye.png",
-	"recruiting_talent_scout":       "res://assets/icons/talents/scout_eye.png",
-	"combat_hardened_ranks":         "res://assets/icons/talents/hardened_ranks.png",
-	"combat_veterans_grit":          "res://assets/icons/talents/veterans_grit.png",
-	"gear_transcendent_quality":     "res://assets/icons/talents/transcendent.png",
-	"buildings_efficient_construction": "res://assets/icons/talents/efficient_construction.png",
-	"gear_salvage_mastery":          "res://assets/icons/talents/salvage_mastery.png",
-	"buildings_wider_reach":         "res://assets/icons/talents/wider_reach.png",
-	"buildings_reinforced_towers":   "res://assets/icons/talents/watchtower.png",
-}
+const TALENT_ICON_BASE_PATH := "res://assets/icons/talents/reference/"
 const GRID_PADDING := 16.0   # px padding around the whole grid before scaling
 
 # Adjust this to wherever your previous talent screen sent the
@@ -96,6 +86,13 @@ func _ready() -> void:
 func _on_screen_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_deselect_talent()
+
+func get_tutorial_target(target_id: String) -> Control:
+	match target_id:
+		"wilds_pact_talent":
+			return node_buttons.get("toggle_invasions", null)
+		_:
+			return null
 
 func _deselect_talent() -> void:
 	if selected_node_id == "":
@@ -273,17 +270,16 @@ func _make_node_button(node_id: String) -> Button:
 
 	# Art icon — fills the button background when art exists for this node.
 	# Text is cleared so the icon is the full visual; tooltip carries the name.
-	if TALENT_ICONS.has(node_id):
-		var icon_path: String = TALENT_ICONS[node_id]
-		if ResourceLoader.exists(icon_path):
-			var tex := TextureRect.new()
-			tex.texture = load(icon_path)
-			tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-			tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-			tex.set_anchors_preset(Control.PRESET_FULL_RECT)
-			tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			btn.add_child(tex)
-			btn.text = ""
+	var icon_texture := _load_talent_icon(node_id)
+	if icon_texture:
+		var tex := TextureRect.new()
+		tex.texture = icon_texture
+		tex.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tex.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tex.set_anchors_preset(Control.PRESET_FULL_RECT)
+		tex.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(tex)
+		btn.text = ""
 
 	# Diagonal "locked" slash overlay — created once per button, hidden
 	# by default, toggled visible in _refresh_node_state(). Lives as a
@@ -298,6 +294,15 @@ func _make_node_button(node_id: String) -> Button:
 	btn.add_child(slash)
 
 	return btn
+
+func _load_talent_icon(node_id: String) -> Texture2D:
+	var icon_path := "%s%s.png" % [TALENT_ICON_BASE_PATH, node_id]
+	if not FileAccess.file_exists(icon_path):
+		return null
+	var image := Image.new()
+	if image.load(icon_path) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
 
 # Redraws the lock-slash line across a button's current size. Called
 # whenever a button is resized (in _layout_grid) since the slash's
@@ -569,6 +574,8 @@ func _on_purchase_pressed() -> void:
 	if selected_node_id == "":
 		return
 	if TalentTreeData.purchase(selected_node_id):
+		if selected_node_id == "toggle_invasions":
+			TutorialRouter.advance_step("talents_wilds_pact")
 		_refresh_resource_label()
 		_refresh_all_node_states()
 		_show_description(selected_node_id)

@@ -205,10 +205,10 @@ func _build_nodes() -> void:
 # visual here now — clicking it does NOT auto-advance the step. The
 # screen itself is responsible for calling
 # TutorialRouter.advance_step(step_id) at its own real point of success.
-func show_step_click(text: String, target: Control) -> void:
+func show_step_click(text: String, target: Control, allow_next: bool = true) -> void:
 	current_target = target
 	instruction_label.text = text
-	next_btn.visible = true
+	next_btn.visible = allow_next
 	blocking_enabled = true
 	visible = true
 	is_active = true

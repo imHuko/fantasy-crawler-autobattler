@@ -71,7 +71,7 @@ func resolve_current_step(current_screen: Node) -> void:
 			push_warning("Tutorial step '%s' wants target '%s' but the screen didn't provide it." % [step["id"], step["target_id"]])
 			print("[TUTORIAL DEBUG] resolve_current_step: click-mode step has NULL target, showing nothing")
 			return
-		TutorialOverlay.show_step_click(step["text"], target)
+		TutorialOverlay.show_step_click(step["text"], target, not step.get("require_action", false))
 	elif step.get("nodim", false):
 		TutorialOverlay.show_step_free(step["text"])
 	else:

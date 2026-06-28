@@ -1,0 +1,287 @@
+{
+  "source": "res://assets/icons/reference_sheets/fantasy_icon_reference_green_bg.png",
+  "output_dir": "res://assets/icons/talents/reference",
+  "canvas_size": 96,
+  "order": [
+    {
+      "id": "gear_sharper_eye",
+      "name": "Sharper Eye",
+      "path": "res://assets/icons/talents/reference/gear_sharper_eye.png",
+      "row": 0,
+      "column": 0
+    },
+    {
+      "id": "gear_set_seeker",
+      "name": "Set Seeker",
+      "path": "res://assets/icons/talents/reference/gear_set_seeker.png",
+      "row": 0,
+      "column": 1
+    },
+    {
+      "id": "gear_awakened_quality",
+      "name": "Awakened Quality",
+      "path": "res://assets/icons/talents/reference/gear_awakened_quality.png",
+      "row": 0,
+      "column": 2
+    },
+    {
+      "id": "gear_ascendant_quality",
+      "name": "Ascendant Quality",
+      "path": "res://assets/icons/talents/reference/gear_ascendant_quality.png",
+      "row": 0,
+      "column": 3
+    },
+    {
+      "id": "gear_transcendent_quality",
+      "name": "Transcendent Quality",
+      "path": "res://assets/icons/talents/reference/gear_transcendent_quality.png",
+      "row": 0,
+      "column": 4
+    },
+    {
+      "id": "gear_salvage_mastery",
+      "name": "Salvage Mastery",
+      "path": "res://assets/icons/talents/reference/gear_salvage_mastery.png",
+      "row": 0,
+      "column": 5
+    },
+    {
+      "id": "buildings_efficient_construction",
+      "name": "Efficient Construction",
+      "path": "res://assets/icons/talents/reference/buildings_efficient_construction.png",
+      "row": 0,
+      "column": 6
+    },
+    {
+      "id": "buildings_expanded_lots",
+      "name": "Expanded Lots",
+      "path": "res://assets/icons/talents/reference/buildings_expanded_lots.png",
+      "row": 0,
+      "column": 7
+    },
+    {
+      "id": "buildings_reinforced_towers",
+      "name": "Reinforced Towers",
+      "path": "res://assets/icons/talents/reference/buildings_reinforced_towers.png",
+      "row": 1,
+      "column": 0
+    },
+    {
+      "id": "buildings_wider_reach",
+      "name": "Wider Reach",
+      "path": "res://assets/icons/talents/reference/buildings_wider_reach.png",
+      "row": 1,
+      "column": 1
+    },
+    {
+      "id": "buildings_fortified_walls",
+      "name": "Fortified Walls",
+      "path": "res://assets/icons/talents/reference/buildings_fortified_walls.png",
+      "row": 1,
+      "column": 2
+    },
+    {
+      "id": "recruiting_talent_scout",
+      "name": "Talent Scout",
+      "path": "res://assets/icons/talents/reference/recruiting_talent_scout.png",
+      "row": 1,
+      "column": 3
+    },
+    {
+      "id": "recruiting_pick_of_the_litter",
+      "name": "Pick of the Litter",
+      "path": "res://assets/icons/talents/reference/recruiting_pick_of_the_litter.png",
+      "row": 1,
+      "column": 4
+    },
+    {
+      "id": "recruiting_cream_of_the_crop",
+      "name": "Cream of the Crop",
+      "path": "res://assets/icons/talents/reference/recruiting_cream_of_the_crop.png",
+      "row": 1,
+      "column": 5
+    },
+    {
+      "id": "recruiting_veteran_enrollment",
+      "name": "Veteran Enrollment",
+      "path": "res://assets/icons/talents/reference/recruiting_veteran_enrollment.png",
+      "row": 1,
+      "column": 6
+    },
+    {
+      "id": "combat_hardened_ranks",
+      "name": "Hardened Ranks",
+      "path": "res://assets/icons/talents/reference/combat_hardened_ranks.png",
+      "row": 1,
+      "column": 7
+    },
+    {
+      "id": "combat_sharpened_blades",
+      "name": "Sharpened Blades",
+      "path": "res://assets/icons/talents/reference/combat_sharpened_blades.png",
+      "row": 2,
+      "column": 0
+    },
+    {
+      "id": "combat_forced_march",
+      "name": "Forced March",
+      "path": "res://assets/icons/talents/reference/combat_forced_march.png",
+      "row": 2,
+      "column": 1
+    },
+    {
+      "id": "combat_heros_resolve",
+      "name": "Hero's Resolve",
+      "path": "res://assets/icons/talents/reference/combat_heros_resolve.png",
+      "row": 2,
+      "column": 2
+    },
+    {
+      "id": "combat_veterans_grit",
+      "name": "Veterans' Grit",
+      "path": "res://assets/icons/talents/reference/combat_veterans_grit.png",
+      "row": 2,
+      "column": 3
+    },
+    {
+      "id": "combat_last_stand",
+      "name": "Last Stand",
+      "path": "res://assets/icons/talents/reference/combat_last_stand.png",
+      "row": 2,
+      "column": 4
+    },
+    {
+      "id": "economy_bountiful_harvest",
+      "name": "Bountiful Harvest",
+      "path": "res://assets/icons/talents/reference/economy_bountiful_harvest.png",
+      "row": 2,
+      "column": 5
+    },
+    {
+      "id": "economy_steady_coffers",
+      "name": "Steady Coffers",
+      "path": "res://assets/icons/talents/reference/economy_steady_coffers.png",
+      "row": 2,
+      "column": 6
+    },
+    {
+      "id": "economy_trade_routes",
+      "name": "Trade Routes",
+      "path": "res://assets/icons/talents/reference/economy_trade_routes.png",
+      "row": 2,
+      "column": 7
+    },
+    {
+      "id": "economy_guild_contracts",
+      "name": "Guild Contracts",
+      "path": "res://assets/icons/talents/reference/economy_guild_contracts.png",
+      "row": 3,
+      "column": 0
+    },
+    {
+      "id": "economy_supply_network",
+      "name": "Supply Network",
+      "path": "res://assets/icons/talents/reference/economy_supply_network.png",
+      "row": 3,
+      "column": 1
+    },
+    {
+      "id": "diplomatic_tongue",
+      "name": "Diplomatic Tongue",
+      "path": "res://assets/icons/talents/reference/diplomatic_tongue.png",
+      "row": 3,
+      "column": 2
+    },
+    {
+      "id": "toggle_invasions",
+      "name": "Wilds Pact",
+      "path": "res://assets/icons/talents/reference/toggle_invasions.png",
+      "row": 3,
+      "column": 3
+    },
+    {
+      "id": "dungeon_extended_campaign",
+      "name": "Extended Campaign",
+      "path": "res://assets/icons/talents/reference/dungeon_extended_campaign.png",
+      "row": 3,
+      "column": 4
+    },
+    {
+      "id": "dungeon_marathon_runner",
+      "name": "Marathon Runner",
+      "path": "res://assets/icons/talents/reference/dungeon_marathon_runner.png",
+      "row": 3,
+      "column": 5
+    },
+    {
+      "id": "dungeon_loaded_dice",
+      "name": "Loaded Dice",
+      "path": "res://assets/icons/talents/reference/dungeon_loaded_dice.png",
+      "row": 3,
+      "column": 6
+    },
+    {
+      "id": "dungeon_quick_study",
+      "name": "Quick Study",
+      "path": "res://assets/icons/talents/reference/dungeon_quick_study.png",
+      "row": 3,
+      "column": 7
+    },
+    {
+      "id": "dungeon_skill_mastery",
+      "name": "Skill Mastery",
+      "path": "res://assets/icons/talents/reference/dungeon_skill_mastery.png",
+      "row": 4,
+      "column": 0
+    },
+    {
+      "id": "dungeon_opening_gambit",
+      "name": "Opening Gambit",
+      "path": "res://assets/icons/talents/reference/dungeon_opening_gambit.png",
+      "row": 4,
+      "column": 1
+    },
+    {
+      "id": "dungeon_veteran_commander",
+      "name": "Veteran Commander",
+      "path": "res://assets/icons/talents/reference/dungeon_veteran_commander.png",
+      "row": 4,
+      "column": 2
+    },
+    {
+      "id": "dungeon_relentless",
+      "name": "Relentless",
+      "path": "res://assets/icons/talents/reference/dungeon_relentless.png",
+      "row": 4,
+      "column": 3
+    },
+    {
+      "id": "dungeon_iron_will",
+      "name": "Iron Will",
+      "path": "res://assets/icons/talents/reference/dungeon_iron_will.png",
+      "row": 4,
+      "column": 4
+    },
+    {
+      "id": "dungeon_combat_drilling",
+      "name": "Combat Drilling",
+      "path": "res://assets/icons/talents/reference/dungeon_combat_drilling.png",
+      "row": 4,
+      "column": 5
+    },
+    {
+      "id": "dungeon_treasure_hunter",
+      "name": "Treasure Hunter",
+      "path": "res://assets/icons/talents/reference/dungeon_treasure_hunter.png",
+      "row": 4,
+      "column": 6
+    },
+    {
+      "id": "dungeon_spoils",
+      "name": "Dungeon Spoils",
+      "path": "res://assets/icons/talents/reference/dungeon_spoils.png",
+      "row": 4,
+      "column": 7
+    }
+  ]
+}

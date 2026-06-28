@@ -268,13 +268,22 @@ func _apply_pending_battle_result() -> void:
 				"zone_id": zone_id, "zone_type": zones[zone_id]["type"], "stage": PlayerInventory.current_stage,
 			})
 		else:
-			# Defending and lost — zone falls back to neutral, troops there are lost
+			# Defending and lost — zone falls back to neutral, buildings are
+			# destroyed, and stationed troops retreat wounded instead of
+			# disappearing.
+			var retreat_result = _retreat_zone_troops_after_loss(zone_id)
 			zones[zone_id]["owner"] = "neutral"
-			zones[zone_id]["troops"].clear()
 			zones[zone_id]["buildings"].clear()
-			_notify("%s has fallen to the wilds! All stationed troops and buildings lost." % zones[zone_id]["name"])
+			if retreat_result["count"] > 0:
+				_notify("%s has fallen! %d troop(s) retreated to %s at 1 HP. Buildings were lost." % [
+					zones[zone_id]["name"], retreat_result["count"], retreat_result["destination_name"]
+				])
+			else:
+				_notify("%s has fallen to the wilds! Buildings were lost." % zones[zone_id]["name"])
 			Telemetry.log_event("zone_lost", {
 				"zone_id": zone_id, "zone_type": zones[zone_id]["type"], "stage": PlayerInventory.current_stage,
+				"troops_retreating": retreat_result["count"],
+				"retreat_zone": retreat_result["destination_id"],
 			})
 	elif result == "retreat":
 		if not was_conquest:
@@ -305,6 +314,8 @@ func _apply_pending_battle_result() -> void:
 	PlayerInventory.current_battle_zone_troop_names = []
 	PlayerInventory.current_battle_forge_level = 0
 	PlayerInventory.current_battle_shrine_level = 0
+	_save_map_state()
+	SaveManager.save_game()
 
 # -------------------------------------------------------
 # Map Generation
@@ -1504,6 +1515,59 @@ func _is_adjacent_to_player(zone_id: int) -> bool:
 			return true
 	return false
 
+func _get_retreat_zone_for_loss(zone_id: int) -> int:
+	var source_dist = zones[zone_id].get("dist_from_start", 0.0)
+	var best_id = -1
+	var best_dist = INF
+
+	# Prefer an owned connected zone closer to home: this feels like
+	# falling back along the route the player expanded through.
+	for conn_id in zones[zone_id]["connections"]:
+		if zones[conn_id]["owner"] != "player":
+			continue
+		var conn_dist = zones[conn_id].get("dist_from_start", 0.0)
+		if conn_dist <= source_dist and conn_dist < best_dist:
+			best_id = conn_id
+			best_dist = conn_dist
+
+	if best_id >= 0:
+		return best_id
+
+	# If the local front line is cut off, preserve the troops by sending
+	# them to the closest remaining owned zone, normally Your City.
+	for i in range(zones.size()):
+		if i == zone_id or zones[i]["owner"] != "player":
+			continue
+		var dist = zones[i]["dist_from_start"]
+		if dist < best_dist:
+			best_id = i
+			best_dist = dist
+
+	return best_id
+
+func _retreat_zone_troops_after_loss(zone_id: int) -> Dictionary:
+	var troop_ids = zones[zone_id]["troops"].duplicate()
+	zones[zone_id]["troops"].clear()
+
+	var retreat_zone_id = _get_retreat_zone_for_loss(zone_id)
+	if retreat_zone_id < 0:
+		return {"count": 0, "destination_id": -1, "destination_name": "nowhere"}
+
+	var retreated_count = 0
+	for troop_id in troop_ids:
+		var troop = _get_troop_data_by_id(troop_id)
+		if troop != null:
+			troop.current_hp = 1
+		if troop_id not in zones[retreat_zone_id]["troops"]:
+			zones[retreat_zone_id]["troops"].append(troop_id)
+		retreated_count += 1
+
+	return {
+		"count": retreated_count,
+		"destination_id": retreat_zone_id,
+		"destination_name": zones[retreat_zone_id]["name"],
+	}
+
 func _on_battle_won(zone_id: int) -> void:
 	zones[zone_id]["owner"] = "player"
 	_notify("Conquered %s!" % zones[zone_id]["name"])
@@ -1512,8 +1576,14 @@ func _on_battle_won(zone_id: int) -> void:
 func _on_battle_lost(zone_id: int) -> void:
 	# If defending — zone reverts to neutral
 	if not PlayerInventory.conquering_zone:
+		var retreat_result = _retreat_zone_troops_after_loss(zone_id)
 		zones[zone_id]["owner"] = "neutral"
-		_notify("%s was lost to the wilds!" % zones[zone_id]["name"])
+		if retreat_result["count"] > 0:
+			_notify("%s was lost to the wilds! %d troop(s) retreated to %s at 1 HP." % [
+				zones[zone_id]["name"], retreat_result["count"], retreat_result["destination_name"]
+			])
+		else:
+			_notify("%s was lost to the wilds!" % zones[zone_id]["name"])
 	_draw_map()
 
 func _on_conquer(zone_id: int) -> void:

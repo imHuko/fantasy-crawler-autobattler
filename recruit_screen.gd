@@ -1,7 +1,7 @@
 extends Control
 
 # -------------------------------------------------------
-# Recruit Screen — spend Food/Gold (interchangeable) to recruit
+# Recruit Screen — spend Gold to recruit
 # a new random unit. Stats roll with small variance, like gear.
 # (Selling and upgrading gear lives in its own screen — see
 # gear_shop_screen.gd.)
@@ -70,9 +70,12 @@ func _build_ui() -> void:
 	var recruit_btn = Button.new()
 	var rcost = SaveManager.get_effective_recruit_cost()
 	var choice_count = SaveManager.get_recruit_choice_count()
-	var btn_label = "Recruit  (🌾🪙 %d combined)" % rcost
+	var btn_label = "Recruit  (🪙 %d)" % rcost
 	if choice_count > 1:
-		btn_label = "Recruit — choose 1 of %d  (🌾🪙 %d combined)" % [choice_count, rcost]
+		btn_label = "Recruit — choose 1 of %d  (🪙 %d)" % [choice_count, rcost]
+	if PlayerInventory.tutorial_active:
+		btn_label = "Recruit locked during tutorial"
+		recruit_btn.disabled = true
 	recruit_btn.text = btn_label
 	recruit_btn.custom_minimum_size = Vector2(0, 48)
 	recruit_btn.add_theme_font_size_override("font_size", 14)
@@ -96,17 +99,20 @@ func _build_ui() -> void:
 	outer.add_child(back_btn)
 
 func _refresh_resource_label() -> void:
-	resource_label.text = "🌾 Food: %d      🪙 Gold: %d      (combined: %d)" % [
+	resource_label.text = "🌾 Food: %d      🪙 Gold: %d" % [
 		PlayerInventory.resources.get("food", 0),
 		PlayerInventory.resources.get("gold", 0),
-		PlayerInventory.get_total_resources(),
 	]
 
 func _on_recruit_pressed() -> void:
+	if PlayerInventory.tutorial_active:
+		_set_status("Recruiting unlocks after the tutorial.")
+		return
+
 	var cost_total = SaveManager.get_effective_recruit_cost()
-	var cost = {"food": 0, "gold": cost_total}
+	var cost = {"gold": cost_total}
 	if not PlayerInventory.can_afford(cost):
-		_set_status("Not enough resources. Need %d combined Food+Gold." % cost_total)
+		_set_status("Not enough Gold. Need %d Gold." % cost_total)
 		return
 
 	PlayerInventory.spend_resources(cost)

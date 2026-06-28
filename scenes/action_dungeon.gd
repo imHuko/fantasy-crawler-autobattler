@@ -17,9 +17,10 @@ const UnitSprite := preload("res://resources/unit_sprite.gd")
 # =========================================================
 
 # --- ARENA -----------------------------------------------
-const ARENA_W      = 3200   # total width in pixels
-const ARENA_H      = 3200   # total height in pixels
+const ARENA_W      = 9600   # total width in pixels
+const ARENA_H      = 9600   # total height in pixels
 const ARENA_WALL_T = 32     # border wall thickness
+const FLOOR_PROP_COUNT = 2200  # visual movement landmarks; capped for performance
 
 # --- HERO ------------------------------------------------
 # Both HP and attack scale linearly with stage (world progression),
@@ -63,7 +64,7 @@ const ENEMY_SPEED_PER_MIN_PCT = 0.04  # +% speed per minute
 const ENEMY_HP_PER_1000_DIST_PCT = 0.08  # +% HP per 1000px from arena center
 
 # Archetype spawn weights (higher = more common) and stat multipliers.
-# RANGED only enters the pool after RANGED_UNLOCK_MINUTE minutes.
+# RANGED and charge enemies are time-gated so the opening has room to breathe.
 const ARCHETYPE_WEIGHTS = {
 	"MELEE": 100, "BULL": 45, "CHARGER": 30, "RANGED": 18, "BUFFER": 8,
 }
@@ -75,6 +76,7 @@ const ARENA_ARCHETYPES = {
 	"BUFFER":  { "hp_mult": 0.5,  "dmg_mult": 0.0,  "speed_mult": 0.85, "color": Color(0.85, 0.75, 0.2) },
 }
 const RANGED_UNLOCK_MINUTE = 3.0   # minute mark when RANGED enemies enter the pool
+const CHARGER_UNLOCK_MINUTE = 3.0  # minute mark when BULL/CHARGER enemies enter the pool
 
 # Special behaviors per archetype
 const RANGED_ATTACK_RANGE       = 320.0
@@ -92,10 +94,33 @@ const SPAWN_INTERVAL_START        = 2.5    # seconds between waves at run start
 const SPAWN_INTERVAL_MIN          = 0.5    # fastest the interval can ever get
 const SPAWN_INTERVAL_RAMP_PER_MIN = 0.15   # interval shrinks by this per minute
 const SPAWN_COUNT_START           = 2      # enemies per wave at run start
-const SPAWN_COUNT_PER_MIN         = 0.4    # extra enemies per wave per minute
+const SPAWN_COUNT_PER_MIN         = 0.65   # extra enemies per wave per minute
 const SPAWN_COUNT_MAX             = 12     # hard cap on enemies per wave
-const DENSITY_SPAWN_SLOWDOWN_THRESHOLD = 18   # enemy count above this slows spawning
+const DENSITY_SPAWN_SLOWDOWN_THRESHOLD = 30   # enemy count above this slows spawning
 const DENSITY_SPAWN_SLOWDOWN_MULT      = 1.6  # interval multiplied by this above the threshold
+const EDGE_SPAWN_MARGIN          = 120.0   # how far beyond the camera view enemies appear
+const ROUTE_SPAWN_CHANCE         = 0.40    # chance a wave enemy spawns along the extraction route
+const ROUTE_SPAWN_MIN_FRACTION   = 0.25    # closest point along player->extraction line
+const ROUTE_SPAWN_MAX_FRACTION   = 0.85    # farthest point along player->extraction line
+const ROUTE_SPAWN_SIDE_OFFSET_MIN = 220.0  # keeps route spawns from forming a perfect line
+const ROUTE_SPAWN_SIDE_OFFSET_MAX = 620.0
+const EXTRACTION_GUARD_START_SECONDS = 45.0
+const EXTRACTION_GUARD_COUNT     = 4
+const EXTRACTION_GUARD_RADIUS    = 260.0
+
+# --- EXPEDITION SCALING ----------------------------------
+# These make later stages / deeper dungeon tiers feel like longer, more
+# dangerous expeditions without requiring code edits elsewhere.
+const EXPEDITION_STAGE_STEP           = 0.08  # +8% pressure per stage after stage 1
+const EXPEDITION_QUICK_MULT           = 0.85
+const EXPEDITION_STANDARD_MULT        = 1.0
+const EXPEDITION_DEEP_DELVE_MULT      = 1.25
+const EXPEDITION_MAX_MULT             = 2.25
+const EXPEDITION_EXTRACT_DISTANCE_MULT = 0.45 # how much scaling affects extraction distance
+const EXPEDITION_ROUTE_CHANCE_MULT    = 0.25  # how much scaling affects route-spawn chance
+const EXPEDITION_GUARD_COUNT_BONUS    = 2.0   # extra guards at max scaling
+const EXPEDITION_DENSITY_BONUS        = 12.0  # extra enemy density before slowdown at max scaling
+const EXPEDITION_GOLD_REWARD_MULT     = 0.35  # extra Gold amounts at max scaling
 
 # --- MINI-BOSSES -----------------------------------------
 const MINIBOSS_BASE_INTERVAL_SECONDS = 90.0   # baseline seconds between mini-boss spawns
@@ -106,10 +131,20 @@ const MINIBOSS_EMPOWERED_DMG_MULT    = 2.0
 const MINIBOSS_EMPOWERED_SIZE_MULT   = 1.8
 const MINIBOSS_GUARANTEED_RARITY_BOOST = 2    # loot rolls this many difficulty levels higher
 
+# --- LOOT ------------------------------------------------
+# Normal enemies pay mostly in Gold so long runs don't flood inventory.
+# Mini-bosses still create real gear, preserving the big-drop moments.
+const NORMAL_GOLD_DROP_CHANCE = 0.35
+const NORMAL_GOLD_MIN         = 1
+const NORMAL_GOLD_MAX         = 3
+
 # --- SAVE ZONE -------------------------------------------
 const SAVE_ZONE_RADIUS            = 70.0
 const SAVE_ZONE_CHANNEL_TIME      = 5.0    # seconds to stand in zone to bank gear
 const SAVE_ZONE_RELOCATE_INTERVAL = 45.0   # seconds before zone moves to a new spot
+const SAVE_ZONE_MIN_RELOCATE_DIST = 1800.0 # new extraction points should feel like a real trip
+const SAVE_ZONE_MAX_RELOCATE_DIST = 3800.0 # avoids sending the player across the entire world every time
+const SAVE_ZONE_RELOCATE_TRIES    = 40
 
 # --- PROJECTILES -----------------------------------------
 const PROJECTILE_SPEED     = 320.0
@@ -134,12 +169,30 @@ const SKILL_CRUSHING_BLOW_CRIT_DMG = 50     # crit damage % added per stack
 const SKILL_WIDE_RANGE_MULT        = 1.50   # attack range multiplied by this per stack
 const SKILL_GLASS_CANNON_DMG_MULT  = 1.60   # attack multiplier (one-time)
 const SKILL_GLASS_CANNON_HP_MULT   = 0.80   # max HP multiplier penalty (one-time)
-const SKILL_LUCKY_DROP_BONUS       = 0.12   # gear drop chance per stack
+const SKILL_LUCKY_DROP_BONUS       = 0.12   # loot drop chance per stack
 const SKILL_VAMPIRIC_HP_PER_KILL   = 1      # HP healed per kill per stack
 const SKILL_LIFESTEAL_PCT          = 0.08   # % of damage dealt healed per stack
 const SKILL_SECOND_WIND_REVIVE_PCT = 0.30   # HP % restored when triggered
-const SKILL_PLUNDER_DROP_BONUS     = 0.25   # gear drop chance (one-time)
+const SKILL_PLUNDER_DROP_BONUS     = 0.25   # loot drop chance (one-time)
 const SKILL_PLUNDER_DMG_MULT       = 0.85   # attack multiplier penalty (one-time)
+const SKILL_CHAIN_LIGHTNING_COUNT  = 2
+const SKILL_CHAIN_LIGHTNING_DAMAGE = 0.40
+const SKILL_BURNING_GROUND_SECONDS = 3.0
+const SKILL_BURNING_GROUND_DAMAGE  = 0.22
+const SKILL_BURNING_GROUND_LIMIT   = 8
+const SKILL_GUARDIAN_WISP_INTERVAL = 1.15
+const SKILL_GUARDIAN_WISP_DAMAGE   = 0.45
+const SKILL_GREED_CURSE_GOLD_BONUS = 0.40
+const SKILL_GREED_CURSE_SPEED_MULT = 1.15
+const SKILL_HEAVY_DRAW_DAMAGE_MULT = 1.35
+const SKILL_HEAVY_DRAW_SPEED_MULT  = 0.72
+const SKILL_ARCANE_ECHO_DAMAGE     = 0.50
+const SKILL_KNIGHT_WAKE_INTERVAL   = 0.55
+const SKILL_KNIGHT_WAKE_DAMAGE     = 0.35
+const SKILL_HEALING_PULSE_INTERVAL = 6.0
+const SKILL_HEALING_PULSE_DAMAGE   = 0.35
+const SKILL_ROGUE_MARK_INTERVAL    = 4.0
+const SKILL_ROGUE_MARK_DAMAGE      = 0.60
 
 # =========================================================
 # END BALANCE TUNING
@@ -177,7 +230,7 @@ const SKILL_POOL = [
 	{ "id": "crushing_blow", "name": "Crushing Blow",    "desc": "+50% crit damage multiplier",                   "max_stacks": 2 },
 	{ "id": "wide_range",    "name": "Wide Range",       "desc": "+50% attack range",                             "max_stacks": 2 },
 	{ "id": "glass_cannon",  "name": "Glass Cannon",     "desc": "+60% damage, -20% max HP",                      "max_stacks": 1 },
-	{ "id": "lucky",         "name": "Lucky",            "desc": "+12% gear drop chance",                         "max_stacks": 2 },
+	{ "id": "lucky",         "name": "Lucky",            "desc": "+12% Gold drop chance",                         "max_stacks": 2 },
 	{ "id": "vampiric",      "name": "Vampiric",         "desc": "Heal 1 HP per kill",                            "max_stacks": 3 },
 	{ "id": "multishot",     "name": "Multishot",        "desc": "+1 extra projectile per attack",                "max_stacks": 2 },
 	{ "id": "piercing",      "name": "Piercing Shot",    "desc": "Projectiles pass through enemies",              "max_stacks": 1 },
@@ -188,8 +241,20 @@ const SKILL_POOL = [
 	{ "id": "berserker",     "name": "Berserker",        "desc": "Gain up to +40% attack speed as HP drops",      "max_stacks": 1 },
 	{ "id": "second_wind",   "name": "Second Wind",      "desc": "Once per run, survive a killing blow at 30% HP","max_stacks": 1 },
 	{ "id": "lifesteal",     "name": "Lifesteal",        "desc": "Heal for 8% of damage dealt",                  "max_stacks": 2 },
-	{ "id": "plunder",       "name": "Plunder",          "desc": "+25% gear drop chance, -15% attack damage",    "max_stacks": 1 },
+	{ "id": "plunder",       "name": "Plunder",          "desc": "+25% Gold drop chance, -15% attack damage",    "max_stacks": 1 },
+	{ "id": "chain_lightning","name": "Chain Lightning", "desc": "Hits arc to 2 nearby enemies for 40% damage",  "max_stacks": 1 },
+	{ "id": "burning_ground","name": "Burning Ground",   "desc": "Kills leave short fire patches",               "max_stacks": 1 },
+	{ "id": "guardian_wisp", "name": "Guardian Wisp",    "desc": "A wisp follows you and fires on enemies",      "max_stacks": 1 },
+	{ "id": "greed_curse",   "name": "Greed Curse",      "desc": "+40% Gold drops, enemies move 15% faster",     "max_stacks": 1 },
+	{ "id": "heavy_draw",    "name": "Heavy Draw",       "desc": "+35% arrow damage, slower arrows",             "max_stacks": 1, "class": "ARCHER" },
+	{ "id": "arcane_echo",   "name": "Arcane Echo",      "desc": "Mage shots echo for 50% damage",               "max_stacks": 1, "class": "MAGE" },
+	{ "id": "knights_wake",  "name": "Knight's Wake",    "desc": "Moving leaves damaging sword wakes",           "max_stacks": 1, "class": "KNIGHT" },
+	{ "id": "healing_pulse", "name": "Healing Pulse",    "desc": "Every 6s, pulse damage and heal 1 HP",         "max_stacks": 1, "class": "HEALER" },
+	{ "id": "rogue_mark",    "name": "Rogue Mark",       "desc": "Marked enemies burst into dagger damage",      "max_stacks": 1, "class": "ROGUE" },
 ]
+
+const SKILL_ICON_BASE_PATH := "res://assets/icons/action_skills/imported/"
+const SKILL_ICON_SIZE := Vector2(88, 88)
 
 const C_FLOOR    = Color(0.18, 0.16, 0.22)
 const C_WALL     = Color(0.30, 0.25, 0.35)
@@ -204,6 +269,8 @@ const ENEMY_SPRITE_SIZE: float = 56.0
 const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
 const C_SAVE_ZONE = Color(0.3, 0.85, 0.5, 0.35)
+const EXTRACTION_INDICATOR_EDGE_PADDING = 44.0
+const EXTRACTION_INDICATOR_HIDE_DISTANCE = 160.0
 
 const ARROW_PROJECTILE_SHAFT_COLOR = Color(0.74, 0.52, 0.28)
 const ARROW_PROJECTILE_HEAD_COLOR = Color(0.88, 0.86, 0.72)
@@ -212,6 +279,10 @@ const ARROW_PROJECTILE_FLETCH_COLOR = Color(0.55, 0.18, 0.16)
 var run_gear: Array = []          # gear currently held but NOT yet banked — lost (partially) on death
 var banked_gear: Array = []       # gear safely banked at the save zone — survives death and retreat
 var secured_gear: Array = []      # everything actually kept by the end of the run, for the end screen — never cleared mid-run
+var run_gold_held: int = 0        # Gold found but not yet extracted — lost on death/retreat
+var banked_gold: int = 0          # Gold safely extracted at the save zone
+var secured_gold: int = 0         # Gold actually committed to inventory for the end screen
+var run_gold_found: int = 0       # Total Gold earned from action-dungeon drops this run
 
 var hero_hp: int = HERO_HP_BASE
 var hero_max_hp: int = HERO_HP_BASE
@@ -267,6 +338,8 @@ var save_zone_relocate_timer: float = SAVE_ZONE_RELOCATE_INTERVAL
 var save_zone_channel_progress: float = 0.0
 var save_zone_node: ColorRect = null
 var save_zone_label: Label = null
+var extraction_indicator: Node2D = null
+var extraction_indicator_label: Label = null
 
 var game_over: bool = false
 
@@ -297,6 +370,22 @@ var iron_will_used: bool = false        # dungeon_iron_will: one-time kill-blow 
 var skill_second_wind: bool = false     # second wind: feature enabled
 var skill_second_wind_ready: bool = false  # second wind: hasn't triggered yet this run
 var skill_lifesteal: float = 0.0       # lifesteal fraction
+var skill_chain_lightning: bool = false
+var skill_burning_ground: bool = false
+var skill_guardian_wisp: bool = false
+var skill_greed_curse: bool = false
+var skill_heavy_draw: bool = false
+var skill_arcane_echo: bool = false
+var skill_knights_wake: bool = false
+var skill_healing_pulse: bool = false
+var skill_rogue_mark: bool = false
+var fire_patches: Array = []
+var guardian_wisp_node: ColorRect = null
+var guardian_wisp_angle: float = 0.0
+var guardian_wisp_fire_timer: float = 0.0
+var knights_wake_timer: float = 0.0
+var healing_pulse_timer: float = SKILL_HEALING_PULSE_INTERVAL
+var rogue_mark_timer: float = 0.0
 
 var _enemy_id_counter: int = 0   # unique ID for each spawned enemy (used by piercing)
 var hud_level: Label = null
@@ -451,15 +540,21 @@ func sandbox_get_run_stats() -> Dictionary:
 		"hero_max_hp": hero_max_hp,
 		"hero_atk":    hero_attack,
 		"hero_spd":    snappedf(hero_speed, 0.1),
+		"expedition_scale": snappedf(_expedition_scale(), 0.01),
+		"extraction_min_dist": snappedf(_scaled_extraction_min_dist(), 1.0),
+		"extraction_max_dist": snappedf(_scaled_extraction_max_dist(), 1.0),
+		"route_spawn_chance": snappedf(_scaled_route_spawn_chance(), 0.01),
+		"guard_count": _scaled_extraction_guard_count(),
+		"density_slowdown": _scaled_density_slowdown_threshold(),
 		"archetypes":  archetype_stats,
 	}
 
 # -------------------------------------------------------
 # Room generation
 # -------------------------------------------------------
-# Camera follows the hero and scrolls with the arena — this is the core
-# of the Vampire Survivors feel. Limits are clamped to the arena bounds
-# so the camera never shows empty space past the edges.
+# Camera follows the hero through one huge bounded arena. Limits are
+# clamped to the arena bounds so the camera never shows empty space past
+# the edges.
 func _setup_camera() -> void:
 	camera = Camera2D.new()
 	camera.position = hero_pos
@@ -508,9 +603,9 @@ func _build_floor_props() -> void:
 	var center = Vector2(ARENA_W / 2.0, ARENA_H / 2.0)
 	var clear_radius = 120.0
 
-	# ~600 props gives the same visual density as the tutorial dungeon
-	# (80 props on 1400×1000) scaled to this 3200×3200 arena.
-	for i in range(600):
+	# A giant arena needs landmarks for movement readability, but this
+	# stays capped so the dungeon does not become expensive to draw.
+	for i in range(FLOOR_PROP_COUNT):
 		var pos = Vector2(
 			rng.randf_range(margin, ARENA_W - margin),
 			rng.randf_range(margin, ARENA_H - margin)
@@ -534,6 +629,10 @@ func _start_run() -> void:
 	hero_pos = Vector2(ARENA_W/2, ARENA_H/2)
 	_has_mouse_target = false
 	secured_gear.clear()
+	run_gold_held = 0
+	banked_gold = 0
+	secured_gold = 0
+	run_gold_found = 0
 	var class_key = _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
 	Telemetry.log_event("dungeon_started", {
 		"class": class_key,
@@ -564,6 +663,27 @@ func _start_run() -> void:
 	skill_second_wind = false
 	skill_second_wind_ready = false
 	skill_lifesteal = 0.0
+	skill_chain_lightning = false
+	skill_burning_ground = false
+	skill_guardian_wisp = false
+	skill_greed_curse = false
+	skill_heavy_draw = false
+	skill_arcane_echo = false
+	skill_knights_wake = false
+	skill_healing_pulse = false
+	skill_rogue_mark = false
+	for patch in fire_patches:
+		if patch.has("node") and is_instance_valid(patch["node"]):
+			patch["node"].queue_free()
+	fire_patches.clear()
+	if guardian_wisp_node and is_instance_valid(guardian_wisp_node):
+		guardian_wisp_node.queue_free()
+	guardian_wisp_node = null
+	guardian_wisp_angle = 0.0
+	guardian_wisp_fire_timer = 0.0
+	knights_wake_timer = 0.0
+	healing_pulse_timer = SKILL_HEALING_PULSE_INTERVAL
+	rogue_mark_timer = 0.0
 	iron_will_used = false
 	hero_dodge_chance = 0.0
 	hero_hp_regen     = 0.0
@@ -610,13 +730,43 @@ func _build_hero_rect() -> void:
 # underneath won't need to change.
 # -------------------------------------------------------
 func _relocate_save_zone() -> void:
-	save_zone_pos = Vector2(
-		randf_range(ARENA_WALL_T + 150, ARENA_W - ARENA_WALL_T - 150),
-		randf_range(ARENA_WALL_T + 150, ARENA_H - ARENA_WALL_T - 150)
-	)
+	save_zone_pos = _pick_far_save_zone_position()
 	save_zone_relocate_timer = SAVE_ZONE_RELOCATE_INTERVAL
 	save_zone_channel_progress = 0.0
 	_build_save_zone_visual()
+	if elapsed_seconds >= EXTRACTION_GUARD_START_SECONDS:
+		_spawn_extraction_guard_pack()
+
+func _pick_far_save_zone_position() -> Vector2:
+	var min_pos = Vector2(ARENA_WALL_T + 150, ARENA_WALL_T + 150)
+	var max_pos = Vector2(ARENA_W - ARENA_WALL_T - 150, ARENA_H - ARENA_WALL_T - 150)
+	var best_pos = Vector2(
+		randf_range(min_pos.x, max_pos.x),
+		randf_range(min_pos.y, max_pos.y)
+	)
+	var best_score = -INF
+
+	for i in range(SAVE_ZONE_RELOCATE_TRIES):
+		var angle = randf_range(0.0, TAU)
+		var min_dist = _scaled_extraction_min_dist()
+		var max_dist = _scaled_extraction_max_dist()
+		var dist = randf_range(min_dist, max_dist)
+		var candidate = hero_pos + Vector2(cos(angle), sin(angle)) * dist
+		candidate.x = clamp(candidate.x, min_pos.x, max_pos.x)
+		candidate.y = clamp(candidate.y, min_pos.y, max_pos.y)
+		var actual_dist = hero_pos.distance_to(candidate)
+		if actual_dist >= min_dist and actual_dist <= max_dist:
+			return candidate
+
+		# Near arena edges, a perfect distance-band point may be hard to
+		# find. Keep the farthest reasonable fallback instead of placing it
+		# nearby and making extraction feel trivial.
+		var score = actual_dist - abs(actual_dist - _scaled_extraction_min_dist()) * 0.25
+		if score > best_score:
+			best_score = score
+			best_pos = candidate
+
+	return best_pos
 
 func _build_save_zone_visual() -> void:
 	if save_zone_node and is_instance_valid(save_zone_node):
@@ -637,6 +787,21 @@ func _build_save_zone_visual() -> void:
 	save_zone_label.add_theme_color_override("font_color", Color(0.6, 1.0, 0.7))
 	save_zone_label.position = save_zone_pos - Vector2(SAVE_ZONE_RADIUS, SAVE_ZONE_RADIUS + 20)
 	arena_node.add_child(save_zone_label)
+
+func _spawn_extraction_guard_pack() -> void:
+	var stage = PlayerInventory.current_stage
+	var tier_mult = {"Quick": 0.8, "Standard": 1.0, "Deep Delve": 1.4}.get(PlayerInventory.dungeon_tier, 1.0)
+	var hp_scale = _get_hp_scale()
+	var dmg_scale = _get_dmg_scale()
+	var speed_scale = _get_speed_scale()
+	var available = _get_available_archetypes().duplicate()
+	available.erase("BUFFER")
+	if available.is_empty():
+		available = {"MELEE": 1}
+
+	for i in range(_scaled_extraction_guard_count()):
+		var archetype = _roll_weighted_archetype(available)
+		_spawn_one_enemy(archetype, stage, tier_mult, hp_scale, dmg_scale, speed_scale, false, false, _pick_extraction_guard_spawn_position())
 
 # Called every frame from _process(). Handles the relocation timer,
 # whether the player is currently inside the zone, and channel
@@ -672,17 +837,25 @@ func _process_save_zone(delta: float) -> void:
 # so it's never something you can just camp at repeatedly.
 func _bank_held_gear() -> void:
 	var banked_count = run_gear.size()
+	var gold_count = run_gold_held
 	for gear in run_gear:
 		banked_gear.append(gear)
 	run_gear.clear()
+	banked_gold += run_gold_held
+	run_gold_held = 0
 	_refresh_hud()
-	if banked_count > 0:
-		_show_bank_notification(banked_count)
+	if banked_count > 0 or gold_count > 0:
+		_show_bank_notification(banked_count, gold_count)
 	_relocate_save_zone()
 
-func _show_bank_notification(count: int) -> void:
+func _show_bank_notification(count: int, gold_count: int = 0) -> void:
 	var lbl = Label.new()
-	lbl.text = "Banked %d item%s!" % [count, "" if count == 1 else "s"]
+	var parts = PackedStringArray()
+	if count > 0:
+		parts.append("%d item%s" % [count, "" if count == 1 else "s"])
+	if gold_count > 0:
+		parts.append("%d Gold" % gold_count)
+	lbl.text = "Banked %s!" % " + ".join(parts)
 	lbl.add_theme_font_size_override("font_size", 14)
 	lbl.add_theme_color_override("font_color", Color(0.5, 1.0, 0.6))
 	lbl.position = hero_pos - Vector2(40, 50)
@@ -704,8 +877,8 @@ func _add_rect(parent: Node, pos: Vector2, sz: Vector2, col: Color) -> ColorRect
 # Enemies
 # -------------------------------------------------------
 # -------------------------------------------------------
-# Enemy spawning — picks an archetype by weight (respecting the
-# Ranged time-gate), then scales its stats by time survived, distance
+# Enemy spawning — picks an archetype by weight (respecting time gates),
+# then scales its stats by time survived, distance
 # from the arena center, and current enemy density.
 # -------------------------------------------------------
 func _get_available_archetypes() -> Dictionary:
@@ -721,16 +894,22 @@ func _get_available_archetypes() -> Dictionary:
 					custom[arch] = overrides[arch]
 			if not custom.is_empty():
 				return custom
-	if ranged_unlocked:
-		return ARCHETYPE_WEIGHTS
-	var without_ranged = ARCHETYPE_WEIGHTS.duplicate()
-	without_ranged.erase("RANGED")
-	return without_ranged
+	var available = ARCHETYPE_WEIGHTS.duplicate()
+	if not ranged_unlocked:
+		available.erase("RANGED")
+	if _scaled_minutes() < CHARGER_UNLOCK_MINUTE:
+		available.erase("BULL")
+		available.erase("CHARGER")
+	return available
 
 func _roll_archetype() -> String:
-	var weights = _get_available_archetypes()
+	return _roll_weighted_archetype(_get_available_archetypes())
+
+func _roll_weighted_archetype(weights: Dictionary) -> String:
 	var total = 0
 	for w in weights.values(): total += w
+	if total <= 0:
+		return "MELEE"
 	var roll = randi() % total
 	var cumulative = 0
 	for archetype in weights:
@@ -746,6 +925,36 @@ func _scaled_minutes() -> float:
 	if Engine.has_singleton("AdminPanel"):
 		mult = Engine.get_singleton("AdminPanel").dungeon_sandbox.get("scaling_mult", 1.0)
 	return elapsed_seconds * mult / 60.0
+
+func _expedition_scale() -> float:
+	var stage_scale = 1.0 + max(0, PlayerInventory.current_stage - 1) * EXPEDITION_STAGE_STEP
+	var tier_scale = {
+		"Quick": EXPEDITION_QUICK_MULT,
+		"Standard": EXPEDITION_STANDARD_MULT,
+		"Deep Delve": EXPEDITION_DEEP_DELVE_MULT,
+	}.get(PlayerInventory.dungeon_tier, EXPEDITION_STANDARD_MULT)
+	return clamp(stage_scale * tier_scale, 0.5, EXPEDITION_MAX_MULT)
+
+func _expedition_pressure() -> float:
+	return max(0.0, _expedition_scale() - 1.0)
+
+func _scaled_extraction_min_dist() -> float:
+	return SAVE_ZONE_MIN_RELOCATE_DIST * (1.0 + _expedition_pressure() * EXPEDITION_EXTRACT_DISTANCE_MULT)
+
+func _scaled_extraction_max_dist() -> float:
+	return SAVE_ZONE_MAX_RELOCATE_DIST * (1.0 + _expedition_pressure() * EXPEDITION_EXTRACT_DISTANCE_MULT)
+
+func _scaled_route_spawn_chance() -> float:
+	return min(0.85, ROUTE_SPAWN_CHANCE * (1.0 + _expedition_pressure() * EXPEDITION_ROUTE_CHANCE_MULT))
+
+func _scaled_extraction_guard_count() -> int:
+	return EXTRACTION_GUARD_COUNT + int(round(_expedition_pressure() * EXPEDITION_GUARD_COUNT_BONUS))
+
+func _scaled_density_slowdown_threshold() -> int:
+	return DENSITY_SPAWN_SLOWDOWN_THRESHOLD + int(round(_expedition_pressure() * EXPEDITION_DENSITY_BONUS))
+
+func _scaled_gold_drop_amount(amount: int) -> int:
+	return max(1, int(round(amount * (1.0 + _expedition_pressure() * EXPEDITION_GOLD_REWARD_MULT))))
 
 func _get_hp_scale() -> float:
 	var minutes = _scaled_minutes()
@@ -778,7 +987,60 @@ func _spawn_enemy_wave(count: int) -> void:
 
 	for i in range(count):
 		var archetype = _roll_archetype()
-		_spawn_one_enemy(archetype, stage, tier_mult, hp_scale, dmg_scale, speed_scale, false)
+		var spawn_pos = _pick_wave_spawn_position()
+		_spawn_one_enemy(archetype, stage, tier_mult, hp_scale, dmg_scale, speed_scale, false, false, spawn_pos)
+
+func _pick_wave_spawn_position() -> Vector2:
+	if randf() < _scaled_route_spawn_chance() and hero_pos.distance_to(save_zone_pos) > _scaled_extraction_min_dist() * 0.45:
+		return _pick_route_spawn_position()
+	return _pick_screen_edge_spawn_position()
+
+func _pick_screen_edge_spawn_position() -> Vector2:
+	var viewport_size = get_viewport_rect().size
+	var zoom = camera.zoom if camera else Vector2.ONE
+	var half_view = Vector2(viewport_size.x * zoom.x, viewport_size.y * zoom.y) * 0.5
+	var side = randi() % 4
+	var pos = hero_pos
+	match side:
+		0:
+			pos = Vector2(randf_range(hero_pos.x - half_view.x, hero_pos.x + half_view.x), hero_pos.y - half_view.y - EDGE_SPAWN_MARGIN)
+		1:
+			pos = Vector2(randf_range(hero_pos.x - half_view.x, hero_pos.x + half_view.x), hero_pos.y + half_view.y + EDGE_SPAWN_MARGIN)
+		2:
+			pos = Vector2(hero_pos.x - half_view.x - EDGE_SPAWN_MARGIN, randf_range(hero_pos.y - half_view.y, hero_pos.y + half_view.y))
+		_:
+			pos = Vector2(hero_pos.x + half_view.x + EDGE_SPAWN_MARGIN, randf_range(hero_pos.y - half_view.y, hero_pos.y + half_view.y))
+	return _clamp_enemy_spawn_position(pos)
+
+func _pick_route_spawn_position() -> Vector2:
+	var to_zone = save_zone_pos - hero_pos
+	if to_zone.length() < 1.0:
+		return _pick_screen_edge_spawn_position()
+	var route_dir = to_zone.normalized()
+	var side_dir = Vector2(-route_dir.y, route_dir.x)
+	var along = randf_range(ROUTE_SPAWN_MIN_FRACTION, ROUTE_SPAWN_MAX_FRACTION)
+	var side = (-1.0 if randf() < 0.5 else 1.0) * randf_range(ROUTE_SPAWN_SIDE_OFFSET_MIN, ROUTE_SPAWN_SIDE_OFFSET_MAX)
+	var pos = hero_pos + to_zone * along + side_dir * side
+	if hero_pos.distance_to(pos) < MIN_SPAWN_DIST_FROM_HERO:
+		pos = hero_pos + route_dir * MIN_SPAWN_DIST_FROM_HERO + side_dir * side
+	return _clamp_enemy_spawn_position(pos)
+
+func _pick_extraction_guard_spawn_position() -> Vector2:
+	var angle = randf_range(0.0, TAU)
+	var dist = randf_range(SAVE_ZONE_RADIUS + 80.0, EXTRACTION_GUARD_RADIUS)
+	return _clamp_enemy_spawn_position(save_zone_pos + Vector2(cos(angle), sin(angle)) * dist)
+
+func _clamp_enemy_spawn_position(pos: Vector2) -> Vector2:
+	pos.x = clamp(pos.x, ARENA_WALL_T + 80, ARENA_W - ARENA_WALL_T - 80)
+	pos.y = clamp(pos.y, ARENA_WALL_T + 80, ARENA_H - ARENA_WALL_T - 80)
+	if hero_pos.distance_to(pos) < MIN_SPAWN_DIST_FROM_HERO:
+		var away = (pos - hero_pos).normalized()
+		if away == Vector2.ZERO:
+			away = Vector2.RIGHT
+		pos = hero_pos + away * MIN_SPAWN_DIST_FROM_HERO
+		pos.x = clamp(pos.x, ARENA_WALL_T + 80, ARENA_W - ARENA_WALL_T - 80)
+		pos.y = clamp(pos.y, ARENA_WALL_T + 80, ARENA_H - ARENA_WALL_T - 80)
+	return pos
 
 func _get_enemy_hitbox_size(is_miniboss: bool) -> float:
 	return ENEMY_HITBOX_SIZE * (MINIBOSS_EMPOWERED_SIZE_MULT if is_miniboss else 1.0)
@@ -786,7 +1048,7 @@ func _get_enemy_hitbox_size(is_miniboss: bool) -> float:
 func _get_enemy_sprite_size(is_miniboss: bool) -> float:
 	return ENEMY_SPRITE_SIZE * (MINIBOSS_EMPOWERED_SIZE_MULT if is_miniboss else 1.0)
 
-func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale: float, dmg_scale: float, speed_scale: float, is_miniboss: bool, miniboss_unique: bool = false) -> void:
+func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale: float, dmg_scale: float, speed_scale: float, is_miniboss: bool, miniboss_unique: bool = false, spawn_pos = null) -> void:
 	var profile = ARENA_ARCHETYPES.get(archetype, ARENA_ARCHETYPES["MELEE"])
 
 	var base_hp  = (ENEMY_HP_BASE    + stage * ENEMY_HP_PER_STAGE)    * tier_mult * profile["hp_mult"]
@@ -798,23 +1060,14 @@ func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale:
 	var max_hp = int(base_hp * hp_scale)
 	var spd = base_spd * speed_scale
 	var atk = int(base_atk * dmg_scale)
+	if skill_greed_curse:
+		spd *= SKILL_GREED_CURSE_SPEED_MULT
 
 	if is_miniboss:
 		max_hp = int(max_hp * MINIBOSS_EMPOWERED_HP_MULT)
 		atk = int(atk * MINIBOSS_EMPOWERED_DMG_MULT)
 
-	var ex: float
-	var ey: float
-	var tries = 0
-	while true:
-		ex = randf_range(hero_pos.x - 500, hero_pos.x + 500)
-		ey = randf_range(hero_pos.y - 500, hero_pos.y + 500)
-		ex = clamp(ex, ARENA_WALL_T + 80, ARENA_W - ARENA_WALL_T - 80)
-		ey = clamp(ey, ARENA_WALL_T + 80, ARENA_H - ARENA_WALL_T - 80)
-		tries += 1
-		if hero_pos.distance_to(Vector2(ex, ey)) >= MIN_SPAWN_DIST_FROM_HERO or tries >= 20:
-			break
-	var epos = Vector2(ex, ey)
+	var epos = _clamp_enemy_spawn_position(spawn_pos if spawn_pos is Vector2 else _pick_screen_edge_spawn_position())
 
 	var display_color = profile["color"]
 	if is_miniboss:
@@ -881,6 +1134,9 @@ func _process(delta: float) -> void:
 	_process_enemies(delta)
 	_process_spawn_timer(delta)
 	_process_save_zone(delta)
+	_update_fire_patches(delta)
+	_update_guardian_wisp(delta)
+	_update_class_skill_timers(delta)
 	_update_orbs(delta)
 	_self_heal_tick(delta)
 	_update_visuals()
@@ -898,7 +1154,11 @@ func _on_survival_complete() -> void:
 		"level_reached": hero_level,
 		"skills": skills_taken.keys(),
 		"gear_secured": secured_gear.size() + banked_gear.size() + run_gear.size(),
+		"gold_secured": banked_gold + run_gold_held,
 	})
+	_commit_run_gold(banked_gold + run_gold_held)
+	banked_gold = 0
+	run_gold_held = 0
 	for gear in banked_gear:
 		PlayerInventory.add_gear(gear)
 		secured_gear.append(gear)
@@ -923,7 +1183,7 @@ func _process_spawn_timer(delta: float) -> void:
 		# Density slowdown — if the screen is already crowded, ease off
 		# spawning more rather than piling stat-boosted enemies on top
 		# of an already-overwhelming fight.
-		if enemies.size() >= DENSITY_SPAWN_SLOWDOWN_THRESHOLD:
+		if enemies.size() >= _scaled_density_slowdown_threshold():
 			interval *= DENSITY_SPAWN_SLOWDOWN_MULT
 		spawn_timer = interval
 
@@ -1037,6 +1297,8 @@ func _attack_tick(delta: float) -> void:
 		attack_timer = effective_interval
 
 		var dmg = hero_attack
+		if skill_heavy_draw and _current_class_key() == "ARCHER":
+			dmg = int(dmg * SKILL_HEAVY_DRAW_DAMAGE_MULT)
 		if hero_is_melee and hero_melee_power > 0.0:
 			dmg = int(dmg * (1.0 + hero_melee_power))
 		var is_crit = randf() < hero_crit_chance
@@ -1061,6 +1323,8 @@ func _attack_tick(delta: float) -> void:
 				_melee_strike(t, dmg)
 		else:
 			_fire(hero_pos, nearest["pos"], true, dmg, hero_rect)
+			if skill_arcane_echo and _current_class_key() == "MAGE":
+				_fire(hero_pos, nearest["pos"], true, max(1, int(dmg * SKILL_ARCANE_ECHO_DAMAGE)), null)
 			# Multishot: additional projectiles with a small angular spread
 			for k in range(skill_extra_projs):
 				var sign = 1 if k % 2 == 0 else -1
@@ -1088,6 +1352,8 @@ func _melee_strike(e: Dictionary, dmg: int) -> void:
 
 	e["hp"] -= dmg
 	_update_boss_bar(e)
+	if skill_chain_lightning:
+		_trigger_chain_lightning(e, dmg)
 
 	if skill_lifesteal > 0.0:
 		hero_hp = min(hero_hp + max(1, int(dmg * skill_lifesteal)), hero_max_hp)
@@ -1107,6 +1373,39 @@ func _melee_strike(e: Dictionary, dmg: int) -> void:
 		var kill_idx = enemies.find(e)
 		if kill_idx >= 0:
 			_kill_enemy(kill_idx)
+
+func _damage_enemy_from_skill(e: Dictionary, dmg: int) -> void:
+	if _get_enemy_index(e) < 0:
+		return
+	e["hp"] -= dmg
+	_update_boss_bar(e)
+	if e["hp"] <= 0:
+		_kill_enemy(_get_enemy_index(e))
+
+func _trigger_chain_lightning(source: Dictionary, base_damage: int) -> void:
+	var chain_damage = max(1, int(base_damage * SKILL_CHAIN_LIGHTNING_DAMAGE))
+	var targets: Array = []
+	for e in enemies:
+		if e == source:
+			continue
+		targets.append(e)
+	targets.sort_custom(func(a, b): return source["pos"].distance_to(a["pos"]) < source["pos"].distance_to(b["pos"]))
+	var count = min(SKILL_CHAIN_LIGHTNING_COUNT, targets.size())
+	for i in range(count):
+		var target = targets[i]
+		_damage_enemy_from_skill(target, chain_damage)
+		_spawn_line_flash(source["pos"], target["pos"], Color(0.45, 0.75, 1.0, 0.9))
+
+func _spawn_line_flash(from: Vector2, to: Vector2, col: Color) -> void:
+	var line = Line2D.new()
+	line.width = 3.0
+	line.default_color = col
+	line.points = PackedVector2Array([from, to])
+	line.z_index = 35
+	arena_node.add_child(line)
+	var tw = create_tween()
+	tw.tween_property(line, "modulate:a", 0.0, 0.18)
+	tw.tween_callback(line.queue_free)
 
 func _current_class_key() -> String:
 	return _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
@@ -1154,9 +1453,11 @@ func _create_projectile_visual(is_hero: bool, dir: Vector2):
 
 func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_sprite: UnitSprite = null) -> void:
 	var dir = (toward - from).normalized()
+	var speed_mult = SKILL_HEAVY_DRAW_SPEED_MULT if is_hero and skill_heavy_draw and _current_class_key() == "ARCHER" else 1.0
 	var proj = {"pos": Vector2(from.x, from.y), "origin": Vector2(from.x, from.y),
 				"dir": dir, "damage": dmg, "is_hero": is_hero, "pierced": {},
-				"visual": "arrow" if _uses_arrow_projectile(is_hero) else "square"}
+				"visual": "arrow" if _uses_arrow_projectile(is_hero) else "square",
+				"speed_mult": speed_mult}
 
 	if attacker_sprite and is_instance_valid(attacker_sprite):
 		attacker_sprite.face(dir)
@@ -1173,14 +1474,30 @@ func _fire(from: Vector2, toward: Vector2, is_hero: bool, dmg: int, attacker_spr
 		enemy_projs.append(proj)
 		enemy_proj_rects.append(prect)
 
+func _trim_projectile_arrays() -> void:
+	while hero_proj_rects.size() > hero_projs.size():
+		var pr = hero_proj_rects.pop_back()
+		if is_instance_valid(pr):
+			pr.queue_free()
+	while enemy_proj_rects.size() > enemy_projs.size():
+		var pr = enemy_proj_rects.pop_back()
+		if is_instance_valid(pr):
+			pr.queue_free()
+	if hero_projs.size() > hero_proj_rects.size():
+		hero_projs.resize(hero_proj_rects.size())
+	if enemy_projs.size() > enemy_proj_rects.size():
+		enemy_projs.resize(enemy_proj_rects.size())
+
 func _move_projectiles(delta: float) -> void:
+	_trim_projectile_arrays()
+
 	# Hero projectiles
 	var new_hprojs = []
 	var new_hprects = []
-	for i in range(hero_projs.size()):
+	for i in range(min(hero_projs.size(), hero_proj_rects.size())):
 		var p = hero_projs[i]
 		var pr = hero_proj_rects[i]
-		p["pos"] += p["dir"] * PROJECTILE_SPEED * delta
+		p["pos"] += p["dir"] * PROJECTILE_SPEED * p.get("speed_mult", 1.0) * delta
 
 		var oob = p["pos"].distance_to(p["origin"]) > PROJECTILE_MAX_RANGE
 		if oob:
@@ -1191,30 +1508,35 @@ func _move_projectiles(delta: float) -> void:
 		var to_kill: Array = []
 		# Iterate descending so later removals don't shift earlier indices
 		for ei in range(enemies.size() - 1, -1, -1):
-			var eid = enemies[ei].get("eid", -1)
+			if ei >= enemies.size():
+				continue
+			var target = enemies[ei]
+			var eid = target.get("eid", -1)
 			# Piercing: skip enemies this projectile already passed through
 			if skill_piercing and p["pierced"].has(eid):
 				continue
-			if p["pos"].distance_to(enemies[ei]["pos"]) < enemies[ei]["sz"] / 2 + 5:
+			if p["pos"].distance_to(target["pos"]) < target["sz"] / 2 + 5:
 				var dmg = p["damage"]
-				enemies[ei]["hp"] -= dmg
-				_update_boss_bar(enemies[ei])
+				target["hp"] -= dmg
+				_update_boss_bar(target)
+				if skill_chain_lightning:
+					_trigger_chain_lightning(target, dmg)
 				if skill_lifesteal > 0.0:
 					hero_hp = min(hero_hp + max(1, int(dmg * skill_lifesteal)), hero_max_hp)
 				if skill_explosive:
-					_trigger_explosion(enemies[ei]["pos"], int(dmg * 0.4), ei)
-				if enemies[ei]["hp"] <= 0:
-					to_kill.append(ei)
+					_trigger_explosion(target["pos"], int(dmg * 0.4), ei)
+				if target["hp"] <= 0:
+					to_kill.append(target)
 				if skill_piercing:
 					p["pierced"][eid] = true   # mark but keep projectile alive
 				else:
 					if is_instance_valid(pr): pr.queue_free()
 					consumed = true
 					break
-		# Kill collected enemies (indices are descending — safe removal order)
-		for kill_idx in to_kill:
-			if kill_idx < enemies.size():
-				_kill_enemy(kill_idx)
+		# Kill collected enemies by identity because explosions may have
+		# shifted the array while this projectile was resolving.
+		for enemy_to_kill in to_kill:
+			_kill_enemy(_get_enemy_index(enemy_to_kill))
 		if not consumed:
 			new_hprojs.append(p)
 			new_hprects.append(pr)
@@ -1225,7 +1547,7 @@ func _move_projectiles(delta: float) -> void:
 	# Enemy projectiles (unchanged)
 	var new_eprojs = []
 	var new_eprects = []
-	for i in range(enemy_projs.size()):
+	for i in range(min(enemy_projs.size(), enemy_proj_rects.size())):
 		var p = enemy_projs[i]
 		var pr = enemy_proj_rects[i]
 		p["pos"] += p["dir"] * (PROJECTILE_SPEED * 0.65) * delta
@@ -1275,7 +1597,7 @@ func _process_enemies(delta: float) -> void:
 # Melee and Charger share this — continuously home in on the player.
 # Charger is meant to feel like a suicide bomber: relentless tracking,
 # but it can be kited, baited, or killed before it closes the gap.
-func _process_homing_melee(e: Dictionary, delta: float, e_sprite: UnitSprite, idx: int) -> void:
+func _process_homing_melee(e: Dictionary, delta: float, e_sprite: UnitSprite, _idx: int) -> void:
 	var effective_atk = e["attack"]
 	if e.get("dmg_boost_t", 0.0) > 0.0:
 		e["dmg_boost_t"] -= delta
@@ -1293,7 +1615,7 @@ func _process_homing_melee(e: Dictionary, delta: float, e_sprite: UnitSprite, id
 		_take_damage(effective_atk)
 		if e.get("archetype", "") == "CHARGER":
 			# Detonates on contact, suicide-bomber style
-			_kill_enemy_no_loot(idx)
+			_kill_enemy_no_loot(_get_enemy_index(e))
 
 # Ranged holds distance and fires from range rather than closing in —
 # this is exactly why it's time-gated: dangerous in a crowd, fine alone.
@@ -1402,16 +1724,37 @@ func _process_bull(e: Dictionary, delta: float, e_sprite: UnitSprite) -> void:
 
 # Charger detonates on contact rather than dying for loot like a normal
 # kill — it's a hazard, not a farmable enemy in the same sense.
+func _get_enemy_index(enemy: Dictionary) -> int:
+	for i in range(enemies.size()):
+		if enemies[i] == enemy:
+			return i
+	return -1
+
 func _kill_enemy_no_loot(idx: int) -> void:
+	if idx < 0 or idx >= enemies.size():
+		return
 	var e = enemies[idx]
-	var er = enemy_rects[idx]
+	var er = enemy_rects[idx] if idx < enemy_rects.size() else null
 	if is_instance_valid(er): er.queue_free()
 	if e["hp_bar"] != null and is_instance_valid(e["hp_bar"]):
 		e["hp_bar"].queue_free()
 	if e["hp_bar_bg"] != null and is_instance_valid(e["hp_bar_bg"]):
 		e["hp_bar_bg"].queue_free()
 	enemies.remove_at(idx)
-	enemy_rects.remove_at(idx)
+	if idx < enemy_rects.size():
+		enemy_rects.remove_at(idx)
+
+func _grant_run_gold(amount: int) -> void:
+	if amount <= 0:
+		return
+	run_gold_held += amount
+	run_gold_found += amount
+
+func _commit_run_gold(amount: int) -> void:
+	if amount <= 0:
+		return
+	PlayerInventory.resources["gold"] = PlayerInventory.resources.get("gold", 0) + amount
+	secured_gold += amount
 
 func _process_boss(e: Dictionary, delta: float, e_sprite: UnitSprite = null) -> void:
 	e["boss_t"] -= delta
@@ -1463,9 +1806,11 @@ func _update_boss_bar(e: Dictionary) -> void:
 	e["hp_bar"].size.x = 80.0 * pct
 
 func _kill_enemy(idx: int) -> void:
+	if idx < 0 or idx >= enemies.size():
+		return
 	var e = enemies[idx]
 	var death_pos = e["pos"]
-	var er = enemy_rects[idx]
+	var er = enemy_rects[idx] if idx < enemy_rects.size() else null
 	if is_instance_valid(er): er.queue_free()
 
 	if e["hp_bar"] != null and is_instance_valid(e["hp_bar"]):
@@ -1474,12 +1819,18 @@ func _kill_enemy(idx: int) -> void:
 		e["hp_bar_bg"].queue_free()
 
 	enemies.remove_at(idx)
-	enemy_rects.remove_at(idx)
+	if idx < enemy_rects.size():
+		enemy_rects.remove_at(idx)
+
+	if skill_burning_ground and not e["is_boss"]:
+		_spawn_fire_patch(death_pos)
+	if skill_rogue_mark and e.get("rogue_marked", false):
+		_emit_rogue_mark_burst(death_pos)
 
 	kill_count += 1
 	miniboss_timer = max(10.0, miniboss_timer - MINIBOSS_KILLS_REDUCE_TIMER_BY)
 	if PlayerInventory.unlocked_talents.get("dungeon_treasure_hunter", false) and randf() < 0.10:
-		PlayerInventory.resources["gold"] = PlayerInventory.resources.get("gold", 0) + 1
+		_grant_run_gold(_scaled_gold_drop_amount(1))
 
 	# Roguelite: XP grant
 	var xp_gain = XP_PER_BOSS_KILL if e["is_boss"] else XP_PER_NORMAL_KILL
@@ -1495,9 +1846,9 @@ func _kill_enemy(idx: int) -> void:
 	if skill_death_rattle:
 		_trigger_explosion(death_pos, max(3, int(hero_attack * 0.2)))
 
-	# Gear drop (background — player sees at end screen)
-	var drop_chance = min(1.0, (1.0 if e["is_boss"] else 0.16) + skill_drop_bonus)
-	if randf() < drop_chance:
+	# Loot: normal enemies mostly pay in Gold so long runs do not flood
+	# inventory. Mini-bosses keep the real gear drop dopamine.
+	if e["is_boss"]:
 		var diff = clamp(PlayerInventory.current_stage + (MINIBOSS_GUARANTEED_RARITY_BOOST if e["is_boss"] else 0), 1, 10)
 		if PlayerInventory.dungeon_tier == "Deep Delve":
 			diff = clamp(diff + 1, 1, 10)
@@ -1505,6 +1856,11 @@ func _kill_enemy(idx: int) -> void:
 		var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
 		run_gear.append(gear)
 		_refresh_hud()
+	else:
+		var gold_drop_chance = min(1.0, NORMAL_GOLD_DROP_CHANCE + skill_drop_bonus)
+		if randf() < gold_drop_chance:
+			_grant_run_gold(_scaled_gold_drop_amount(randi_range(NORMAL_GOLD_MIN, NORMAL_GOLD_MAX)))
+			_refresh_hud()
 
 func _take_damage(amount: int) -> void:
 	if _sandbox_god_mode or invincible_timer > 0 or is_paused: return
@@ -1558,6 +1914,7 @@ func _on_death_resolved() -> void:
 		"level_reached": hero_level,
 		"skills": skills_taken.keys(),
 		"gear_secured": secured_gear.size(),
+		"gold_secured": int(floor(float(banked_gold) * 0.5)),
 	})
 	_apply_death_penalty()
 	_show_end_screen("lost")
@@ -1571,6 +1928,7 @@ func _on_death_resolved() -> void:
 # already used for defense battles.
 func _apply_death_penalty() -> void:
 	run_gear.clear()   # unbanked gear forfeited entirely, same as retreat
+	run_gold_held = 0
 
 	var kept: Array = []
 	var lost_count = 0
@@ -1585,6 +1943,9 @@ func _apply_death_penalty() -> void:
 		PlayerInventory.add_gear(gear)
 		secured_gear.append(gear)
 	banked_gear.clear()
+	var kept_gold = int(floor(float(banked_gold) * 0.5))
+	_commit_run_gold(kept_gold)
+	banked_gold = 0
 
 # -------------------------------------------------------
 # Visual updates each frame
@@ -1622,6 +1983,45 @@ func _update_visuals() -> void:
 		var pr = enemy_proj_rects[i]
 		if is_instance_valid(pr):
 			pr.position = enemy_projs[i]["pos"] - Vector2(5,5)
+
+	_update_extraction_indicator()
+
+func _update_extraction_indicator() -> void:
+	if not extraction_indicator or not is_instance_valid(extraction_indicator):
+		return
+
+	var to_zone = save_zone_pos - hero_pos
+	var dist = to_zone.length()
+	var viewport_size = get_viewport_rect().size
+	var screen_center = viewport_size / 2.0
+	var dir = to_zone.normalized() if dist > 0.01 else Vector2.RIGHT
+
+	var zoom = camera.zoom if camera else Vector2.ONE
+	var zone_screen = screen_center + Vector2(to_zone.x / zoom.x, to_zone.y / zoom.y)
+	var min_pos = Vector2(EXTRACTION_INDICATOR_EDGE_PADDING, EXTRACTION_INDICATOR_EDGE_PADDING)
+	var max_pos = viewport_size - min_pos
+	var zone_on_screen = (
+		zone_screen.x >= min_pos.x and zone_screen.x <= max_pos.x and
+		zone_screen.y >= min_pos.y and zone_screen.y <= max_pos.y
+	)
+
+	extraction_indicator.visible = dist > EXTRACTION_INDICATOR_HIDE_DISTANCE and not zone_on_screen
+	if not extraction_indicator.visible:
+		return
+
+	var scaled_dir = Vector2(dir.x / zoom.x, dir.y / zoom.y).normalized()
+	var edge_radius = min(
+		(screen_center.x - EXTRACTION_INDICATOR_EDGE_PADDING) / max(0.001, abs(scaled_dir.x)) if abs(scaled_dir.x) > 0.001 else INF,
+		(screen_center.y - EXTRACTION_INDICATOR_EDGE_PADDING) / max(0.001, abs(scaled_dir.y)) if abs(scaled_dir.y) > 0.001 else INF
+	)
+	var edge_pos = screen_center + scaled_dir * edge_radius
+	edge_pos.x = clamp(edge_pos.x, min_pos.x, max_pos.x)
+	edge_pos.y = clamp(edge_pos.y, min_pos.y, max_pos.y)
+	extraction_indicator.position = edge_pos
+	extraction_indicator.rotation = dir.angle()
+	if extraction_indicator_label:
+		extraction_indicator_label.text = "%dm" % int(dist / 10.0)
+		extraction_indicator_label.rotation = -extraction_indicator.rotation
 
 # -------------------------------------------------------
 # HUD
@@ -1695,7 +2095,40 @@ func _build_hud() -> void:
 	retreat_btn.pressed.connect(_on_retreat_pressed)
 	vbox.add_child(retreat_btn)
 
+	_build_extraction_indicator(hud)
 	_refresh_hud()
+
+func _build_extraction_indicator(hud: CanvasLayer) -> void:
+	extraction_indicator = Node2D.new()
+	extraction_indicator.z_index = 200
+	hud.add_child(extraction_indicator)
+
+	var ring = ColorRect.new()
+	ring.size = Vector2(34, 34)
+	ring.position = Vector2(-17, -17)
+	ring.color = Color(0.08, 0.16, 0.10, 0.72)
+	extraction_indicator.add_child(ring)
+
+	var shaft = Line2D.new()
+	shaft.width = 4.0
+	shaft.default_color = Color(0.55, 1.0, 0.6, 0.95)
+	shaft.points = PackedVector2Array([Vector2(-10, 0), Vector2(10, 0)])
+	extraction_indicator.add_child(shaft)
+
+	var head = Polygon2D.new()
+	head.color = Color(0.8, 1.0, 0.65, 0.95)
+	head.polygon = PackedVector2Array([
+		Vector2(17, 0),
+		Vector2(7, -8),
+		Vector2(7, 8),
+	])
+	extraction_indicator.add_child(head)
+
+	extraction_indicator_label = Label.new()
+	extraction_indicator_label.position = Vector2(-24, 18)
+	extraction_indicator_label.add_theme_font_size_override("font_size", 10)
+	extraction_indicator_label.add_theme_color_override("font_color", Color(0.78, 1.0, 0.72))
+	extraction_indicator.add_child(extraction_indicator_label)
 
 func _refresh_hud() -> void:
 	if hud_hp:
@@ -1709,7 +2142,7 @@ func _refresh_hud() -> void:
 		var secs = int(remaining) % 60
 		hud_timer.text = "Survive: %d:%02d" % [mins, secs]
 	if hud_gear:
-		hud_gear.text = "Held: %d   Banked: %d" % [run_gear.size(), banked_gear.size()]
+		hud_gear.text = "Held: %d gear / %d Gold   Banked: %d gear / %d Gold" % [run_gear.size(), run_gold_held, banked_gear.size(), banked_gold]
 	if hud_level:
 		hud_level.text = "Lv %d  XP: %d / %d" % [hero_level, hero_xp, xp_to_next]
 
@@ -1746,10 +2179,10 @@ func _show_retreat_confirm() -> void:
 
 	var msg = Label.new()
 	var held_count = run_gear.size()
-	if held_count > 0:
-		msg.text = "You'll keep your %d banked item(s), but lose %d item(s) you haven't banked yet." % [banked_gear.size(), held_count]
+	if held_count > 0 or run_gold_held > 0:
+		msg.text = "You'll keep %d banked item(s) and %d banked Gold, but lose %d held item(s) and %d held Gold." % [banked_gear.size(), banked_gold, held_count, run_gold_held]
 	else:
-		msg.text = "You'll keep all %d banked item(s). Nothing unbanked to lose." % banked_gear.size()
+		msg.text = "You'll keep %d banked item(s) and %d banked Gold. Held Gold to lose: %d." % [banked_gear.size(), banked_gold, run_gold_held]
 	msg.add_theme_font_size_override("font_size", 13)
 	msg.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
 	msg.autowrap_mode = TextServer.AUTOWRAP_WORD
@@ -1784,13 +2217,18 @@ func _do_retreat() -> void:
 		"level_reached": hero_level,
 		"skills": skills_taken.keys(),
 		"gear_secured": secured_gear.size() + banked_gear.size(),
+		"gold_secured": banked_gold,
 	})
 	# Banked gear is committed to the permanent inventory now. Unbanked
-	# (held) gear is forfeited, per the retreat loot rule.
+	# (held) gear and Gold are forfeited, per the retreat loot rule.
+	_commit_run_gold(banked_gold)
+	banked_gold = 0
+	run_gold_held = 0
 	for gear in banked_gear:
 		PlayerInventory.add_gear(gear)
 		secured_gear.append(gear)
 	run_gear.clear()
+	banked_gear.clear()
 	_show_end_screen("retreated")
 
 func _show_end_screen(outcome: String) -> void:
@@ -1829,6 +2267,13 @@ func _show_end_screen(outcome: String) -> void:
 	info.add_theme_color_override("font_color", Color(0.9, 0.75, 0.2))
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(info)
+
+	if run_gold_found > 0:
+		var gold_lbl = Label.new()
+		gold_lbl.text = "Gold secured: +%d   Found: %d" % [secured_gold, run_gold_found]
+		gold_lbl.add_theme_color_override("font_color", Color(1.0, 0.82, 0.25))
+		gold_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox.add_child(gold_lbl)
 
 	if spoils_gold > 0:
 		var spoils_lbl = Label.new()
@@ -1963,12 +2408,22 @@ func _show_skill_pick() -> void:
 
 func _build_skill_card(skill: Dictionary, overlay: Node) -> PanelContainer:
 	var panel = PanelContainer.new()
-	panel.custom_minimum_size = Vector2(190, 150)
+	panel.custom_minimum_size = Vector2(210, 250)
 
 	var inner = VBoxContainer.new()
 	inner.add_theme_constant_override("separation", 8)
 	inner.alignment = BoxContainer.ALIGNMENT_CENTER
 	panel.add_child(inner)
+
+	var icon_tex := _load_skill_icon(skill["id"])
+	if icon_tex:
+		var icon = TextureRect.new()
+		icon.texture = icon_tex
+		icon.custom_minimum_size = SKILL_ICON_SIZE
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		inner.add_child(icon)
 
 	var name_lbl = Label.new()
 	name_lbl.text = skill["name"]
@@ -2023,14 +2478,26 @@ func _build_skill_card(skill: Dictionary, overlay: Node) -> PanelContainer:
 
 	return panel
 
+func _load_skill_icon(skill_id: String) -> Texture2D:
+	var icon_path := "%s%s.png" % [SKILL_ICON_BASE_PATH, skill_id]
+	if not FileAccess.file_exists(icon_path):
+		return null
+	var image := Image.new()
+	if image.load(icon_path) != OK:
+		return null
+	return ImageTexture.create_from_image(image)
+
 func _get_random_skills(count: int) -> Array:
 	var available: Array = []
 	for skill in SKILL_POOL:
 		if skills_taken.get(skill["id"], 0) < skill["max_stacks"]:
-			if not banished_skill_ids.has(skill["id"]):
+			if not banished_skill_ids.has(skill["id"]) and _skill_matches_current_class(skill):
 				available.append(skill)
 	available.shuffle()
 	return available.slice(0, min(count, available.size()))
+
+func _skill_matches_current_class(skill: Dictionary) -> bool:
+	return not skill.has("class") or skill["class"] == _current_class_key()
 
 func _apply_skill(skill_id: String) -> void:
 	skills_taken[skill_id] = skills_taken.get(skill_id, 0) + 1
@@ -2085,6 +2552,30 @@ func _apply_skill(skill_id: String) -> void:
 			skill_second_wind_ready = true
 		"lifesteal":
 			skill_lifesteal += SKILL_LIFESTEAL_PCT
+		"chain_lightning":
+			skill_chain_lightning = true
+		"burning_ground":
+			skill_burning_ground = true
+		"guardian_wisp":
+			skill_guardian_wisp = true
+			_ensure_guardian_wisp()
+		"greed_curse":
+			skill_greed_curse = true
+			skill_drop_bonus += SKILL_GREED_CURSE_GOLD_BONUS
+			for e in enemies:
+				e["speed"] *= SKILL_GREED_CURSE_SPEED_MULT
+		"heavy_draw":
+			skill_heavy_draw = true
+		"arcane_echo":
+			skill_arcane_echo = true
+		"knights_wake":
+			skill_knights_wake = true
+		"healing_pulse":
+			skill_healing_pulse = true
+			healing_pulse_timer = min(healing_pulse_timer, 1.0)
+		"rogue_mark":
+			skill_rogue_mark = true
+			rogue_mark_timer = 0.1
 	_refresh_hud()
 
 # -------------------------------------------------------
@@ -2133,11 +2624,120 @@ func _update_orbs(delta: float) -> void:
 			e["hp"] -= orb_dmg
 			_update_boss_bar(e)
 			if e["hp"] <= 0:
-				to_kill.append(i)
-	for kill_idx in to_kill:
-		if kill_idx < enemies.size():
-			_kill_enemy(kill_idx)
+				to_kill.append(e)
+	for enemy_to_kill in to_kill:
+		_kill_enemy(_get_enemy_index(enemy_to_kill))
 	skill_orb_hit_timer = 0.35
+
+func _spawn_fire_patch(pos: Vector2) -> void:
+	while fire_patches.size() >= SKILL_BURNING_GROUND_LIMIT:
+		var old = fire_patches.pop_front()
+		if old.has("node") and is_instance_valid(old["node"]):
+			old["node"].queue_free()
+	var patch = ColorRect.new()
+	patch.size = Vector2(76, 76)
+	patch.position = pos - patch.size / 2.0
+	patch.color = Color(1.0, 0.28, 0.08, 0.35)
+	patch.z_index = 4
+	arena_node.add_child(patch)
+	fire_patches.append({"pos": pos, "time": SKILL_BURNING_GROUND_SECONDS, "tick": 0.0, "node": patch})
+
+func _update_fire_patches(delta: float) -> void:
+	if fire_patches.is_empty():
+		return
+	var patch_damage = max(1, int(hero_attack * SKILL_BURNING_GROUND_DAMAGE))
+	for i in range(fire_patches.size() - 1, -1, -1):
+		var patch = fire_patches[i]
+		patch["time"] -= delta
+		patch["tick"] -= delta
+		if patch["time"] <= 0.0:
+			if patch.has("node") and is_instance_valid(patch["node"]):
+				patch["node"].queue_free()
+			fire_patches.remove_at(i)
+			continue
+		if patch["tick"] <= 0.0:
+			patch["tick"] = 0.45
+			for e in enemies.duplicate():
+				if patch["pos"].distance_to(e["pos"]) <= 46.0:
+					_damage_enemy_from_skill(e, patch_damage)
+		if patch.has("node") and is_instance_valid(patch["node"]):
+			patch["node"].modulate.a = clamp(patch["time"] / SKILL_BURNING_GROUND_SECONDS, 0.0, 1.0)
+
+func _ensure_guardian_wisp() -> void:
+	if guardian_wisp_node and is_instance_valid(guardian_wisp_node):
+		return
+	guardian_wisp_node = ColorRect.new()
+	guardian_wisp_node.size = Vector2(14, 14)
+	guardian_wisp_node.color = Color(0.65, 0.9, 1.0, 0.95)
+	guardian_wisp_node.z_index = 36
+	arena_node.add_child(guardian_wisp_node)
+
+func _update_guardian_wisp(delta: float) -> void:
+	if not skill_guardian_wisp:
+		return
+	_ensure_guardian_wisp()
+	guardian_wisp_angle += delta * 150.0
+	var pos = hero_pos + Vector2(cos(deg_to_rad(guardian_wisp_angle)), sin(deg_to_rad(guardian_wisp_angle))) * 48.0
+	guardian_wisp_node.position = pos - guardian_wisp_node.size / 2.0
+	guardian_wisp_fire_timer -= delta
+	if guardian_wisp_fire_timer > 0.0 or enemies.is_empty():
+		return
+	guardian_wisp_fire_timer = SKILL_GUARDIAN_WISP_INTERVAL
+	var target = _nearest_enemy(pos)
+	if target:
+		_fire(pos, target["pos"], true, max(1, int(hero_attack * SKILL_GUARDIAN_WISP_DAMAGE)), null)
+
+func _nearest_enemy(pos: Vector2):
+	var nearest = null
+	var nearest_dist = INF
+	for e in enemies:
+		var d = pos.distance_to(e["pos"])
+		if d < nearest_dist:
+			nearest_dist = d
+			nearest = e
+	return nearest
+
+func _update_class_skill_timers(delta: float) -> void:
+	if skill_knights_wake and _current_class_key() == "KNIGHT" and _has_mouse_target:
+		knights_wake_timer -= delta
+		if knights_wake_timer <= 0.0:
+			knights_wake_timer = SKILL_KNIGHT_WAKE_INTERVAL
+			_trigger_explosion(hero_pos, max(1, int(hero_attack * SKILL_KNIGHT_WAKE_DAMAGE)))
+
+	if skill_healing_pulse and _current_class_key() == "HEALER":
+		healing_pulse_timer -= delta
+		if healing_pulse_timer <= 0.0:
+			healing_pulse_timer = SKILL_HEALING_PULSE_INTERVAL
+			hero_hp = min(hero_hp + 1, hero_max_hp)
+			_trigger_explosion(hero_pos, max(1, int(hero_attack * SKILL_HEALING_PULSE_DAMAGE)))
+
+	if skill_rogue_mark and _current_class_key() == "ROGUE":
+		rogue_mark_timer -= delta
+		if rogue_mark_timer <= 0.0:
+			rogue_mark_timer = SKILL_ROGUE_MARK_INTERVAL
+			_mark_rogue_target()
+
+func _mark_rogue_target() -> void:
+	var target = _nearest_enemy(hero_pos)
+	if not target:
+		return
+	target["rogue_marked"] = true
+	var mark = ColorRect.new()
+	mark.size = Vector2(18, 18)
+	mark.position = target["pos"] - Vector2(9, 9)
+	mark.color = Color(0.9, 0.2, 0.9, 0.75)
+	mark.z_index = 34
+	arena_node.add_child(mark)
+	var tw = create_tween()
+	tw.tween_property(mark, "modulate:a", 0.15, 0.9)
+	tw.tween_callback(mark.queue_free)
+
+func _emit_rogue_mark_burst(pos: Vector2) -> void:
+	var damage = max(1, int(hero_attack * SKILL_ROGUE_MARK_DAMAGE))
+	for e in enemies.duplicate():
+		if pos.distance_to(e["pos"]) <= 125.0:
+			_damage_enemy_from_skill(e, damage)
+			_spawn_line_flash(pos, e["pos"], Color(0.9, 0.25, 0.85, 0.85))
 
 # -------------------------------------------------------
 # Shared explosion helper (Explosive Rounds, Nova Burst, Death Rattle)
@@ -2148,14 +2748,14 @@ func _trigger_explosion(center: Vector2, damage: int, ignore_idx: int = -1) -> v
 	var to_kill: Array = []
 	for i in range(enemies.size() - 1, -1, -1):
 		if i == ignore_idx: continue
-		if center.distance_to(enemies[i]["pos"]) < radius:
-			enemies[i]["hp"] -= damage
-			_update_boss_bar(enemies[i])
-			if enemies[i]["hp"] <= 0:
-				to_kill.append(i)
-	for kill_idx in to_kill:
-		if kill_idx < enemies.size():
-			_kill_enemy(kill_idx)
+		var e = enemies[i]
+		if center.distance_to(e["pos"]) < radius:
+			e["hp"] -= damage
+			_update_boss_bar(e)
+			if e["hp"] <= 0:
+				to_kill.append(e)
+	for enemy_to_kill in to_kill:
+		_kill_enemy(_get_enemy_index(enemy_to_kill))
 	# Brief visual flash
 	var flash = ColorRect.new()
 	flash.size = Vector2(radius * 2, radius * 2)

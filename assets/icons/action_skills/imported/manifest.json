@@ -1,0 +1,305 @@
+{
+  "source": "C:\\Users\\Administrator\\Downloads\\talents",
+  "order": [
+    {
+      "id": "swiftness",
+      "name": "Swiftness",
+      "source": "talents_r1_1.png",
+      "path": "res://assets/icons/action_skills/imported/swiftness.png",
+      "size": [
+        110,
+        106
+      ]
+    },
+    {
+      "id": "iron_hide",
+      "name": "Iron Hide",
+      "source": "talents_r1_2.png",
+      "path": "res://assets/icons/action_skills/imported/iron_hide.png",
+      "size": [
+        87,
+        106
+      ]
+    },
+    {
+      "id": "armor_plating",
+      "name": "Armor Plating",
+      "source": "talents_r1_3.png",
+      "path": "res://assets/icons/action_skills/imported/armor_plating.png",
+      "size": [
+        93,
+        106
+      ]
+    },
+    {
+      "id": "rapid_fire",
+      "name": "Rapid Fire",
+      "source": "talents_r1_4.png",
+      "path": "res://assets/icons/action_skills/imported/rapid_fire.png",
+      "size": [
+        107,
+        106
+      ]
+    },
+    {
+      "id": "power_shot",
+      "name": "Power Shot",
+      "source": "talents_r1_5.png",
+      "path": "res://assets/icons/action_skills/imported/power_shot.png",
+      "size": [
+        102,
+        106
+      ]
+    },
+    {
+      "id": "deadly_crits",
+      "name": "Deadly Crits",
+      "source": "talents_r1_6.png",
+      "path": "res://assets/icons/action_skills/imported/deadly_crits.png",
+      "size": [
+        100,
+        106
+      ]
+    },
+    {
+      "id": "crushing_blow",
+      "name": "Crushing Blow",
+      "source": "talents_r2_1.png",
+      "path": "res://assets/icons/action_skills/imported/crushing_blow.png",
+      "size": [
+        110,
+        108
+      ]
+    },
+    {
+      "id": "wide_range",
+      "name": "Wide Range",
+      "source": "talents_r2_2.png",
+      "path": "res://assets/icons/action_skills/imported/wide_range.png",
+      "size": [
+        100,
+        108
+      ]
+    },
+    {
+      "id": "glass_cannon",
+      "name": "Glass Cannon",
+      "source": "talents_r2_3.png",
+      "path": "res://assets/icons/action_skills/imported/glass_cannon.png",
+      "size": [
+        108,
+        108
+      ]
+    },
+    {
+      "id": "lucky",
+      "name": "Lucky",
+      "source": "talents_r2_4.png",
+      "path": "res://assets/icons/action_skills/imported/lucky.png",
+      "size": [
+        107,
+        108
+      ]
+    },
+    {
+      "id": "vampiric",
+      "name": "Vampiric",
+      "source": "talents_r2_5.png",
+      "path": "res://assets/icons/action_skills/imported/vampiric.png",
+      "size": [
+        104,
+        108
+      ]
+    },
+    {
+      "id": "multishot",
+      "name": "Multishot",
+      "source": "talents_r2_6.png",
+      "path": "res://assets/icons/action_skills/imported/multishot.png",
+      "size": [
+        79,
+        108
+      ]
+    },
+    {
+      "id": "piercing",
+      "name": "Piercing Shot",
+      "source": "talents_r3_1.png",
+      "path": "res://assets/icons/action_skills/imported/piercing.png",
+      "size": [
+        108,
+        105
+      ]
+    },
+    {
+      "id": "explosive",
+      "name": "Explosive Rounds",
+      "source": "talents_r3_2.png",
+      "path": "res://assets/icons/action_skills/imported/explosive.png",
+      "size": [
+        102,
+        105
+      ]
+    },
+    {
+      "id": "orb_shield",
+      "name": "Orbital Shield",
+      "source": "talents_r3_3.png",
+      "path": "res://assets/icons/action_skills/imported/orb_shield.png",
+      "size": [
+        108,
+        105
+      ]
+    },
+    {
+      "id": "nova_burst",
+      "name": "Nova Burst",
+      "source": "talents_r3_4.png",
+      "path": "res://assets/icons/action_skills/imported/nova_burst.png",
+      "size": [
+        104,
+        105
+      ]
+    },
+    {
+      "id": "death_rattle",
+      "name": "Death Rattle",
+      "source": "talents_r3_5.png",
+      "path": "res://assets/icons/action_skills/imported/death_rattle.png",
+      "size": [
+        99,
+        105
+      ]
+    },
+    {
+      "id": "berserker",
+      "name": "Berserker",
+      "source": "talents_r3_6.png",
+      "path": "res://assets/icons/action_skills/imported/berserker.png",
+      "size": [
+        113,
+        105
+      ]
+    },
+    {
+      "id": "second_wind",
+      "name": "Second Wind",
+      "source": "talents_r4_1.png",
+      "path": "res://assets/icons/action_skills/imported/second_wind.png",
+      "size": [
+        110,
+        102
+      ]
+    },
+    {
+      "id": "lifesteal",
+      "name": "Lifesteal",
+      "source": "talents_r4_2.png",
+      "path": "res://assets/icons/action_skills/imported/lifesteal.png",
+      "size": [
+        93,
+        102
+      ]
+    },
+    {
+      "id": "plunder",
+      "name": "Plunder",
+      "source": "talents_r4_3.png",
+      "path": "res://assets/icons/action_skills/imported/plunder.png",
+      "size": [
+        112,
+        102
+      ]
+    },
+    {
+      "id": "chain_lightning",
+      "name": "Chain Lightning",
+      "source": "talents_r4_4.png",
+      "path": "res://assets/icons/action_skills/imported/chain_lightning.png",
+      "size": [
+        99,
+        102
+      ]
+    },
+    {
+      "id": "burning_ground",
+      "name": "Burning Ground",
+      "source": "talents_r4_5.png",
+      "path": "res://assets/icons/action_skills/imported/burning_ground.png",
+      "size": [
+        111,
+        102
+      ]
+    },
+    {
+      "id": "guardian_wisp",
+      "name": "Guardian Wisp",
+      "source": "talents_r4_6.png",
+      "path": "res://assets/icons/action_skills/imported/guardian_wisp.png",
+      "size": [
+        89,
+        102
+      ]
+    },
+    {
+      "id": "greed_curse",
+      "name": "Greed Curse",
+      "source": "talents_r5_1.png",
+      "path": "res://assets/icons/action_skills/imported/greed_curse.png",
+      "size": [
+        103,
+        111
+      ]
+    },
+    {
+      "id": "heavy_draw",
+      "name": "Heavy Draw",
+      "source": "talents_r5_2.png",
+      "path": "res://assets/icons/action_skills/imported/heavy_draw.png",
+      "size": [
+        107,
+        111
+      ]
+    },
+    {
+      "id": "arcane_echo",
+      "name": "Arcane Echo",
+      "source": "talents_r5_3.png",
+      "path": "res://assets/icons/action_skills/imported/arcane_echo.png",
+      "size": [
+        108,
+        111
+      ]
+    },
+    {
+      "id": "knights_wake",
+      "name": "Knight's Wake",
+      "source": "talents_r5_4.png",
+      "path": "res://assets/icons/action_skills/imported/knights_wake.png",
+      "size": [
+        108,
+        111
+      ]
+    },
+    {
+      "id": "healing_pulse",
+      "name": "Healing Pulse",
+      "source": "talents_r5_5.png",
+      "path": "res://assets/icons/action_skills/imported/healing_pulse.png",
+      "size": [
+        111,
+        111
+      ]
+    },
+    {
+      "id": "rogue_mark",
+      "name": "Rogue Mark",
+      "source": "talents_r5_6.png",
+      "path": "res://assets/icons/action_skills/imported/rogue_mark.png",
+      "size": [
+        106,
+        111
+      ]
+    }
+  ]
+}

@@ -1,0 +1,398 @@
+{
+  "sheet": "res://assets/icons/action_skills/action_skill_icons_sprite_style_sheet.png",
+  "cell_size": 64,
+  "columns": 6,
+  "background": "#FF00FF",
+  "order": [
+    {
+      "id": "swiftness",
+      "name": "Swiftness",
+      "index": 0,
+      "row": 0,
+      "column": 0,
+      "rect": [
+        0,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "iron_hide",
+      "name": "Iron Hide",
+      "index": 1,
+      "row": 0,
+      "column": 1,
+      "rect": [
+        64,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "armor_plating",
+      "name": "Armor Plating",
+      "index": 2,
+      "row": 0,
+      "column": 2,
+      "rect": [
+        128,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "rapid_fire",
+      "name": "Rapid Fire",
+      "index": 3,
+      "row": 0,
+      "column": 3,
+      "rect": [
+        192,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "power_shot",
+      "name": "Power Shot",
+      "index": 4,
+      "row": 0,
+      "column": 4,
+      "rect": [
+        256,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "deadly_crits",
+      "name": "Deadly Crits",
+      "index": 5,
+      "row": 0,
+      "column": 5,
+      "rect": [
+        320,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "crushing_blow",
+      "name": "Crushing Blow",
+      "index": 6,
+      "row": 1,
+      "column": 0,
+      "rect": [
+        0,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "wide_range",
+      "name": "Wide Range",
+      "index": 7,
+      "row": 1,
+      "column": 1,
+      "rect": [
+        64,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "glass_cannon",
+      "name": "Glass Cannon",
+      "index": 8,
+      "row": 1,
+      "column": 2,
+      "rect": [
+        128,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "lucky",
+      "name": "Lucky",
+      "index": 9,
+      "row": 1,
+      "column": 3,
+      "rect": [
+        192,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "vampiric",
+      "name": "Vampiric",
+      "index": 10,
+      "row": 1,
+      "column": 4,
+      "rect": [
+        256,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "multishot",
+      "name": "Multishot",
+      "index": 11,
+      "row": 1,
+      "column": 5,
+      "rect": [
+        320,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "piercing",
+      "name": "Piercing Shot",
+      "index": 12,
+      "row": 2,
+      "column": 0,
+      "rect": [
+        0,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "explosive",
+      "name": "Explosive Rounds",
+      "index": 13,
+      "row": 2,
+      "column": 1,
+      "rect": [
+        64,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "orb_shield",
+      "name": "Orbital Shield",
+      "index": 14,
+      "row": 2,
+      "column": 2,
+      "rect": [
+        128,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "nova_burst",
+      "name": "Nova Burst",
+      "index": 15,
+      "row": 2,
+      "column": 3,
+      "rect": [
+        192,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "death_rattle",
+      "name": "Death Rattle",
+      "index": 16,
+      "row": 2,
+      "column": 4,
+      "rect": [
+        256,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "berserker",
+      "name": "Berserker",
+      "index": 17,
+      "row": 2,
+      "column": 5,
+      "rect": [
+        320,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "second_wind",
+      "name": "Second Wind",
+      "index": 18,
+      "row": 3,
+      "column": 0,
+      "rect": [
+        0,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "lifesteal",
+      "name": "Lifesteal",
+      "index": 19,
+      "row": 3,
+      "column": 1,
+      "rect": [
+        64,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "plunder",
+      "name": "Plunder",
+      "index": 20,
+      "row": 3,
+      "column": 2,
+      "rect": [
+        128,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "chain_lightning",
+      "name": "Chain Lightning",
+      "index": 21,
+      "row": 3,
+      "column": 3,
+      "rect": [
+        192,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "burning_ground",
+      "name": "Burning Ground",
+      "index": 22,
+      "row": 3,
+      "column": 4,
+      "rect": [
+        256,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "guardian_wisp",
+      "name": "Guardian Wisp",
+      "index": 23,
+      "row": 3,
+      "column": 5,
+      "rect": [
+        320,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "greed_curse",
+      "name": "Greed Curse",
+      "index": 24,
+      "row": 4,
+      "column": 0,
+      "rect": [
+        0,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "heavy_draw",
+      "name": "Heavy Draw",
+      "index": 25,
+      "row": 4,
+      "column": 1,
+      "rect": [
+        64,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "arcane_echo",
+      "name": "Arcane Echo",
+      "index": 26,
+      "row": 4,
+      "column": 2,
+      "rect": [
+        128,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "knights_wake",
+      "name": "Knight's Wake",
+      "index": 27,
+      "row": 4,
+      "column": 3,
+      "rect": [
+        192,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "healing_pulse",
+      "name": "Healing Pulse",
+      "index": 28,
+      "row": 4,
+      "column": 4,
+      "rect": [
+        256,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "rogue_mark",
+      "name": "Rogue Mark",
+      "index": 29,
+      "row": 4,
+      "column": 5,
+      "rect": [
+        320,
+        256,
+        64,
+        64
+      ]
+    }
+  ]
+}

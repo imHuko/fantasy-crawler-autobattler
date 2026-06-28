@@ -1,0 +1,535 @@
+{
+  "sheet": "res://assets/icons/talents/talent_icons_sheet_green_bg.png",
+  "cell_size": 64,
+  "columns": 8,
+  "background": "#00FF00",
+  "order": [
+    {
+      "id": "gear_sharper_eye",
+      "name": "Sharper Eye",
+      "index": 0,
+      "row": 0,
+      "column": 0,
+      "rect": [
+        0,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "gear_set_seeker",
+      "name": "Set Seeker",
+      "index": 1,
+      "row": 0,
+      "column": 1,
+      "rect": [
+        64,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "gear_awakened_quality",
+      "name": "Awakened Quality",
+      "index": 2,
+      "row": 0,
+      "column": 2,
+      "rect": [
+        128,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "gear_ascendant_quality",
+      "name": "Ascendant Quality",
+      "index": 3,
+      "row": 0,
+      "column": 3,
+      "rect": [
+        192,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "gear_transcendent_quality",
+      "name": "Transcendent Quality",
+      "index": 4,
+      "row": 0,
+      "column": 4,
+      "rect": [
+        256,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "gear_salvage_mastery",
+      "name": "Salvage Mastery",
+      "index": 5,
+      "row": 0,
+      "column": 5,
+      "rect": [
+        320,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "buildings_efficient_construction",
+      "name": "Efficient Construction",
+      "index": 6,
+      "row": 0,
+      "column": 6,
+      "rect": [
+        384,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "buildings_expanded_lots",
+      "name": "Expanded Lots",
+      "index": 7,
+      "row": 0,
+      "column": 7,
+      "rect": [
+        448,
+        0,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "buildings_reinforced_towers",
+      "name": "Reinforced Towers",
+      "index": 8,
+      "row": 1,
+      "column": 0,
+      "rect": [
+        0,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "buildings_wider_reach",
+      "name": "Wider Reach",
+      "index": 9,
+      "row": 1,
+      "column": 1,
+      "rect": [
+        64,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "buildings_fortified_walls",
+      "name": "Fortified Walls",
+      "index": 10,
+      "row": 1,
+      "column": 2,
+      "rect": [
+        128,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "recruiting_talent_scout",
+      "name": "Talent Scout",
+      "index": 11,
+      "row": 1,
+      "column": 3,
+      "rect": [
+        192,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "recruiting_pick_of_the_litter",
+      "name": "Pick of the Litter",
+      "index": 12,
+      "row": 1,
+      "column": 4,
+      "rect": [
+        256,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "recruiting_cream_of_the_crop",
+      "name": "Cream of the Crop",
+      "index": 13,
+      "row": 1,
+      "column": 5,
+      "rect": [
+        320,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "recruiting_veteran_enrollment",
+      "name": "Veteran Enrollment",
+      "index": 14,
+      "row": 1,
+      "column": 6,
+      "rect": [
+        384,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "combat_hardened_ranks",
+      "name": "Hardened Ranks",
+      "index": 15,
+      "row": 1,
+      "column": 7,
+      "rect": [
+        448,
+        64,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "combat_sharpened_blades",
+      "name": "Sharpened Blades",
+      "index": 16,
+      "row": 2,
+      "column": 0,
+      "rect": [
+        0,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "combat_forced_march",
+      "name": "Forced March",
+      "index": 17,
+      "row": 2,
+      "column": 1,
+      "rect": [
+        64,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "combat_heros_resolve",
+      "name": "Hero's Resolve",
+      "index": 18,
+      "row": 2,
+      "column": 2,
+      "rect": [
+        128,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "combat_veterans_grit",
+      "name": "Veterans' Grit",
+      "index": 19,
+      "row": 2,
+      "column": 3,
+      "rect": [
+        192,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "combat_last_stand",
+      "name": "Last Stand",
+      "index": 20,
+      "row": 2,
+      "column": 4,
+      "rect": [
+        256,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "economy_bountiful_harvest",
+      "name": "Bountiful Harvest",
+      "index": 21,
+      "row": 2,
+      "column": 5,
+      "rect": [
+        320,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "economy_steady_coffers",
+      "name": "Steady Coffers",
+      "index": 22,
+      "row": 2,
+      "column": 6,
+      "rect": [
+        384,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "economy_trade_routes",
+      "name": "Trade Routes",
+      "index": 23,
+      "row": 2,
+      "column": 7,
+      "rect": [
+        448,
+        128,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "economy_guild_contracts",
+      "name": "Guild Contracts",
+      "index": 24,
+      "row": 3,
+      "column": 0,
+      "rect": [
+        0,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "economy_supply_network",
+      "name": "Supply Network",
+      "index": 25,
+      "row": 3,
+      "column": 1,
+      "rect": [
+        64,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "diplomatic_tongue",
+      "name": "Diplomatic Tongue",
+      "index": 26,
+      "row": 3,
+      "column": 2,
+      "rect": [
+        128,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "toggle_invasions",
+      "name": "Wilds Pact",
+      "index": 27,
+      "row": 3,
+      "column": 3,
+      "rect": [
+        192,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_extended_campaign",
+      "name": "Extended Campaign",
+      "index": 28,
+      "row": 3,
+      "column": 4,
+      "rect": [
+        256,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_marathon_runner",
+      "name": "Marathon Runner",
+      "index": 29,
+      "row": 3,
+      "column": 5,
+      "rect": [
+        320,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_loaded_dice",
+      "name": "Loaded Dice",
+      "index": 30,
+      "row": 3,
+      "column": 6,
+      "rect": [
+        384,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_quick_study",
+      "name": "Quick Study",
+      "index": 31,
+      "row": 3,
+      "column": 7,
+      "rect": [
+        448,
+        192,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_skill_mastery",
+      "name": "Skill Mastery",
+      "index": 32,
+      "row": 4,
+      "column": 0,
+      "rect": [
+        0,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_opening_gambit",
+      "name": "Opening Gambit",
+      "index": 33,
+      "row": 4,
+      "column": 1,
+      "rect": [
+        64,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_veteran_commander",
+      "name": "Veteran Commander",
+      "index": 34,
+      "row": 4,
+      "column": 2,
+      "rect": [
+        128,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_relentless",
+      "name": "Relentless",
+      "index": 35,
+      "row": 4,
+      "column": 3,
+      "rect": [
+        192,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_iron_will",
+      "name": "Iron Will",
+      "index": 36,
+      "row": 4,
+      "column": 4,
+      "rect": [
+        256,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_combat_drilling",
+      "name": "Combat Drilling",
+      "index": 37,
+      "row": 4,
+      "column": 5,
+      "rect": [
+        320,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_treasure_hunter",
+      "name": "Treasure Hunter",
+      "index": 38,
+      "row": 4,
+      "column": 6,
+      "rect": [
+        384,
+        256,
+        64,
+        64
+      ]
+    },
+    {
+      "id": "dungeon_spoils",
+      "name": "Dungeon Spoils",
+      "index": 39,
+      "row": 4,
+      "column": 7,
+      "rect": [
+        448,
+        256,
+        64,
+        64
+      ]
+    }
+  ],
+  "background_rules": {
+    "color": "#00FF00",
+    "uniform": true,
+    "no_gradient": true,
+    "no_shadow": true,
+    "no_glow_spill": true
+  }
+}
