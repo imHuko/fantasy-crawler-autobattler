@@ -29,6 +29,7 @@ func _apply_saved_settings() -> void:
 		DisplayServer.window_set_position((screen_size - Vector2i(width, height)) / 2)
 
 	confirm_before_disposing_gear = config.get_value("gameplay", "confirm_before_disposing_gear", true)
+	show_damage_numbers = config.get_value("gameplay", "show_damage_numbers", true)
 	mobile_mode = config.get_value("controls", "mobile_mode", false)
 
 # All gear the player has collected across runs
@@ -59,6 +60,7 @@ var invasions_enabled: bool = true   # player's own preference, only respected w
 var current_battle_zone: int = -1
 var settings_return_scene: String = ""
 var confirm_before_disposing_gear: bool = true
+var show_damage_numbers: bool = true
 var mobile_mode: bool = false   # shows on-screen D-pad in dungeon scenes; loaded from settings.cfg
 var current_attack_force: float = 1.0
 var conquering_zone: bool = false

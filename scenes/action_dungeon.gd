@@ -137,6 +137,7 @@ const MINIBOSS_GUARANTEED_RARITY_BOOST = 2    # loot rolls this many difficulty 
 const NORMAL_GOLD_DROP_CHANCE = 0.35
 const NORMAL_GOLD_MIN         = 1
 const NORMAL_GOLD_MAX         = 3
+const NORMAL_GEAR_DROP_CHANCE = 1.0 / 150.0
 
 # --- SAVE ZONE -------------------------------------------
 const SAVE_ZONE_RADIUS            = 70.0
@@ -255,6 +256,7 @@ const SKILL_POOL = [
 
 const SKILL_ICON_BASE_PATH := "res://assets/icons/action_skills/imported/"
 const SKILL_ICON_SIZE := Vector2(88, 88)
+const MAX_DISTINCT_SKILLS := 6
 
 const C_FLOOR    = Color(0.18, 0.16, 0.22)
 const C_WALL     = Color(0.30, 0.25, 0.35)
@@ -318,6 +320,7 @@ var hero_rect: UnitSprite = null
 var hud_hp: Label = null
 var hud_timer: Label = null
 var hud_gear: Label = null
+var hud_skills: Label = null
 var pause_btn: Button = null
 var is_paused: bool = false
 var enemy_rects: Array = []
@@ -489,9 +492,22 @@ func sandbox_toggle_god_mode() -> bool:
 	return _sandbox_god_mode
 
 func sandbox_skip_time(seconds: float) -> void:
+	var old_elapsed = elapsed_seconds
 	elapsed_seconds = min(elapsed_seconds + seconds, run_duration_seconds - 5.0)
+	var skipped_seconds = max(0.0, elapsed_seconds - old_elapsed)
 	if not ranged_unlocked and _scaled_minutes() >= RANGED_UNLOCK_MINUTE:
 		ranged_unlocked = true
+	# Keep the sandbox jump representative of real elapsed time. Mini-bosses
+	# are the guaranteed gear source, so a time skip must not silently bypass
+	# every mini-boss reward window the run would have crossed.
+	var remaining_skip = skipped_seconds
+	var spawned_count = 0
+	while remaining_skip >= miniboss_timer and spawned_count < 6:
+		remaining_skip -= miniboss_timer
+		_grant_miniboss_gear()
+		spawned_count += 1
+		miniboss_timer = MINIBOSS_BASE_INTERVAL_SECONDS
+	miniboss_timer = max(1.0, miniboss_timer - remaining_skip)
 	_refresh_hud()
 
 func sandbox_force_miniboss() -> void:
@@ -1350,8 +1366,7 @@ func _melee_strike(e: Dictionary, dmg: int) -> void:
 	var eidx = enemies.find(e)
 	if eidx < 0: return  # already dead/removed
 
-	e["hp"] -= dmg
-	_update_boss_bar(e)
+	_damage_enemy(e, dmg)
 	if skill_chain_lightning:
 		_trigger_chain_lightning(e, dmg)
 
@@ -1377,8 +1392,7 @@ func _melee_strike(e: Dictionary, dmg: int) -> void:
 func _damage_enemy_from_skill(e: Dictionary, dmg: int) -> void:
 	if _get_enemy_index(e) < 0:
 		return
-	e["hp"] -= dmg
-	_update_boss_bar(e)
+	_damage_enemy(e, dmg, Color(0.55, 0.85, 1.0))
 	if e["hp"] <= 0:
 		_kill_enemy(_get_enemy_index(e))
 
@@ -1517,8 +1531,7 @@ func _move_projectiles(delta: float) -> void:
 				continue
 			if p["pos"].distance_to(target["pos"]) < target["sz"] / 2 + 5:
 				var dmg = p["damage"]
-				target["hp"] -= dmg
-				_update_boss_bar(target)
+				_damage_enemy(target, dmg)
 				if skill_chain_lightning:
 					_trigger_chain_lightning(target, dmg)
 				if skill_lifesteal > 0.0:
@@ -1756,6 +1769,42 @@ func _commit_run_gold(amount: int) -> void:
 	PlayerInventory.resources["gold"] = PlayerInventory.resources.get("gold", 0) + amount
 	secured_gold += amount
 
+func _grant_miniboss_gear() -> void:
+	var diff = clamp(PlayerInventory.current_stage + MINIBOSS_GUARANTEED_RARITY_BOOST, 1, 10)
+	if PlayerInventory.dungeon_tier == "Deep Delve":
+		diff = clamp(diff + 1, 1, 10)
+	var biomes = ["crypt","forest_ruins","dragon_lair"]
+	var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
+	run_gear.append(gear)
+
+func _grant_normal_mob_gear() -> void:
+	var diff = clamp(PlayerInventory.current_stage, 1, 10)
+	var biomes = ["crypt","forest_ruins","dragon_lair"]
+	var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
+	run_gear.append(gear)
+
+func _damage_enemy(e: Dictionary, dmg: int, source_color: Color = Color(1.0, 0.95, 0.45)) -> void:
+	if _get_enemy_index(e) < 0:
+		return
+	e["hp"] -= dmg
+	_update_boss_bar(e)
+	_spawn_damage_number(e["pos"], dmg, source_color)
+
+func _spawn_damage_number(pos: Vector2, amount: int, color: Color) -> void:
+	if not PlayerInventory.show_damage_numbers or arena_node == null:
+		return
+	var lbl = Label.new()
+	lbl.text = str(amount)
+	lbl.add_theme_font_size_override("font_size", 16)
+	lbl.add_theme_color_override("font_color", color)
+	lbl.position = pos + Vector2(randf_range(-12.0, 12.0), -28.0)
+	lbl.z_index = 80
+	arena_node.add_child(lbl)
+	var tw = create_tween()
+	tw.tween_property(lbl, "position:y", lbl.position.y - 36.0, 0.55)
+	tw.parallel().tween_property(lbl, "modulate:a", 0.0, 0.55)
+	tw.tween_callback(lbl.queue_free)
+
 func _process_boss(e: Dictionary, delta: float, e_sprite: UnitSprite = null) -> void:
 	e["boss_t"] -= delta
 	e["boss_a"] += delta * 120.0
@@ -1849,14 +1898,12 @@ func _kill_enemy(idx: int) -> void:
 	# Loot: normal enemies mostly pay in Gold so long runs do not flood
 	# inventory. Mini-bosses keep the real gear drop dopamine.
 	if e["is_boss"]:
-		var diff = clamp(PlayerInventory.current_stage + (MINIBOSS_GUARANTEED_RARITY_BOOST if e["is_boss"] else 0), 1, 10)
-		if PlayerInventory.dungeon_tier == "Deep Delve":
-			diff = clamp(diff + 1, 1, 10)
-		var biomes = ["crypt","forest_ruins","dragon_lair"]
-		var gear = GearGenerator.generate(biomes[randi() % biomes.size()], diff)
-		run_gear.append(gear)
+		_grant_miniboss_gear()
 		_refresh_hud()
 	else:
+		if randf() < NORMAL_GEAR_DROP_CHANCE:
+			_grant_normal_mob_gear()
+			_refresh_hud()
 		var gold_drop_chance = min(1.0, NORMAL_GOLD_DROP_CHANCE + skill_drop_bonus)
 		if randf() < gold_drop_chance:
 			_grant_run_gold(_scaled_gold_drop_amount(randi_range(NORMAL_GOLD_MIN, NORMAL_GOLD_MAX)))
@@ -1886,6 +1933,7 @@ func _take_damage(amount: int) -> void:
 
 	hero_hp -= reduced
 	hero_hp = max(0, hero_hp)
+	_spawn_damage_number(hero_pos, reduced, Color(1.0, 0.25, 0.25))
 	invincible_timer = 0.6
 	_refresh_hud()
 
@@ -2073,6 +2121,13 @@ func _build_hud() -> void:
 	hud_level.add_theme_color_override("font_color", Color(0.55, 0.85, 1.0))
 	vbox.add_child(hud_level)
 
+	hud_skills = Label.new()
+	hud_skills.add_theme_font_size_override("font_size", 10)
+	hud_skills.add_theme_color_override("font_color", Color(0.72, 0.78, 0.95))
+	hud_skills.autowrap_mode = TextServer.AUTOWRAP_WORD
+	hud_skills.custom_minimum_size = Vector2(220, 0)
+	vbox.add_child(hud_skills)
+
 	var controls = Label.new()
 	controls.text = "Move: mouse cursor or WASD  |  P to pause"
 	controls.add_theme_font_size_override("font_size", 10)
@@ -2145,6 +2200,8 @@ func _refresh_hud() -> void:
 		hud_gear.text = "Held: %d gear / %d Gold   Banked: %d gear / %d Gold" % [run_gear.size(), run_gold_held, banked_gear.size(), banked_gold]
 	if hud_level:
 		hud_level.text = "Lv %d  XP: %d / %d" % [hero_level, hero_xp, xp_to_next]
+	if hud_skills:
+		hud_skills.text = _get_skill_summary_text()
 
 # -------------------------------------------------------
 # End states
@@ -2319,6 +2376,26 @@ func _show_end_screen(outcome: String) -> void:
 # Roguelite skill system
 # -------------------------------------------------------
 
+func _get_distinct_skill_count() -> int:
+	return skills_taken.keys().size()
+
+func _get_skill_by_id(skill_id: String) -> Dictionary:
+	for skill in SKILL_POOL:
+		if skill["id"] == skill_id:
+			return skill
+	return {}
+
+func _get_skill_summary_text() -> String:
+	if skills_taken.is_empty():
+		return "Skills: 0 / %d" % MAX_DISTINCT_SKILLS
+	var parts := PackedStringArray()
+	for skill_id in skills_taken.keys():
+		var skill = _get_skill_by_id(skill_id)
+		var display_name = skill.get("name", skill_id)
+		var stacks = int(skills_taken.get(skill_id, 0))
+		parts.append("%s %d" % [display_name, stacks])
+	return "Skills: %d / %d  %s" % [_get_distinct_skill_count(), MAX_DISTINCT_SKILLS, " | ".join(parts)]
+
 func _grant_xp(amount: int) -> void:
 	if PlayerInventory.unlocked_talents.get("dungeon_quick_study", false):
 		amount = int(ceil(amount * 1.30))
@@ -2358,6 +2435,13 @@ func _show_skill_pick() -> void:
 	title.add_theme_color_override("font_color", Color(0.95, 0.85, 0.3))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
+
+	var cap_label = Label.new()
+	cap_label.text = "Build slots: %d / %d" % [_get_distinct_skill_count(), MAX_DISTINCT_SKILLS]
+	cap_label.add_theme_font_size_override("font_size", 12)
+	cap_label.add_theme_color_override("font_color", Color(0.68, 0.74, 0.95))
+	cap_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(cap_label)
 
 	if PlayerInventory.unlocked_talents.get("dungeon_relentless", false):
 		hero_hp = min(hero_hp + 15, hero_max_hp)
@@ -2489,8 +2573,10 @@ func _load_skill_icon(skill_id: String) -> Texture2D:
 
 func _get_random_skills(count: int) -> Array:
 	var available: Array = []
+	var can_add_new_skill = _get_distinct_skill_count() < MAX_DISTINCT_SKILLS
 	for skill in SKILL_POOL:
-		if skills_taken.get(skill["id"], 0) < skill["max_stacks"]:
+		var already_taken = skills_taken.has(skill["id"])
+		if (already_taken or can_add_new_skill) and skills_taken.get(skill["id"], 0) < skill["max_stacks"]:
 			if not banished_skill_ids.has(skill["id"]) and _skill_matches_current_class(skill):
 				available.append(skill)
 	available.shuffle()
@@ -2500,6 +2586,8 @@ func _skill_matches_current_class(skill: Dictionary) -> bool:
 	return not skill.has("class") or skill["class"] == _current_class_key()
 
 func _apply_skill(skill_id: String) -> void:
+	if not skills_taken.has(skill_id) and _get_distinct_skill_count() >= MAX_DISTINCT_SKILLS:
+		return
 	skills_taken[skill_id] = skills_taken.get(skill_id, 0) + 1
 	match skill_id:
 		"swiftness":
@@ -2621,8 +2709,7 @@ func _update_orbs(delta: float) -> void:
 				hit_by_orb = true
 				break
 		if hit_by_orb:
-			e["hp"] -= orb_dmg
-			_update_boss_bar(e)
+			_damage_enemy(e, orb_dmg, Color(0.45, 0.75, 1.0))
 			if e["hp"] <= 0:
 				to_kill.append(e)
 	for enemy_to_kill in to_kill:
@@ -2750,8 +2837,7 @@ func _trigger_explosion(center: Vector2, damage: int, ignore_idx: int = -1) -> v
 		if i == ignore_idx: continue
 		var e = enemies[i]
 		if center.distance_to(e["pos"]) < radius:
-			e["hp"] -= damage
-			_update_boss_bar(e)
+			_damage_enemy(e, damage, Color(1.0, 0.55, 0.15))
 			if e["hp"] <= 0:
 				to_kill.append(e)
 	for enemy_to_kill in to_kill:

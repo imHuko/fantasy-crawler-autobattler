@@ -20,6 +20,7 @@ var height_field: LineEdit
 var fullscreen_check: CheckBox
 var borderless_check: CheckBox
 var confirm_dispose_check: CheckBox
+var damage_numbers_check: CheckBox
 var status_label: Label
 var return_target: String = "res://scenes/world_map.tscn"
 var _ui_updating: bool = false   # guard against recursive checkbox signals
@@ -168,6 +169,19 @@ func _build_ui() -> void:
 	confirm_label.text = "Always confirm before selling or salvaging gear"
 	confirm_hbox.add_child(confirm_label)
 
+	var damage_hbox = HBoxContainer.new()
+	damage_hbox.add_theme_constant_override("separation", 8)
+	outer.add_child(damage_hbox)
+
+	damage_numbers_check = CheckBox.new()
+	damage_numbers_check.button_pressed = PlayerInventory.show_damage_numbers
+	damage_numbers_check.toggled.connect(_on_damage_numbers_toggled)
+	damage_hbox.add_child(damage_numbers_check)
+
+	var damage_label = Label.new()
+	damage_label.text = "Show damage numbers in action dungeons"
+	damage_hbox.add_child(damage_label)
+
 	outer.add_child(HSeparator.new())
 
 	# --- Controls ---
@@ -302,6 +316,10 @@ func _on_confirm_dispose_toggled(is_on: bool) -> void:
 	PlayerInventory.confirm_before_disposing_gear = is_on
 	_save_settings()
 
+func _on_damage_numbers_toggled(is_on: bool) -> void:
+	PlayerInventory.show_damage_numbers = is_on
+	_save_settings()
+
 func _on_mobile_mode_toggled(is_on: bool) -> void:
 	PlayerInventory.mobile_mode = is_on
 	_save_settings()
@@ -314,6 +332,7 @@ func _save_settings() -> void:
 	config.set_value("display", "fullscreen", DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN)
 	config.set_value("display", "borderless", DisplayServer.window_get_flag(DisplayServer.WINDOW_FLAG_BORDERLESS))
 	config.set_value("gameplay", "confirm_before_disposing_gear", PlayerInventory.confirm_before_disposing_gear)
+	config.set_value("gameplay", "show_damage_numbers", PlayerInventory.show_damage_numbers)
 	config.set_value("controls", "mobile_mode", PlayerInventory.mobile_mode)
 	config.save(CONFIG_PATH)
 
