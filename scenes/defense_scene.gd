@@ -601,20 +601,38 @@ const ENEMY_ARCHETYPES = {
 	"CHARGER": { "hp_mult": 0.4,  "dmg_mult": 1.8,  "speed_mult": 2.4,  "color": Color(0.9, 0.45, 0.1), "symbol": "✹", "label": "Charger" },
 }
 
-# Which UnitSprite art each enemy archetype displays as — mirrors the
-# same mapping used in the action dungeon for MELEE/RANGED/CHARGER/BUFFER,
-# so a given creature reads the same way in both modes. TANK gets Bull
-# (heavy/tough fits the role). ROGUE and BOSS have no dedicated forest
-# art yet, so they're left out here entirely and fall back to the
-# procedural shape (ENEMY_BASIC / ENEMY_BOSS) until/unless art is added
-# for them specifically — same "swap in gradually" pattern as everywhere
-# else in UnitSprite.
-const ARCHETYPE_UNIT_TYPES = {
-	"MELEE":   UnitSprite.UnitType.TREANT,
-	"TANK":    UnitSprite.UnitType.BULL,
-	"RANGED":  UnitSprite.UnitType.FAERIE,
-	"CHARGER": UnitSprite.UnitType.SPORE_BOMBER,
-	"BUFFER":  UnitSprite.UnitType.ANCIENT_TOTEM,
+# TinyRPG enemy art. Defense keeps its behavior labels for balance and
+# wave preview, but every enemy now reads as part of an orc village.
+const TINY_RPG_CHARACTER_ROOT := "res://art/sprites/TinyRPGChars/Characters(100x100 split)/"
+const TINY_RPG_ENEMY_ART = {
+	"MELEE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc/Orc/",
+		"name": "Orc",
+	},
+	"TANK": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Armored Orc/Armored Orc/",
+		"name": "Armored Orc",
+	},
+	"RANGED": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Elite Orc/Elite Orc/",
+		"name": "Elite Orc",
+	},
+	"ROGUE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc rider/Orc rider/",
+		"name": "Orc rider",
+	},
+	"CHARGER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc rider/Orc rider/",
+		"name": "Orc rider",
+	},
+	"BUFFER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Elite Orc/Elite Orc/",
+		"name": "Elite Orc",
+	},
+	"BOSS": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Armored Orc/Armored Orc/",
+		"name": "Armored Orc",
+	},
 }
 const RANGED_ATTACK_RANGE = 260.0
 const CHARGER_BURST_RANGE = 50.0
@@ -819,8 +837,10 @@ func _spawn_one_enemy(stage: int, archetype: String, spawn_pos: Vector2) -> void
 
 	var rect = UnitSprite.new()
 	var sprite_color = Color(1, 0.2, 0.1) if is_boss else profile["color"]
-	var enemy_unit_type = UnitSprite.UnitType.ENEMY_BOSS if is_boss else ARCHETYPE_UNIT_TYPES.get(archetype, UnitSprite.UnitType.ENEMY_BASIC)
-	rect.setup(enemy_unit_type, sprite_color, sz)
+	var enemy_art = TINY_RPG_ENEMY_ART.get("BOSS" if is_boss else archetype, TINY_RPG_ENEMY_ART["MELEE"])
+	var fallback_unit_type = UnitSprite.UnitType.ENEMY_BOSS if is_boss else UnitSprite.UnitType.ENEMY_BASIC
+	if not rect.setup_from_tiny_rpg_folder(enemy_art["folder"], enemy_art["name"], sprite_color, sz, fallback_unit_type):
+		rect.setup(fallback_unit_type, sprite_color, sz)
 	rect.position = Vector2(ex - sz/2, ey - sz/2)
 	field_node.add_child(rect)
 

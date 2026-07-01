@@ -82,6 +82,37 @@ func setup(p_unit_type: int, p_color: Color, p_size: float = 28.0) -> void:
 	_setup_sprite_if_available()
 	queue_redraw()
 
+func setup_from_folder(folder_path: String, p_color: Color, p_size: float = 28.0) -> void:
+	unit_type = UnitType.ENEMY_BASIC
+	base_color = p_color
+	unit_size = p_size
+	if _anim_sprite:
+		_anim_sprite.queue_free()
+		_anim_sprite = null
+	_has_walk_anim = false
+	_has_attack_anim = false
+	var frames := _build_indexed_sprite_frames(folder_path)
+	if frames != null:
+		_apply_sprite_frames(frames, folder_path)
+	queue_redraw()
+
+func setup_from_tiny_rpg_folder(folder_path: String, character_name: String, p_color: Color, p_size: float = 28.0, p_unit_type: int = UnitType.HERO) -> bool:
+	unit_type = p_unit_type
+	base_color = p_color
+	unit_size = p_size
+	if _anim_sprite:
+		_anim_sprite.queue_free()
+		_anim_sprite = null
+	_has_walk_anim = false
+	_has_attack_anim = false
+	var frames := _build_tiny_rpg_sprite_frames(folder_path, character_name)
+	if frames == null:
+		queue_redraw()
+		return false
+	_apply_sprite_frames(frames, folder_path + character_name)
+	queue_redraw()
+	return true
+
 func _load_texture(path: String) -> Texture2D:
 	if not FileAccess.file_exists(path):
 		return null
@@ -169,6 +200,92 @@ func _build_legacy_sprite_frames(key: String) -> SpriteFrames:
 	for i in range(1, 3):
 		var p = LEGACY_FRAME_FOLDER + key + "_attack%d.png" % i
 		var texture = _load_texture(p)
+		if texture != null:
+			frames.add_frame("attack", texture)
+			_has_attack_anim = true
+	if not _has_attack_anim:
+		frames.remove_animation("attack")
+
+	return frames
+
+func _build_tiny_rpg_sprite_frames(folder_path: String, character_name: String) -> SpriteFrames:
+	var idle_texture = _load_tiny_rpg_texture(folder_path, character_name, "Idle")
+	if idle_texture == null:
+		return null
+
+	var frames = SpriteFrames.new()
+	frames.add_animation("idle")
+	frames.set_animation_loop("idle", true)
+	_add_strip_frames(frames, "idle", idle_texture, 100, 100)
+
+	_has_walk_anim = false
+	var walk_texture = _load_tiny_rpg_texture(folder_path, character_name, "Walk")
+	if walk_texture != null:
+		frames.add_animation("walk")
+		frames.set_animation_loop("walk", true)
+		frames.set_animation_speed("walk", 10.0)
+		_add_strip_frames(frames, "walk", walk_texture, 100, 100)
+		_has_walk_anim = frames.get_frame_count("walk") > 0
+
+	_has_attack_anim = false
+	frames.add_animation("attack")
+	frames.set_animation_loop("attack", false)
+	frames.set_animation_speed("attack", 12.0)
+	for attack_name in ["Attack01", "Attack02", "Attack03", "Attack", "Attack3"]:
+		var attack_texture = _load_tiny_rpg_texture(folder_path, character_name, attack_name)
+		if attack_texture != null:
+			_add_strip_frames(frames, "attack", attack_texture, 100, 100)
+	_has_attack_anim = frames.get_frame_count("attack") > 0
+	if not _has_attack_anim:
+		frames.remove_animation("attack")
+
+	return frames
+
+func _load_tiny_rpg_texture(folder_path: String, character_name: String, animation_name: String) -> Texture2D:
+	for separator in ["_", "-"]:
+		var texture = _load_texture(folder_path + character_name + separator + animation_name + ".png")
+		if texture != null:
+			return texture
+	return null
+
+func _add_strip_frames(frames: SpriteFrames, animation_name: String, texture: Texture2D, frame_width: int, frame_height: int) -> void:
+	if texture == null or frame_width <= 0 or frame_height <= 0:
+		return
+	var frame_count = int(texture.get_width() / frame_width)
+	for i in range(frame_count):
+		var atlas = AtlasTexture.new()
+		atlas.atlas = texture
+		atlas.region = Rect2(i * frame_width, 0, frame_width, frame_height)
+		frames.add_frame(animation_name, atlas)
+
+func _build_indexed_sprite_frames(folder_path: String) -> SpriteFrames:
+	var idle_texture = _load_texture(folder_path + "frame_0.png")
+	if idle_texture == null:
+		return null
+
+	var frames = SpriteFrames.new()
+	frames.add_animation("idle")
+	frames.set_animation_loop("idle", true)
+	frames.add_frame("idle", idle_texture)
+
+	_has_walk_anim = false
+	frames.add_animation("walk")
+	frames.set_animation_loop("walk", true)
+	frames.set_animation_speed("walk", 8.0)
+	for i in range(1, 5):
+		var texture = _load_texture(folder_path + "frame_%d.png" % i)
+		if texture != null:
+			frames.add_frame("walk", texture)
+			_has_walk_anim = true
+	if not _has_walk_anim:
+		frames.remove_animation("walk")
+
+	_has_attack_anim = false
+	frames.add_animation("attack")
+	frames.set_animation_loop("attack", false)
+	frames.set_animation_speed("attack", 10.0)
+	for i in [3, 4]:
+		var texture = _load_texture(folder_path + "frame_%d.png" % i)
 		if texture != null:
 			frames.add_frame("attack", texture)
 			_has_attack_anim = true

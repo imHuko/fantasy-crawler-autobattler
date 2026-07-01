@@ -107,6 +107,10 @@ const ROUTE_SPAWN_SIDE_OFFSET_MAX = 620.0
 const EXTRACTION_GUARD_START_SECONDS = 45.0
 const EXTRACTION_GUARD_COUNT     = 4
 const EXTRACTION_GUARD_RADIUS    = 260.0
+const CAMERA_ZOOM_DEFAULT        = 1.35   # >1 zooms in around the commander
+const CAMERA_ZOOM_MIN            = 0.85
+const CAMERA_ZOOM_MAX            = 2.20
+const CAMERA_ZOOM_STEP           = 0.12
 
 # --- EXPEDITION SCALING ----------------------------------
 # These make later stages / deeper dungeon tiers feel like longer, more
@@ -199,13 +203,30 @@ const SKILL_ROGUE_MARK_DAMAGE      = 0.60
 # END BALANCE TUNING
 # =========================================================
 
-# Art mappings — which UnitSprite type each archetype/class displays as.
-const ARCHETYPE_UNIT_TYPES = {
-	"MELEE":   UnitSprite.UnitType.TREANT,
-	"BULL":    UnitSprite.UnitType.BULL,
-	"CHARGER": UnitSprite.UnitType.SPORE_BOMBER,
-	"RANGED":  UnitSprite.UnitType.FAERIE,
-	"BUFFER":  UnitSprite.UnitType.ANCIENT_TOTEM,
+# TinyRPG character art. Enemy behavior still uses the balance archetype keys
+# internally, but every dungeon now reads as an orc-village raid visually.
+const TINY_RPG_CHARACTER_ROOT := "res://art/sprites/TinyRPGChars/Characters(100x100 split)/"
+const TINY_RPG_ENEMY_ART = {
+	"MELEE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc/Orc/",
+		"name": "Orc",
+	},
+	"BULL": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Armored Orc/Armored Orc/",
+		"name": "Armored Orc",
+	},
+	"CHARGER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc rider/Orc rider/",
+		"name": "Orc rider",
+	},
+	"RANGED": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Elite Orc/Elite Orc/",
+		"name": "Elite Orc",
+	},
+	"BUFFER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Elite Orc/Elite Orc/",
+		"name": "Elite Orc",
+	},
 }
 const CLASS_UNIT_TYPES = {
 	"KNIGHT": UnitSprite.UnitType.KNIGHT,
@@ -213,6 +234,28 @@ const CLASS_UNIT_TYPES = {
 	"MAGE":   UnitSprite.UnitType.MAGE,
 	"HEALER": UnitSprite.UnitType.HEALER,
 	"ROGUE":  UnitSprite.UnitType.ROGUE,
+}
+const TINY_RPG_COMMANDER_ART = {
+	"KNIGHT": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Knight/Knight/",
+		"name": "Knight",
+	},
+	"ARCHER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Archer/Archer/",
+		"name": "Archer",
+	},
+	"MAGE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Wizard/Wizard/",
+		"name": "Wizard",
+	},
+	"HEALER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Priest/Priest/",
+		"name": "Priest",
+	},
+	"ROGUE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Swordsman/Swordsman/",
+		"name": "Swordsman",
+	},
 }
 
 # =========================================================
@@ -264,9 +307,11 @@ const C_HERO     = Color(0.30, 0.70, 1.00)
 
 # Sprite size tuning. Change these values when the art feels too small/big.
 # Hitbox size is gameplay. Sprite size is visuals only.
-const HERO_SPRITE_SIZE: float = 96.0
+const HERO_SPRITE_SIZE: float = 192.0
 const ENEMY_HITBOX_SIZE: float = 28.0
-const ENEMY_SPRITE_SIZE: float = 56.0
+const ENEMY_SPRITE_SIZE: float = 224.0
+const PROJECTILE_VISUAL_SCALE: float = 1.0
+const ORB_VISUAL_SIZE: float = 24.0
 
 const C_PROJ_H   = Color(0.50, 0.90, 1.00)
 const C_PROJ_E   = Color(1.00, 0.55, 0.10)
@@ -328,6 +373,7 @@ var hero_proj_rects: Array = []
 var enemy_proj_rects: Array = []
 
 var camera: Camera2D = null
+var camera_zoom_level: float = CAMERA_ZOOM_DEFAULT
 
 var run_duration_seconds: float = 600.0   # set from PlayerInventory.dungeon_duration_seconds in _ready(); this default only matters if the dungeon is entered without going through the picker
 var elapsed_seconds: float = 0.0
@@ -574,12 +620,18 @@ func sandbox_get_run_stats() -> Dictionary:
 func _setup_camera() -> void:
 	camera = Camera2D.new()
 	camera.position = hero_pos
+	camera.zoom = Vector2(camera_zoom_level, camera_zoom_level)
 	camera.limit_left = 0
 	camera.limit_top = 0
 	camera.limit_right = ARENA_W
 	camera.limit_bottom = ARENA_H
 	camera.enabled = true
 	add_child(camera)
+
+func _set_camera_zoom(value: float) -> void:
+	camera_zoom_level = clamp(value, CAMERA_ZOOM_MIN, CAMERA_ZOOM_MAX)
+	if camera:
+		camera.zoom = Vector2(camera_zoom_level, camera_zoom_level)
 
 # -------------------------------------------------------
 # Arena
@@ -732,8 +784,10 @@ func _build_hero_rect() -> void:
 		hero_rect.queue_free()
 	hero_rect = UnitSprite.new()
 	var class_key = _sandbox_class_override if _sandbox_class_override != "" else PlayerInventory.commander_class
-	var hero_unit_type = CLASS_UNIT_TYPES.get(class_key, UnitSprite.UnitType.HERO)
-	hero_rect.setup(hero_unit_type, Color.WHITE, HERO_SPRITE_SIZE)
+	var tiny_rpg_art = TINY_RPG_COMMANDER_ART.get(class_key, {})
+	if tiny_rpg_art.is_empty() or not hero_rect.setup_from_tiny_rpg_folder(tiny_rpg_art["folder"], tiny_rpg_art["name"], Color.WHITE, HERO_SPRITE_SIZE):
+		var hero_unit_type = CLASS_UNIT_TYPES.get(class_key, UnitSprite.UnitType.HERO)
+		hero_rect.setup(hero_unit_type, Color.WHITE, HERO_SPRITE_SIZE)
 	arena_node.add_child(hero_rect)
 	hero_rect.position = hero_pos - Vector2(HERO_SPRITE_SIZE / 2, HERO_SPRITE_SIZE / 2)
 
@@ -1014,7 +1068,7 @@ func _pick_wave_spawn_position() -> Vector2:
 func _pick_screen_edge_spawn_position() -> Vector2:
 	var viewport_size = get_viewport_rect().size
 	var zoom = camera.zoom if camera else Vector2.ONE
-	var half_view = Vector2(viewport_size.x * zoom.x, viewport_size.y * zoom.y) * 0.5
+	var half_view = Vector2(viewport_size.x / zoom.x, viewport_size.y / zoom.y) * 0.5
 	var side = randi() % 4
 	var pos = hero_pos
 	match side:
@@ -1064,6 +1118,9 @@ func _get_enemy_hitbox_size(is_miniboss: bool) -> float:
 func _get_enemy_sprite_size(is_miniboss: bool) -> float:
 	return ENEMY_SPRITE_SIZE * (MINIBOSS_EMPOWERED_SIZE_MULT if is_miniboss else 1.0)
 
+func _get_enemy_art(archetype: String) -> Dictionary:
+	return TINY_RPG_ENEMY_ART.get(archetype, TINY_RPG_ENEMY_ART["MELEE"])
+
 func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale: float, dmg_scale: float, speed_scale: float, is_miniboss: bool, miniboss_unique: bool = false, spawn_pos = null) -> void:
 	var profile = ARENA_ARCHETYPES.get(archetype, ARENA_ARCHETYPES["MELEE"])
 
@@ -1090,24 +1147,27 @@ func _spawn_one_enemy(archetype: String, stage: int, tier_mult: float, hp_scale:
 		display_color = Color(1.0, 0.1, 0.1) if miniboss_unique else display_color.lightened(0.3)
 
 	var erect = UnitSprite.new()
-	var enemy_unit_type = ARCHETYPE_UNIT_TYPES.get(archetype, UnitSprite.UnitType.ENEMY_BASIC)
-	erect.setup(enemy_unit_type, display_color, visual_sz)
+	var enemy_art = _get_enemy_art(archetype)
+	if not erect.setup_from_tiny_rpg_folder(enemy_art["folder"], enemy_art["name"], display_color, visual_sz, UnitSprite.UnitType.ENEMY_BASIC):
+		erect.setup(UnitSprite.UnitType.ENEMY_BASIC, display_color, visual_sz)
 	erect.position = epos - Vector2(visual_sz/2, visual_sz/2)
 	arena_node.add_child(erect)
 
 	var hp_bar_bg = null
 	var hp_bar = null
 	if is_miniboss:
+		var hp_bar_width = max(80.0, visual_sz * 0.8)
+		var hp_bar_pos = epos - Vector2(hp_bar_width / 2.0, visual_sz / 2.0 + 16.0)
 		hp_bar_bg = ColorRect.new()
-		hp_bar_bg.size = Vector2(80, 8)
+		hp_bar_bg.size = Vector2(hp_bar_width, 8)
 		hp_bar_bg.color = Color(0.3, 0.1, 0.1)
-		hp_bar_bg.position = epos - Vector2(40, sz/2 + 16)
+		hp_bar_bg.position = hp_bar_pos
 		arena_node.add_child(hp_bar_bg)
 
 		hp_bar = ColorRect.new()
-		hp_bar.size = Vector2(80, 8)
+		hp_bar.size = Vector2(hp_bar_width, 8)
 		hp_bar.color = Color(0.9, 0.2, 0.2)
-		hp_bar.position = epos - Vector2(40, sz/2 + 16)
+		hp_bar.position = hp_bar_pos
 		arena_node.add_child(hp_bar)
 
 	var e = {
@@ -1430,13 +1490,15 @@ func _uses_arrow_projectile(is_hero: bool) -> bool:
 func _create_projectile_visual(is_hero: bool, dir: Vector2):
 	if not _uses_arrow_projectile(is_hero):
 		var rect = ColorRect.new()
-		rect.size = Vector2(10, 10)
+		var square_size = 10.0 * PROJECTILE_VISUAL_SCALE
+		rect.size = Vector2(square_size, square_size)
 		rect.color = C_PROJ_H if is_hero else C_PROJ_E
-		rect.position = -Vector2(5, 5)
+		rect.position = -Vector2(square_size / 2.0, square_size / 2.0)
 		return rect
 
 	var arrow = Node2D.new()
 	arrow.rotation = dir.angle()
+	arrow.scale = Vector2(PROJECTILE_VISUAL_SCALE, PROJECTILE_VISUAL_SCALE)
 	arrow.z_index = 30
 
 	var shaft = Line2D.new()
@@ -1852,7 +1914,8 @@ func _process_boss(e: Dictionary, delta: float, e_sprite: UnitSprite = null) -> 
 func _update_boss_bar(e: Dictionary) -> void:
 	if e["hp_bar"] == null or not is_instance_valid(e["hp_bar"]): return
 	var pct = float(e["hp"]) / float(e["max_hp"])
-	e["hp_bar"].size.x = 80.0 * pct
+	var full_width = e["hp_bar_bg"].size.x if e["hp_bar_bg"] != null and is_instance_valid(e["hp_bar_bg"]) else 80.0
+	e["hp_bar"].size.x = full_width * pct
 
 func _kill_enemy(idx: int) -> void:
 	if idx < 0 or idx >= enemies.size():
@@ -2014,9 +2077,10 @@ func _update_visuals() -> void:
 			var visual_sz = e.get("visual_sz", e["sz"])
 			er.position = e["pos"] - Vector2(visual_sz/2, visual_sz/2)
 		if e["hp_bar"] != null and is_instance_valid(e["hp_bar"]):
-			e["hp_bar"].position = e["pos"] - Vector2(40, 44)
+			var hp_bar_width = e["hp_bar_bg"].size.x if e["hp_bar_bg"] != null and is_instance_valid(e["hp_bar_bg"]) else 80.0
+			e["hp_bar"].position = e["pos"] - Vector2(hp_bar_width / 2.0, e.get("visual_sz", e["sz"]) / 2.0 + 16.0)
 		if e["hp_bar_bg"] != null and is_instance_valid(e["hp_bar_bg"]):
-			e["hp_bar_bg"].position = e["pos"] - Vector2(40, 44)
+			e["hp_bar_bg"].position = e["pos"] - Vector2(e["hp_bar_bg"].size.x / 2.0, e.get("visual_sz", e["sz"]) / 2.0 + 16.0)
 
 	for i in range(min(hero_projs.size(), hero_proj_rects.size())):
 		var pr = hero_proj_rects[i]
@@ -2025,12 +2089,12 @@ func _update_visuals() -> void:
 				pr.position = hero_projs[i]["pos"]
 				pr.rotation = hero_projs[i]["dir"].angle()
 			else:
-				pr.position = hero_projs[i]["pos"] - Vector2(5,5)
+				pr.position = hero_projs[i]["pos"] - Vector2.ONE * (10.0 * PROJECTILE_VISUAL_SCALE * 0.5)
 
 	for i in range(min(enemy_projs.size(), enemy_proj_rects.size())):
 		var pr = enemy_proj_rects[i]
 		if is_instance_valid(pr):
-			pr.position = enemy_projs[i]["pos"] - Vector2(5,5)
+			pr.position = enemy_projs[i]["pos"] - Vector2.ONE * (10.0 * PROJECTILE_VISUAL_SCALE * 0.5)
 
 	_update_extraction_indicator()
 
@@ -2045,7 +2109,7 @@ func _update_extraction_indicator() -> void:
 	var dir = to_zone.normalized() if dist > 0.01 else Vector2.RIGHT
 
 	var zoom = camera.zoom if camera else Vector2.ONE
-	var zone_screen = screen_center + Vector2(to_zone.x / zoom.x, to_zone.y / zoom.y)
+	var zone_screen = screen_center + Vector2(to_zone.x * zoom.x, to_zone.y * zoom.y)
 	var min_pos = Vector2(EXTRACTION_INDICATOR_EDGE_PADDING, EXTRACTION_INDICATOR_EDGE_PADDING)
 	var max_pos = viewport_size - min_pos
 	var zone_on_screen = (
@@ -2057,7 +2121,7 @@ func _update_extraction_indicator() -> void:
 	if not extraction_indicator.visible:
 		return
 
-	var scaled_dir = Vector2(dir.x / zoom.x, dir.y / zoom.y).normalized()
+	var scaled_dir = Vector2(dir.x * zoom.x, dir.y * zoom.y).normalized()
 	var edge_radius = min(
 		(screen_center.x - EXTRACTION_INDICATOR_EDGE_PADDING) / max(0.001, abs(scaled_dir.x)) if abs(scaled_dir.x) > 0.001 else INF,
 		(screen_center.y - EXTRACTION_INDICATOR_EDGE_PADDING) / max(0.001, abs(scaled_dir.y)) if abs(scaled_dir.y) > 0.001 else INF
@@ -2078,6 +2142,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_P:
 			_toggle_pause()
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_UP:
+		_set_camera_zoom(camera_zoom_level + CAMERA_ZOOM_STEP)
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		_set_camera_zoom(camera_zoom_level - CAMERA_ZOOM_STEP)
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		if not game_over and not is_paused:
 			_mouse_target = get_global_mouse_position()
@@ -2199,7 +2267,7 @@ func _refresh_hud() -> void:
 	if hud_gear:
 		hud_gear.text = "Held: %d gear / %d Gold   Banked: %d gear / %d Gold" % [run_gear.size(), run_gold_held, banked_gear.size(), banked_gold]
 	if hud_level:
-		hud_level.text = "Lv %d  XP: %d / %d" % [hero_level, hero_xp, xp_to_next]
+		hud_level.text = "Lv %d  XP: %d / %d  Kills: %d" % [hero_level, hero_xp, xp_to_next, kill_count]
 	if hud_skills:
 		hud_skills.text = _get_skill_summary_text()
 
@@ -2676,7 +2744,7 @@ func _rebuild_orb_rects() -> void:
 	skill_orb_rects.clear()
 	for i in range(skill_orb_count):
 		var orb = ColorRect.new()
-		orb.size = Vector2(12, 12)
+		orb.size = Vector2(ORB_VISUAL_SIZE, ORB_VISUAL_SIZE)
 		orb.color = Color(0.35, 0.65, 1.0, 0.95)
 		arena_node.add_child(orb)
 		skill_orb_rects.append(orb)
@@ -2691,7 +2759,7 @@ func _update_orbs(delta: float) -> void:
 		var angle = deg_to_rad(skill_orb_angle + (360.0 / skill_orb_count) * i)
 		var orb_pos = hero_pos + Vector2(cos(angle), sin(angle)) * orb_radius
 		if is_instance_valid(skill_orb_rects[i]):
-			skill_orb_rects[i].position = orb_pos - Vector2(6, 6)
+			skill_orb_rects[i].position = orb_pos - Vector2.ONE * (ORB_VISUAL_SIZE * 0.5)
 
 	# Hit detection on a rolling cooldown so orbs don't melt enemies instantly
 	if skill_orb_hit_timer > 0:

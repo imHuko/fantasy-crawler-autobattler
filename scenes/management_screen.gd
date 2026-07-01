@@ -354,6 +354,8 @@ func _build_ui() -> void:
 			SaveManager.save_game()
 			get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")
 			return
+		PlayerInventory.current_dungeon_zone_id = -1
+		PlayerInventory.current_dungeon_zone_type = "dungeon"
 		SaveManager.save_game()
 		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/action_dungeon.tscn")
 		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))

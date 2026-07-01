@@ -29,6 +29,8 @@ func save_game() -> void:
 		"difficulty_settings": PlayerInventory.difficulty_settings,
 		"invasions_enabled": PlayerInventory.invasions_enabled,
 		"dungeon_tier": PlayerInventory.dungeon_tier,
+		"current_dungeon_zone_id": PlayerInventory.current_dungeon_zone_id,
+		"current_dungeon_zone_type": PlayerInventory.current_dungeon_zone_type,
 		"tutorial_complete": PlayerInventory.tutorial_complete,
 		"tutorial_active": PlayerInventory.tutorial_active,
 		"tutorial_step_index": PlayerInventory.tutorial_step_index,
@@ -120,6 +122,8 @@ func load_game() -> void:
 	PlayerInventory.difficulty_settings = data.get("difficulty_settings", PlayerInventory.difficulty_settings)
 	PlayerInventory.invasions_enabled = data.get("invasions_enabled", true)
 	PlayerInventory.dungeon_tier = data.get("dungeon_tier", "Standard")
+	PlayerInventory.current_dungeon_zone_id = int(data.get("current_dungeon_zone_id", -1))
+	PlayerInventory.current_dungeon_zone_type = data.get("current_dungeon_zone_type", "dungeon")
 	PlayerInventory.tutorial_complete = data.get("tutorial_complete", false)
 	PlayerInventory.tutorial_active = data.get("tutorial_active", false)
 	PlayerInventory.tutorial_step_index = data.get("tutorial_step_index", 0)
@@ -199,6 +203,8 @@ func load_game() -> void:
 func new_game() -> void:
 	PlayerInventory.current_stage = 1
 	PlayerInventory.unlocked_troop_slots = 3
+	PlayerInventory.current_dungeon_zone_id = -1
+	PlayerInventory.current_dungeon_zone_type = "dungeon"
 	PlayerInventory.commander_gear = {"WEAPON": null, "RING": null}
 	PlayerInventory.gear_inventory.clear()
 	PlayerInventory.troop_roster.clear()

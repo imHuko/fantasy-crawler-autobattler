@@ -69,6 +69,8 @@ var conquering_zone: bool = false
 # the same as the map's Easy/Normal/Hard/Nightmare difficulty above.
 var dungeon_tier: String = "Standard"   # "Quick", "Standard", "Deep Delve"
 var dungeon_duration_seconds: float = 600.0   # how long the next survival run should last, set by the duration picker
+var current_dungeon_zone_id: int = -1
+var current_dungeon_zone_type: String = "dungeon"
 var commander_class: String = "ARCHER"   # class profile the Commander uses in dungeon runs
 var commander_gear: Dictionary = {
 	"WEAPON": null,
@@ -198,12 +200,16 @@ func get_gear_by_slot(slot: GearItem.Slot) -> Array:
 # Troop Management
 # -------------------------------------------------------
 
-func add_troop(troop: TroopData) -> void:
+func has_open_troop_slot() -> bool:
+	return troop_roster.size() < unlocked_troop_slots
+
+func add_troop(troop: TroopData) -> bool:
 	if troop_roster.size() < unlocked_troop_slots:
 		troop_roster.append(troop)
 		print("[Inventory] Added troop: ", troop.troop_name)
-	else:
-		print("[Inventory] Cannot add troop — all slots filled.")
+		return true
+	print("[Inventory] Cannot add troop — all slots filled.")
+	return false
 
 func unlock_troop_slot() -> void:
 	unlocked_troop_slots += 1

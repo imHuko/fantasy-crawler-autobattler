@@ -904,7 +904,7 @@ func _refresh_side_panel_overview(zone_id: int) -> void:
 			sp_action_container.add_child(no_troop_hint)
 		else:
 			_add_sp_action_btn("Explore  (%s)" % explore_tier, Color(0.65, 0.3, 0.9),
-				_on_explore.bind(explore_tier))
+				_on_explore.bind(zone["id"], explore_tier))
 	elif zone["owner"] == "neutral":
 		var adj = _is_adjacent_to_player(zone["id"]) or zone["id"] == 0
 		if adj:
@@ -1340,10 +1340,15 @@ func _get_explore_tier(zone_id: int) -> String:
 	else:
 		return "Deep Delve"
 
-func _on_explore(tier: String) -> void:
-	PlayerInventory.dungeon_tier = tier
+func _on_explore(zone_id: int, suggested_tier: String) -> void:
+	var zone = zones[zone_id]
+	PlayerInventory.dungeon_tier = suggested_tier
+	PlayerInventory.current_stage = zone["enemy_strength"]
+	PlayerInventory.current_dungeon_zone_id = zone_id
+	PlayerInventory.current_dungeon_zone_type = zone["type"]
+	PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/action_dungeon.tscn")
 	SaveManager.save_game()
-	get_tree().change_scene_to_file("res://scenes/action_dungeon.tscn")
+	get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn")
 
 func _get_troop_type_by_id(troop_id: String) -> String:
 	for troop in PlayerInventory.troop_roster:

@@ -10,6 +10,7 @@ extends Control
 var resource_label: Label = null
 var status_label: Label = null
 var recruit_choices_container: VBoxContainer = null
+var recruit_btn: Button = null
 var tutorial_back_btn: Button = null   # "Back to Management" button — exposed so the nav reminder can highlight it
 
 const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/generated_troops_fixed96/frames/"
@@ -75,16 +76,8 @@ func _build_ui() -> void:
 	recruit_desc.autowrap_mode = TextServer.AUTOWRAP_WORD
 	outer.add_child(recruit_desc)
 
-	var recruit_btn = Button.new()
-	var rcost = SaveManager.get_effective_recruit_cost()
-	var choice_count = SaveManager.get_recruit_choice_count()
-	var btn_label = "Recruit  (🪙 %d)" % rcost
-	if choice_count > 1:
-		btn_label = "Recruit — choose 1 of %d  (🪙 %d)" % [choice_count, rcost]
-	if PlayerInventory.tutorial_active:
-		btn_label = "Recruit locked during tutorial"
-		recruit_btn.disabled = true
-	recruit_btn.text = btn_label
+	recruit_btn = Button.new()
+	_refresh_recruit_button()
 	recruit_btn.custom_minimum_size = Vector2(0, 48)
 	recruit_btn.add_theme_font_size_override("font_size", 14)
 	recruit_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.4))
@@ -108,14 +101,39 @@ func _build_ui() -> void:
 	tutorial_back_btn = back_btn
 
 func _refresh_resource_label() -> void:
-	resource_label.text = "🌾 Food: %d      🪙 Gold: %d" % [
+	resource_label.text = "🌾 Food: %d      🪙 Gold: %d      Troops: %d / %d" % [
 		PlayerInventory.resources.get("food", 0),
 		PlayerInventory.resources.get("gold", 0),
+		PlayerInventory.troop_roster.size(),
+		PlayerInventory.unlocked_troop_slots,
 	]
+
+func _refresh_recruit_button() -> void:
+	if recruit_btn == null:
+		return
+	var rcost = SaveManager.get_effective_recruit_cost()
+	var choice_count = SaveManager.get_recruit_choice_count()
+	var btn_label = "Recruit  (🪙 %d)" % rcost
+	if choice_count > 1:
+		btn_label = "Recruit — choose 1 of %d  (🪙 %d)" % [choice_count, rcost]
+	recruit_btn.disabled = false
+	if PlayerInventory.tutorial_active:
+		btn_label = "Recruit locked during tutorial"
+		recruit_btn.disabled = true
+	elif not PlayerInventory.has_open_troop_slot():
+		btn_label = "Roster full  (%d / %d)" % [PlayerInventory.troop_roster.size(), PlayerInventory.unlocked_troop_slots]
+		recruit_btn.disabled = true
+	elif not PlayerInventory.can_afford({"gold": rcost}):
+		btn_label = "Need %d Gold" % rcost
+		recruit_btn.disabled = true
+	recruit_btn.text = btn_label
 
 func _on_recruit_pressed() -> void:
 	if PlayerInventory.tutorial_active:
 		_set_status("Recruiting unlocks after the tutorial.")
+		return
+	if not PlayerInventory.has_open_troop_slot():
+		_set_status("No troop slots available. Unlock or free a slot before recruiting.")
 		return
 
 	var cost_total = SaveManager.get_effective_recruit_cost()
@@ -142,6 +160,7 @@ func _on_recruit_pressed() -> void:
 
 	_show_recruit_choices(candidates)
 	_refresh_resource_label()
+	_refresh_recruit_button()
 
 func _show_recruit_choices(candidates: Array) -> void:
 	for child in recruit_choices_container.get_children():
@@ -223,7 +242,13 @@ func _load_troop_portrait_texture(path: String) -> Texture2D:
 	return texture as Texture2D
 
 func _finalize_recruit(troop: TroopData) -> void:
-	PlayerInventory.troop_roster.append(troop)
+	if not PlayerInventory.add_troop(troop):
+		_set_status("No troop slots available. Recruit was not added.")
+		for child in recruit_choices_container.get_children():
+			child.queue_free()
+		_refresh_resource_label()
+		_refresh_recruit_button()
+		return
 	Telemetry.log_event("troop_recruited", {
 		"type": troop.get_type_name(),
 		"hp": troop.base_stats.get("hp", 0),
@@ -235,6 +260,8 @@ func _finalize_recruit(troop: TroopData) -> void:
 	_set_status("Recruited a new %s!" % troop.get_type_name())
 	for child in recruit_choices_container.get_children():
 		child.queue_free()
+	_refresh_resource_label()
+	_refresh_recruit_button()
 
 func _set_status(msg: String) -> void:
 	if status_label: status_label.text = msg
