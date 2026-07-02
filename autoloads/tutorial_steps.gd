@@ -39,14 +39,14 @@ const STEPS: Array = [
 		"id": "map_time",
 		"screen": "res://scenes/world_map.tscn",
 		"mode": "info",
-		"text": "Welcome! Time passes continuously here, even while you're away on other screens.",
-		"target_id": "",
+		"text": "Welcome! This top bar holds navigation, the map clock, and time controls. Time passes continuously here, even while you're away on other screens.",
+		"target_id": "time_label",
 	},
 	{
 		"id": "map_pause",
 		"screen": "res://scenes/world_map.tscn",
 		"mode": "click",
-		"text": "Try pausing time with this button. You can do this any time you need a moment to think.",
+		"text": "Try pausing map time with this button. You can do this any time you need a moment to think.",
 		"target_id": "pause_button",
 	},
 	{
@@ -109,6 +109,9 @@ const STEPS: Array = [
 		"mode": "info",
 		"text": "You don't have any Gold yet — recruiting isn't possible until you earn some. The dungeon is the fastest way to get started.",
 		"target_id": "",
+		"nav_target_id": "recruit_button",
+		"nav_action_label": "Go to Recruit",
+		"nav_action_scene": "res://scenes/recruit_screen.tscn",
 	},
 	{
 		"id": "dungeon_send",
@@ -191,14 +194,34 @@ const STEPS: Array = [
 		"target_id": "first_upgrade_button",
 	},
 
+	# --- Talents ---
+	{
+		"id": "talents_intro",
+		"screen": "res://scenes/management_screen.tscn",
+		"mode": "click",
+		"text": "You've now learned two ways to earn Gold and one way to earn Food. Let's look at Talents, which can be spent on permanent upgrades.",
+		"target_id": "talents_button",
+		"nav_target_id": "mgmt_button",
+		"nav_action_label": "Go to Management",
+		"nav_action_scene": "res://scenes/management_screen.tscn",
+	},
+	{
+		"id": "talents_wilds_pact",
+		"screen": "res://scenes/talent_tree_screen.tscn",
+		"mode": "click",
+		"text": "Wilds Pact is free. Purchase it now: this enables random wilderness attacks on Easy/Normal difficulty, and lets you toggle them on or off.",
+		"target_id": "wilds_pact_purchase_button",
+		"require_action": true,
+	},
+
 	# --- Scripted Defense ---
 	{
 		"id": "defense_intro",
 		"screen": "res://scenes/world_map.tscn",
 		"mode": "info",
-		"text": "Careful \u2014 something is approaching your capital!",
+		"text": "Wilds Pact invites trouble. Scouts report an orc raid moving toward your capital — let's handle your first defense.",
 		"target_id": "",
-		"nav_target_id": "",
+		"nav_target_id": "map_button",
 		"nav_action_label": "Go to World Map",
 		"nav_action_scene": "res://scenes/world_map.tscn",
 	},
@@ -221,23 +244,6 @@ const STEPS: Array = [
 		"nav_target_id": "mgmt_button",
 		"nav_action_label": "Go to Management",
 		"nav_action_scene": "res://scenes/management_screen.tscn",
-	},
-
-	# --- Talents ---
-	{
-		"id": "talents_intro",
-		"screen": "res://scenes/management_screen.tscn",
-		"mode": "click",
-		"text": "You've now learned two ways to earn Gold and one way to earn Food. Let's look at Talents, which can be spent on permanent upgrades.",
-		"target_id": "talents_button",
-	},
-	{
-		"id": "talents_wilds_pact",
-		"screen": "res://scenes/talent_tree_screen.tscn",
-		"mode": "click",
-		"text": "Wilds Pact is free. Unlock it now: this enables random wilderness attacks on Easy/Normal difficulty, and lets you toggle them on or off.",
-		"target_id": "wilds_pact_talent",
-		"require_action": true,
 	},
 ]
 

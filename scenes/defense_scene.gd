@@ -300,17 +300,20 @@ func _load_troop_portrait_texture(path: String) -> Texture2D:
 # If a zone is set, only troops stationed at that zone (by name) can be placed.
 # Falls back to the full roster for battles with no zone context (e.g. quick dungeon test).
 func _get_battle_roster() -> Array:
+	var result = []
 	if battle_zone_id < 0:
-		return PlayerInventory.troop_roster.duplicate()
+		result = PlayerInventory.troop_roster.duplicate()
+		if PlayerInventory.is_commander_fielded():
+			result.append(PlayerInventory.make_commander_troop_data())
+		return result
 
 	var zone_troop_ids = PlayerInventory.get_zone_troop_names(battle_zone_id)
-	if zone_troop_ids.is_empty():
-		return []
-
-	var result = []
-	for troop in PlayerInventory.troop_roster:
-		if troop.troop_id in zone_troop_ids:
-			result.append(troop)
+	if not zone_troop_ids.is_empty():
+		for troop in PlayerInventory.troop_roster:
+			if troop.troop_id in zone_troop_ids:
+				result.append(troop)
+	if PlayerInventory.is_commander_fielded():
+		result.append(PlayerInventory.make_commander_troop_data())
 	return result
 
 func _build_field() -> void:

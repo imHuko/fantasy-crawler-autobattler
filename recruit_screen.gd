@@ -1,5 +1,7 @@
 extends Control
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # Recruit Screen — spend Gold to recruit
 # a new random unit. Stats roll with small variance, like gear.
@@ -10,6 +12,12 @@ extends Control
 var resource_label: Label = null
 var status_label: Label = null
 var recruit_choices_container: VBoxContainer = null
+var tutorial_back_btn: Button = null
+
+func get_tutorial_target(target_id: String) -> Control:
+	match target_id:
+		"mgmt_button": return tutorial_back_btn
+		_: return null
 
 func _ready() -> void:
 	_build_ui()
@@ -21,13 +29,16 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
+	var header_buttons = SharedHeader.add_fixed(self, SharedHeader.SCREEN_RECRUIT)
+	tutorial_back_btn = header_buttons.get(SharedHeader.SCREEN_MANAGEMENT, null)
+
 	var scroll = ScrollContainer.new()
 	scroll.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(scroll)
 
 	var margin = MarginContainer.new()
 	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_top", 60)
 	margin.add_theme_constant_override("margin_bottom", 20)
 	margin.add_theme_constant_override("margin_left", 20)
 	margin.add_theme_constant_override("margin_right", 20)
@@ -89,14 +100,6 @@ func _build_ui() -> void:
 
 	var sep2 = HSeparator.new()
 	outer.add_child(sep2)
-
-	# Back button
-	var back_btn = Button.new()
-	back_btn.text = "Back to Management"
-	back_btn.custom_minimum_size = Vector2(220, 44)
-	back_btn.pressed.connect(func():
-		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
-	outer.add_child(back_btn)
 
 func _refresh_resource_label() -> void:
 	resource_label.text = "🌾 Food: %d      🪙 Gold: %d" % [

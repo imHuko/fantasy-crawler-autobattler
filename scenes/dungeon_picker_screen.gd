@@ -1,5 +1,7 @@
 extends Control
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # Dungeon Tier Picker — choose Quick / Standard / Deep Delve
 # before launching the Action Dungeon.
@@ -42,8 +44,11 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
+	SharedHeader.add_fixed(self, SharedHeader.SCREEN_DUNGEON)
+
 	var center = CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.offset_top = 48
 	add_child(center)
 
 	var outer = VBoxContainer.new()
@@ -60,13 +65,6 @@ func _build_ui() -> void:
 
 	for tier_name in ["Quick", "Standard", "Deep Delve"]:
 		outer.add_child(_make_tier_card(tier_name))
-
-	var back_btn = Button.new()
-	back_btn.text = "Back"
-	back_btn.custom_minimum_size = Vector2(0, 40)
-	back_btn.pressed.connect(func():
-		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
-	outer.add_child(back_btn)
 
 func _make_tier_card(tier_name: String) -> PanelContainer:
 	var tier = TIERS[tier_name]

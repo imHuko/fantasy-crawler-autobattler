@@ -482,45 +482,46 @@ func _load_hero_stats() -> void:
 	hero_self_heal       = profile["self_heal"]
 	hero_is_melee        = profile.get("melee", false)
 
-	# Apply equipped Commander gear on top of base/talent stats
-	for slot_key in PlayerInventory.commander_gear:
-		var g: GearItem = PlayerInventory.commander_gear[slot_key]
-		if g == null: continue
-		var gs = g.get_effective_stats()
-		hero_attack        += gs.get("attack", 0)
-		hero_max_hp        += gs.get("hp", 0)
-		hero_armor         += gs.get("armor", 0)
-		hero_crit_chance   += gs.get("crit_chance", 0.0)
-		hero_crit_damage   += gs.get("crit_damage", 0)
-		hero_dodge_chance  += gs.get("dodge_chance", 0.0)
-		hero_hp_regen      += gs.get("hp_regen", 0.0)
-		hero_on_kill_heal  += gs.get("on_kill_heal", 0)
-		skill_lifesteal    += gs.get("lifesteal", 0.0)
-		if gs.has("attack_speed"):
-			hero_attack_interval *= max(0.3, 1.0 - gs["attack_speed"])
-		if hero_is_melee:
-			hero_melee_power += gs.get("melee_power", 0.0)
+	if PlayerInventory.is_commander_fielded():
+		# Apply equipped Commander gear on top of base/talent stats.
+		for slot_key in PlayerInventory.commander_gear:
+			var g: GearItem = PlayerInventory.commander_gear[slot_key]
+			if g == null: continue
+			var gs = g.get_effective_stats()
+			hero_attack        += gs.get("attack", 0)
+			hero_max_hp        += gs.get("hp", 0)
+			hero_armor         += gs.get("armor", 0)
+			hero_crit_chance   += gs.get("crit_chance", 0.0)
+			hero_crit_damage   += gs.get("crit_damage", 0)
+			hero_dodge_chance  += gs.get("dodge_chance", 0.0)
+			hero_hp_regen      += gs.get("hp_regen", 0.0)
+			hero_on_kill_heal  += gs.get("on_kill_heal", 0)
+			skill_lifesteal    += gs.get("lifesteal", 0.0)
+			if gs.has("attack_speed"):
+				hero_attack_interval *= max(0.3, 1.0 - gs["attack_speed"])
+			if hero_is_melee:
+				hero_melee_power += gs.get("melee_power", 0.0)
 
-	# Commander set bonuses (max 2-piece — only WEAPON + RING slots available)
-	var cmdr_set_counts: Dictionary = {}
-	for slot_key in PlayerInventory.commander_gear:
-		var g: GearItem = PlayerInventory.commander_gear[slot_key]
-		if g != null and g.set_name != "":
-			cmdr_set_counts[g.set_name] = cmdr_set_counts.get(g.set_name, 0) + 1
-	for set_name in cmdr_set_counts:
-		var count = cmdr_set_counts[set_name]
-		var bonuses = GearGenerator.SET_BONUSES.get(set_name, {})
-		for threshold in bonuses:
-			if count >= threshold:
-				for key in bonuses[threshold]:
-					match key:
-						"hp_pct":       hero_max_hp    = int(hero_max_hp * (1.0 + bonuses[threshold][key]))
-						"armor":        hero_armor     += int(bonuses[threshold][key])
-						"crit_chance":  hero_crit_chance += bonuses[threshold][key]
-						"dodge_chance": hero_dodge_chance += bonuses[threshold][key]
-						"on_kill_heal": hero_on_kill_heal += int(bonuses[threshold][key])
-						"chain_crit":   hero_chain_crit = true
-						# spell_power only affects Mage/Healer — not a Commander stat yet
+		# Commander set bonuses (max 2-piece — only WEAPON + RING slots available)
+		var cmdr_set_counts: Dictionary = {}
+		for slot_key in PlayerInventory.commander_gear:
+			var g: GearItem = PlayerInventory.commander_gear[slot_key]
+			if g != null and g.set_name != "":
+				cmdr_set_counts[g.set_name] = cmdr_set_counts.get(g.set_name, 0) + 1
+		for set_name in cmdr_set_counts:
+			var count = cmdr_set_counts[set_name]
+			var bonuses = GearGenerator.SET_BONUSES.get(set_name, {})
+			for threshold in bonuses:
+				if count >= threshold:
+					for key in bonuses[threshold]:
+						match key:
+							"hp_pct":       hero_max_hp    = int(hero_max_hp * (1.0 + bonuses[threshold][key]))
+							"armor":        hero_armor     += int(bonuses[threshold][key])
+							"crit_chance":  hero_crit_chance += bonuses[threshold][key]
+							"dodge_chance": hero_dodge_chance += bonuses[threshold][key]
+							"on_kill_heal": hero_on_kill_heal += int(bonuses[threshold][key])
+							"chain_crit":   hero_chain_crit = true
+							# spell_power only affects Mage/Healer — not a Commander stat yet
 
 	hero_hp = hero_max_hp
 

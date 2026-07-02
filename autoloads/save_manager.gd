@@ -19,6 +19,12 @@ func save_game() -> void:
 		"salvage": PlayerInventory.salvage,
 		"map_generated": PlayerInventory.map_generated,
 		"map_elapsed_seconds": PlayerInventory.map_elapsed_seconds,
+		"map_time_speed": PlayerInventory.map_time_speed,
+		"map_is_paused": PlayerInventory.map_is_paused,
+		"map_attack_roll_timer": PlayerInventory.map_attack_roll_timer,
+		"map_pending_attacks": PlayerInventory.map_pending_attacks,
+		"map_marching_troops": PlayerInventory.map_marching_troops,
+		"map_mandatory_battle_queue": PlayerInventory.map_mandatory_battle_queue,
 		"map_zones": _serialize_zones(PlayerInventory.map_zones),
 		"map_connections": PlayerInventory.map_connections,
 		"play_tutorial": PlayerInventory.play_tutorial,
@@ -146,6 +152,12 @@ func load_game() -> void:
 
 	PlayerInventory.map_generated = data.get("map_generated", false)
 	PlayerInventory.map_elapsed_seconds = data.get("map_elapsed_seconds", 0.0)
+	PlayerInventory.map_time_speed = float(data.get("map_time_speed", 1.0))
+	PlayerInventory.map_is_paused = bool(data.get("map_is_paused", false))
+	PlayerInventory.map_attack_roll_timer = float(data.get("map_attack_roll_timer", 30.0))
+	PlayerInventory.map_pending_attacks = data.get("map_pending_attacks", [])
+	PlayerInventory.map_marching_troops = data.get("map_marching_troops", [])
+	PlayerInventory.map_mandatory_battle_queue = data.get("map_mandatory_battle_queue", [])
 	if data.has("map_zones"):
 		PlayerInventory.map_zones = _deserialize_zones(data["map_zones"])
 	if data.has("map_connections"):
@@ -213,6 +225,12 @@ func new_game() -> void:
 	PlayerInventory.map_zones = []
 	PlayerInventory.map_connections = []
 	PlayerInventory.map_elapsed_seconds = 0.0
+	PlayerInventory.map_time_speed = 1.0
+	PlayerInventory.map_is_paused = false
+	PlayerInventory.map_attack_roll_timer = 30.0
+	PlayerInventory.map_pending_attacks = []
+	PlayerInventory.map_marching_troops = []
+	PlayerInventory.map_mandatory_battle_queue = []
 	PlayerInventory.map_tutorial_seen = {
 		"intro": false, "conquer": false, "build": false,
 		"move_troops": false, "end_turn": false,

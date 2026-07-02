@@ -2,7 +2,7 @@ extends Node
 
 # -------------------------------------------------------
 # Admin / Debug Panel — a testing tool, not part of the real game.
-# Toggle with F9 (configurable below) from any screen. Lets you set
+# Toggle with F9 from any screen. Lets you set
 # resources, jump stages, force-trigger a wilds attack (map screen
 # only), fully heal your roster, unlock every talent, and jump straight
 # into a standalone defense battle or dungeon run for quick testing.
@@ -12,7 +12,7 @@ extends Node
 # "AdminPanel", same as your other autoloads (PlayerInventory, etc).
 # -------------------------------------------------------
 
-const TOGGLE_KEY = KEY_F9   # combined with Shift below, since F9 alone is a Godot editor/debugger shortcut
+const TOGGLE_KEY = KEY_F9
 
 var overlay: CanvasLayer = null
 var is_open: bool = false
@@ -51,28 +51,39 @@ func get_defense_sandbox_wave() -> Array:
 	wave.shuffle()
 	return wave
 
-var _toggle_btn: Button = null
-var _toggle_btn_layer: CanvasLayer = null
-
-func _ready() -> void:
-	_toggle_btn_layer = CanvasLayer.new()
-	_toggle_btn_layer.layer = 99
-	add_child(_toggle_btn_layer)
-
-	_toggle_btn = Button.new()
-	_toggle_btn.text = "⚙"
-	_toggle_btn.tooltip_text = "Admin Panel (Shift+F9)"
-	_toggle_btn.custom_minimum_size = Vector2(34, 34)
-	_toggle_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_toggle_btn.position = Vector2(-38, 4)
-	_toggle_btn.add_theme_font_size_override("font_size", 18)
-	_toggle_btn.add_theme_color_override("font_color", Color(1, 0.7, 0.2))
-	_toggle_btn.pressed.connect(_toggle_panel)
-	_toggle_btn_layer.add_child(_toggle_btn)
+var _settings_overlay: CanvasLayer = null
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == TOGGLE_KEY and event.shift_pressed:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == TOGGLE_KEY:
 		_toggle_panel()
+
+func _open_settings() -> void:
+	if _settings_overlay and is_instance_valid(_settings_overlay):
+		_settings_overlay.queue_free()
+		_settings_overlay = null
+		return
+	if is_open:
+		_close_panel()
+	var current_scene = get_tree().current_scene
+	var current_path = current_scene.scene_file_path if current_scene else ""
+	if current_path == "res://scenes/settings_screen.tscn":
+		return
+	PlayerInventory.settings_return_scene = current_path if current_path != "" else "res://scenes/world_map.tscn"
+
+	var settings_scene = load("res://scenes/settings_screen.tscn") as PackedScene
+	if settings_scene == null:
+		return
+	_settings_overlay = CanvasLayer.new()
+	_settings_overlay.layer = 101
+	get_tree().root.add_child(_settings_overlay)
+
+	var settings_panel = settings_scene.instantiate()
+	settings_panel.close_as_overlay = true
+	settings_panel.tree_exited.connect(func():
+		if _settings_overlay and is_instance_valid(_settings_overlay):
+			_settings_overlay.queue_free()
+		_settings_overlay = null)
+	_settings_overlay.add_child(settings_panel)
 
 func _toggle_panel() -> void:
 	if is_open:
@@ -119,7 +130,7 @@ func _open_panel() -> void:
 	scroll.add_child(vbox)
 
 	var title = Label.new()
-	title.text = "⚙ Admin Panel  (Shift+F9 to close)"
+	title.text = "⚙ Admin Panel  (F9 to close)"
 	title.add_theme_font_size_override("font_size", 15)
 	title.add_theme_color_override("font_color", Color(1, 0.7, 0.2))
 	vbox.add_child(title)

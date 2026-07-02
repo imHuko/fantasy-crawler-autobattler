@@ -1,6 +1,8 @@
 extends Control
 class_name TalentTreeScreen
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # Talent Screen
 #
@@ -43,10 +45,6 @@ const ICON_DIVISOR := 0.11   # icon size as a fraction of the smaller grid_area 
 const TALENT_ICON_BASE_PATH := "res://assets/icons/talents/reference/"
 const GRID_PADDING := 16.0   # px padding around the whole grid before scaling
 
-# Adjust this to wherever your previous talent screen sent the
-# player back to (world map, pause menu, etc).
-const BACK_SCENE_PATH := "res://scenes/world_map.tscn"
-
 var node_buttons: Dictionary = {}   # node_id -> Button
 var selected_node_id: String = ""
 var icon_size: float = 64.0
@@ -63,7 +61,7 @@ var desc_text: Label
 var desc_cost: Label
 var desc_requirement: Label
 var purchase_button: Button
-var back_button: Button
+var tutorial_map_btn: Button = null
 
 func _ready() -> void:
 	_build_ui()
@@ -89,8 +87,14 @@ func _on_screen_gui_input(event: InputEvent) -> void:
 
 func get_tutorial_target(target_id: String) -> Control:
 	match target_id:
+		"map_button":
+			return tutorial_map_btn
 		"wilds_pact_talent":
 			return node_buttons.get("toggle_invasions", null)
+		"wilds_pact_purchase_button":
+			if selected_node_id != "toggle_invasions":
+				_on_node_pressed("toggle_invasions")
+			return purchase_button
 		_:
 			return null
 
@@ -119,11 +123,14 @@ func _build_ui() -> void:
 	anchor_bottom = 1.0
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 
+	var header_buttons = SharedHeader.add_fixed(self, SharedHeader.SCREEN_TALENTS)
+	tutorial_map_btn = header_buttons.get(SharedHeader.SCREEN_WORLD_MAP, null)
+
 	var margin := MarginContainer.new()
 	margin.name = "Margin"
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_left", 24)
-	margin.add_theme_constant_override("margin_top", 16)
+	margin.add_theme_constant_override("margin_top", 56)
 	margin.add_theme_constant_override("margin_right", 24)
 	margin.add_theme_constant_override("margin_bottom", 16)
 	add_child(margin)
@@ -138,11 +145,6 @@ func _build_ui() -> void:
 	top_bar.name = "TopBar"
 	top_bar.add_theme_constant_override("separation", 16)
 	vbox.add_child(top_bar)
-
-	back_button = Button.new()
-	back_button.text = "Back"
-	back_button.pressed.connect(_on_back_pressed)
-	top_bar.add_child(back_button)
 
 	var title := Label.new()
 	title.text = "Talents"
@@ -582,10 +584,3 @@ func _on_purchase_pressed() -> void:
 
 func _refresh_resource_label() -> void:
 	resource_label.text = "Gold: %d" % int(PlayerInventory.resources.get("gold", 0))
-
-# -------------------------------------------------------
-# Navigation
-# -------------------------------------------------------
-
-func _on_back_pressed() -> void:
-	get_tree().change_scene_to_file(BACK_SCENE_PATH)

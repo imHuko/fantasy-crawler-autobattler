@@ -54,9 +54,6 @@ func get_effective_stats() -> Dictionary:
 		effective["hp"] = effective.get("hp", 0) + 15
 	if PlayerInventory.unlocked_talents.get("combat_sharpened_blades", false):
 		effective["attack"] = effective.get("attack", 0) + 5
-	if is_hero and PlayerInventory.unlocked_talents.get("combat_heros_resolve", false):
-		effective["hp"] = effective.get("hp", 0) + 30
-		effective["attack"] = effective.get("attack", 0) + 8
 	if veteran_hp_bonus > 0 and PlayerInventory.unlocked_talents.get("combat_veterans_grit", false):
 		effective["hp"] = effective.get("hp", 0) + veteran_hp_bonus
 

@@ -81,8 +81,8 @@ const NODES = {
 		"desc": "Troops marching between zones travel 50% faster.",
 	},
 	"combat_heros_resolve": {
-		"name": "Hero's Resolve", "branch": "Combat", "cost": 250, "prereq": "combat_sharpened_blades", "min_stage": 5,
-		"desc": "Your dungeon hero specifically gains an additional HP and attack bonus.",
+		"name": "Field Commander", "branch": "Combat", "cost": 250, "prereq": "combat_sharpened_blades", "min_stage": 0,
+		"desc": "Your Commander joins the roster: they can equip gear, use that gear in action dungeons, and be placed in defense battles.",
 	},
 
 	# --- ECONOMY ---

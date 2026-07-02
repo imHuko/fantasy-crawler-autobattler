@@ -1,5 +1,7 @@
 extends Node2D
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # World Map — procedurally generated zone-based conquest
 # -------------------------------------------------------
@@ -109,7 +111,7 @@ var sp_outer_vbox: VBoxContainer
 var sp_overview_view: VBoxContainer
 var sp_build_view: VBoxContainer
 var tutorial_build_here_btn: Button = null   # re-set each time the overview view rebuilds its action buttons for a zone
-var tutorial_mgmt_btn: Button = null         # the Management nav button in the top HUD — used as nav reminder target when directing the player there
+var tutorial_mgmt_btn: Button = null         # Management nav button in the shared header, used by tutorial reminders
 
 # Build view — built once, building rows refreshed per zone
 var sp_build_title_label: Label
@@ -187,6 +189,12 @@ func _load_map_state() -> void:
 	zones = PlayerInventory.map_zones
 	connections = PlayerInventory.map_connections
 	elapsed_seconds = PlayerInventory.map_elapsed_seconds
+	time_speed = PlayerInventory.map_time_speed
+	is_paused = PlayerInventory.map_is_paused
+	attack_roll_timer = PlayerInventory.map_attack_roll_timer
+	pending_attacks = PlayerInventory.map_pending_attacks
+	marching_troops = PlayerInventory.map_marching_troops
+	mandatory_battle_queue = PlayerInventory.map_mandatory_battle_queue
 
 # Sets up a Camera2D so the player can pan around the map — middle-mouse
 # drag, or arrow keys. Limits are clamped to the actual map bounds (plus
@@ -236,6 +244,12 @@ func _save_map_state() -> void:
 	PlayerInventory.map_zones = zones
 	PlayerInventory.map_connections = connections
 	PlayerInventory.map_elapsed_seconds = elapsed_seconds
+	PlayerInventory.map_time_speed = time_speed
+	PlayerInventory.map_is_paused = is_paused
+	PlayerInventory.map_attack_roll_timer = attack_roll_timer
+	PlayerInventory.map_pending_attacks = pending_attacks
+	PlayerInventory.map_marching_troops = marching_troops
+	PlayerInventory.map_mandatory_battle_queue = mandatory_battle_queue
 
 func _apply_pending_battle_result() -> void:
 	var result = PlayerInventory.last_battle_result
@@ -338,6 +352,8 @@ func _generate_map() -> void:
 	zones.append(_make_zone(0, "city", start_pos, start_owner, "Your City"))
 	zones[0]["dist_from_start"] = 0
 	zones[0]["enemy_strength"] = 1   # always a gentle first fight
+	if not PlayerInventory.play_tutorial and not zones[0]["buildings"].has("Farm"):
+		zones[0]["buildings"]["Farm"] = 1
 
 	# Station all starting troops at the home city.
 	for troop in PlayerInventory.troop_roster:
@@ -421,91 +437,15 @@ func _build_ui() -> void:
 	connection_lines = Node2D.new()
 	add_child(connection_lines)
 
-	# Top HUD
-	var hud = CanvasLayer.new()
-	add_child(hud)
-
-	var top = PanelContainer.new()
-	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	top.size.y = TOP_HUD_HEIGHT
-	hud.add_child(top)
-
-	var hbox = HBoxContainer.new()
-	hbox.add_theme_constant_override("separation", 20)
-	top.add_child(hbox)
-
-	var title = Label.new()
-	title.text = PlayerInventory.player_name + "'s Campaign"
-	title.add_theme_font_size_override("font_size", 15)
-	title.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	hbox.add_child(title)
-
-	hud_time = Label.new()
-	hud_time.add_theme_font_size_override("font_size", 14)
-	hud_time.add_theme_color_override("font_color", Color(0.7, 0.9, 0.7))
-	hbox.add_child(hud_time)
-
-	hud_diff = Label.new()
-	hud_diff.add_theme_font_size_override("font_size", 13)
-	hbox.add_child(hud_diff)
-
-	hud_resources = Label.new()
-	hud_resources.add_theme_font_size_override("font_size", 13)
-	hud_resources.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	hbox.add_child(hud_resources)
-
-	var spacer = Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hbox.add_child(spacer)
-
-	notification_label = Label.new()
-	notification_label.add_theme_font_size_override("font_size", 13)
-	notification_label.add_theme_color_override("font_color", Color(1, 0.5, 0.3))
-	hbox.add_child(notification_label)
-
-	# Pause / speed controls — replace the old End Turn button now that
-	# time flows continuously instead of advancing on a click.
-	pause_btn = Button.new()
-	pause_btn.text = "⏸"
-	pause_btn.custom_minimum_size = Vector2(40, 32)
-	pause_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	pause_btn.pressed.connect(_on_pause_pressed)
-	hbox.add_child(pause_btn)
-
-	speed_label = Label.new()
-	speed_label.text = "1.0x"
-	speed_label.custom_minimum_size = Vector2(36, 0)
-	speed_label.add_theme_font_size_override("font_size", 12)
-	speed_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.8))
-	hbox.add_child(speed_label)
-
-	speed_slider = HSlider.new()
-	speed_slider.min_value = 1.0
-	speed_slider.max_value = 5.0
-	speed_slider.step = 0.5
-	speed_slider.value = time_speed
-	speed_slider.custom_minimum_size = Vector2(100, 0)
-	speed_slider.value_changed.connect(_on_speed_changed)
-	hbox.add_child(speed_slider)
-
-	var settings_btn = Button.new()
-	settings_btn.text = "⚙"
-	settings_btn.custom_minimum_size = Vector2(40, 32)
-	settings_btn.tooltip_text = "Settings"
-	settings_btn.pressed.connect(func():
-		PlayerInventory.settings_return_scene = "res://scenes/world_map.tscn"
-		get_tree().change_scene_to_file("res://scenes/settings_screen.tscn"))
-	hbox.add_child(settings_btn)
-
-	# Back to management
-	var mgmt_btn = Button.new()
-	mgmt_btn.text = "Management"
-	mgmt_btn.custom_minimum_size = Vector2(110, 32)
-	mgmt_btn.pressed.connect(func():
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
-	hbox.add_child(mgmt_btn)
-	tutorial_mgmt_btn = mgmt_btn
+	var header_buttons = SharedHeader.add_fixed(self, SharedHeader.SCREEN_WORLD_MAP, SHARED_HEADER_HEIGHT, true)
+	tutorial_mgmt_btn = header_buttons.get(SharedHeader.SCREEN_MANAGEMENT, null)
+	hud_time = header_buttons.get(SharedHeader.CONTROL_TIME_LABEL, null)
+	hud_diff = header_buttons.get(SharedHeader.CONTROL_DIFF_LABEL, null)
+	hud_resources = header_buttons.get(SharedHeader.CONTROL_RESOURCES_LABEL, null)
+	notification_label = header_buttons.get(SharedHeader.CONTROL_NOTIFICATION_LABEL, null)
+	pause_btn = header_buttons.get(SharedHeader.CONTROL_PAUSE_BUTTON, null)
+	speed_label = header_buttons.get(SharedHeader.CONTROL_SPEED_LABEL, null)
+	speed_slider = header_buttons.get(SharedHeader.CONTROL_SPEED_SLIDER, null)
 
 	_build_side_panel()
 
@@ -549,7 +489,7 @@ func _build_ui() -> void:
 # =========================================================
 
 const SIDE_PANEL_WIDTH = 261.0
-const TOP_HUD_HEIGHT = 44.0   # shared with _build_ui()'s top bar — also used so the side panel knows to start below it instead of overlapping it
+const SHARED_HEADER_HEIGHT = 40.0
 
 func _build_side_panel() -> void:
 	# The panel lives under its own CanvasLayer rather than being added
@@ -756,20 +696,13 @@ func _build_side_panel() -> void:
 # runs on every window resize; content construction belongs in
 # _build_side_panel() instead, which runs exactly once.
 #
-# Starts at y=TOP_HUD_HEIGHT rather than y=0 — the panel previously
-# spanned the full screen height, which meant its top edge sat directly
-# over the top HUD bar (specifically the Management button, the
-# right-most item in that bar, since the panel is also right-anchored)
-# whenever it was open. Stopping short of that row instead of trying to
-# poke a hole in the panel for just that one button is the more robust
-# fix — nothing in the panel's own layer can ever cover the HUD again,
-# regardless of what's added to either in the future.
+# Starts below the shared header so the panel cannot cover top-bar controls.
 func _position_side_panel() -> void:
 	if not side_panel:
 		return
 	var screen_size = Vector2(get_viewport().size)
-	side_panel.position = Vector2(screen_size.x - SIDE_PANEL_WIDTH, TOP_HUD_HEIGHT)
-	side_panel.size = Vector2(SIDE_PANEL_WIDTH, screen_size.y - TOP_HUD_HEIGHT)
+	side_panel.position = Vector2(screen_size.x - SIDE_PANEL_WIDTH, SHARED_HEADER_HEIGHT)
+	side_panel.size = Vector2(SIDE_PANEL_WIDTH, screen_size.y - SHARED_HEADER_HEIGHT)
 
 	# Actively re-sync outer_vbox's width to the panel's actual content
 	# area (panel width minus its own left+right margin) every time
@@ -1449,6 +1382,7 @@ func _start_scripted_tutorial_defense() -> void:
 # are wired now since both already exist as named vars on this screen.
 func get_tutorial_target(target_id: String) -> Control:
 	match target_id:
+		"time_label": return hud_time
 		"pause_button": return pause_btn
 		"speed_slider": return speed_slider
 		"owned_zone_marker":
@@ -1745,6 +1679,7 @@ func _on_assign_troop(troop_id: String, zone_id: int) -> void:
 		_notify("%s marching to %s — arrives in %ds" % [troop_display_name, zones[zone_id]["name"], int(travel_seconds)])
 
 	_close_popup()
+	_save_map_state()
 	_draw_map()
 
 func _get_troop_name_by_id(troop_id: String) -> String:
@@ -1977,31 +1912,21 @@ func _process_resource_generation(delta: float) -> void:
 # -------------------------------------------------------
 func _process(delta: float) -> void:
 	_process_camera_pan(delta)
-
-	# Countdown resolution always runs, even while a previous mandatory
-	# battle is already queued up and waiting to launch — otherwise a
-	# second pending attack's timer could silently stall instead of
-	# ever resolving into an actual battle.
-	if not is_paused:
-		_process_attack_countdowns(delta * time_speed)
-
-	if is_paused or mandatory_battle_queue.size() > 0:
-		return   # frozen during pause or while a forced battle is pending
-
-	var sim_delta = delta * time_speed
-	elapsed_seconds += sim_delta
-	PlayerInventory.map_elapsed_seconds = elapsed_seconds
-
-	_process_marching_troops(sim_delta)
-	_process_resource_generation(sim_delta)
-
-	attack_roll_timer -= sim_delta
-	if attack_roll_timer <= 0:
-		attack_roll_timer = ATTACK_ROLL_INTERVAL
-		_maybe_spawn_attack()
-
+	_sync_runtime_from_inventory()
+	PlayerInventory.launch_next_map_mandatory_battle()
 	_refresh_hud()
 	_draw_map()
+
+func _sync_runtime_from_inventory() -> void:
+	zones = PlayerInventory.map_zones
+	connections = PlayerInventory.map_connections
+	elapsed_seconds = PlayerInventory.map_elapsed_seconds
+	time_speed = PlayerInventory.map_time_speed
+	is_paused = PlayerInventory.map_is_paused
+	attack_roll_timer = PlayerInventory.map_attack_roll_timer
+	pending_attacks = PlayerInventory.map_pending_attacks
+	marching_troops = PlayerInventory.map_marching_troops
+	mandatory_battle_queue = PlayerInventory.map_mandatory_battle_queue
 
 # Arrow-key panning, works even while the map is paused since looking
 # around shouldn't require the clock to be running.
@@ -2036,6 +1961,7 @@ func _process_marching_troops(delta: float) -> void:
 # a player-owned zone adjacent to a neutral one — so testing reflects
 # genuine attack behavior. Returns a status string for the panel to show.
 func force_admin_attack() -> String:
+	_sync_runtime_from_inventory()
 	var targets = []
 	for zone in zones:
 		if zone["owner"] != "player": continue
@@ -2062,6 +1988,8 @@ func force_admin_attack() -> String:
 		"total_seconds": warning_seconds,
 		"force_size": force,
 	})
+	PlayerInventory.map_pending_attacks = pending_attacks
+	SaveManager.save_game()
 	_notify("⚠ [Admin] Forced attack on %s in %ds!" % [zones[target_id]["name"], int(warning_seconds)])
 	return "Forced attack queued on %s." % zones[target_id]["name"]
 
@@ -2170,6 +2098,7 @@ func _refresh_hud() -> void:
 
 func _on_pause_pressed() -> void:
 	is_paused = not is_paused
+	PlayerInventory.map_is_paused = is_paused
 	pause_btn.text = "▶" if is_paused else "⏸"
 	_refresh_hud()
 	if PlayerInventory.tutorial_active:
@@ -2177,6 +2106,7 @@ func _on_pause_pressed() -> void:
 
 func _on_speed_changed(value: float) -> void:
 	time_speed = value
+	PlayerInventory.map_time_speed = value
 	speed_label.text = "%.1fx" % value
 
 func _notify(msg: String) -> void:

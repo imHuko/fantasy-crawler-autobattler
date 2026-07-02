@@ -13,6 +13,13 @@ const FIELD_H = 500
 const BASE_X  = 60
 const SPAWN_X = FIELD_W - 20
 const GENERATED_TROOP_FRAME_FOLDER := "res://assets/sprites/generated_troops_fixed96/frames/"
+const TINY_RPG_CHARACTER_ROOT := "res://art/sprites/TinyRPGChars/Characters(100x100 split)/"
+const TROOP_HITBOX_SIZE := 30.0
+const TROOP_SPRITE_SIZE := 192.0
+const ENEMY_HITBOX_SIZE := 28.0
+const ENEMY_SPRITE_SIZE := 224.0
+const BOSS_HITBOX_SIZE := 56.0
+const BOSS_SPRITE_SIZE := 280.0
 
 const C_BG       = Color(0.10, 0.12, 0.08)
 const C_BASE     = Color(0.20, 0.40, 0.80)
@@ -341,7 +348,8 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 	var eff = troop.get_effective_stats()
 	var type_name = troop.get_type_name()
 	var col = TROOP_COLORS.get(type_name, Color.WHITE)
-	var sz = 30.0
+	var sz = TROOP_HITBOX_SIZE
+	var visual_sz = TROOP_SPRITE_SIZE
 
 	# UnitSprite uses recovered animated art when available, with a
 	# procedural shape fallback for any type that has no imported frames.
@@ -351,8 +359,8 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 		"ROGUE": UnitSprite.UnitType.ROGUE,
 	}
 	var rect = UnitSprite.new()
-	rect.setup(unit_type_map.get(type_name, UnitSprite.UnitType.KNIGHT), col, sz)
-	rect.position = pos - Vector2(sz/2, sz/2)
+	rect.setup(unit_type_map.get(type_name, UnitSprite.UnitType.KNIGHT), col, visual_sz)
+	rect.position = pos - Vector2(visual_sz/2, visual_sz/2)
 	field_node.add_child(rect)
 
 	# Name label
@@ -408,7 +416,7 @@ func _place_troop(idx: int, pos: Vector2) -> void:
 		"attack_interval": attack_speed,
 		"heal_t": 3.0,
 		"rect": rect, "hp_bar": hpbar, "hp_bar_bg": hpbg, "label": lbl,
-		"sz": sz,
+		"sz": sz, "visual_sz": visual_sz,
 	})
 
 	slot["placed"] = true
@@ -442,6 +450,37 @@ const ARCHETYPE_UNIT_TYPES = {
 	"RANGED":  UnitSprite.UnitType.FAERIE,
 	"CHARGER": UnitSprite.UnitType.SPORE_BOMBER,
 	"BUFFER":  UnitSprite.UnitType.ANCIENT_TOTEM,
+}
+
+const TINY_RPG_ENEMY_ART = {
+	"MELEE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc/Orc/",
+		"name": "Orc",
+	},
+	"TANK": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Armored Orc/Armored Orc/",
+		"name": "Armored Orc",
+	},
+	"RANGED": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Elite Orc/Elite Orc/",
+		"name": "Elite Orc",
+	},
+	"ROGUE": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc rider/Orc rider/",
+		"name": "Orc rider",
+	},
+	"CHARGER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Orc rider/Orc rider/",
+		"name": "Orc rider",
+	},
+	"BUFFER": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Elite Orc/Elite Orc/",
+		"name": "Elite Orc",
+	},
+	"BOSS": {
+		"folder": TINY_RPG_CHARACTER_ROOT + "Armored Orc/Armored Orc/",
+		"name": "Armored Orc",
+	},
 }
 const RANGED_ATTACK_RANGE = 260.0
 const CHARGER_BURST_RANGE = 50.0
@@ -593,7 +632,8 @@ func _spawn_one_enemy(stage: int, archetype: String) -> void:
 	var is_boss = archetype == "BOSS"
 	var profile = ENEMY_ARCHETYPES["MELEE"] if is_boss else ENEMY_ARCHETYPES[archetype]
 
-	var sz = 50.0 if is_boss else 24.0
+	var sz = BOSS_HITBOX_SIZE if is_boss else ENEMY_HITBOX_SIZE
+	var visual_sz = BOSS_SPRITE_SIZE if is_boss else ENEMY_SPRITE_SIZE
 	var max_hp = int((18 + stage * 10) * (4 if is_boss else 1) * max(0.6, attack_force_mult) * profile["hp_mult"])
 	var spd = (45.0 + stage * 4.0) * profile["speed_mult"]
 	var atk = int((3 + stage * 2) * max(0.6, attack_force_mult) * profile["dmg_mult"])
@@ -602,35 +642,38 @@ func _spawn_one_enemy(stage: int, archetype: String) -> void:
 
 	var rect = UnitSprite.new()
 	var sprite_color = Color(1, 0.2, 0.1) if is_boss else profile["color"]
+	var art = TINY_RPG_ENEMY_ART.get("BOSS" if is_boss else archetype, TINY_RPG_ENEMY_ART["MELEE"])
 	var unit_type = UnitSprite.UnitType.ENEMY_BOSS if is_boss else ARCHETYPE_UNIT_TYPES.get(archetype, UnitSprite.UnitType.ENEMY_BASIC)
-	rect.setup(unit_type, sprite_color, sz)
-	rect.position = Vector2(SPAWN_X - sz, ey - sz/2)
+	if not rect.setup_from_tiny_rpg_folder(art["folder"], art["name"], sprite_color, visual_sz, unit_type):
+		rect.setup(unit_type, sprite_color, visual_sz)
+	rect.position = Vector2(SPAWN_X - sz/2, ey) - Vector2(visual_sz/2, visual_sz/2)
 	field_node.add_child(rect)
 
 	var type_lbl = Label.new()
 	type_lbl.text = "BOSS" if is_boss else profile["symbol"]
 	type_lbl.add_theme_font_size_override("font_size", 13 if is_boss else 12)
 	type_lbl.add_theme_color_override("font_color", Color(1, 1, 1))
-	type_lbl.position = Vector2(SPAWN_X - sz - 4, ey - sz/2 - 22)
+	type_lbl.position = Vector2(SPAWN_X - sz/2, ey) - Vector2(visual_sz/2 + 4, visual_sz/2 + 22)
 	field_node.add_child(type_lbl)
 
+	var hp_bar_width = max(80.0, visual_sz * 0.8)
 	var hpbg = ColorRect.new()
 	hpbg.color = Color(0.3, 0.1, 0.1)
-	hpbg.size = Vector2(sz, 5)
-	hpbg.position = Vector2(SPAWN_X - sz, ey - sz/2 - 7)
+	hpbg.size = Vector2(hp_bar_width, 5)
+	hpbg.position = Vector2(SPAWN_X - sz/2, ey) - Vector2(hp_bar_width / 2.0, visual_sz / 2.0 + 16.0)
 	field_node.add_child(hpbg)
 
 	var hpbar = ColorRect.new()
 	hpbar.color = Color(0.9, 0.2, 0.2)
-	hpbar.size = Vector2(sz, 5)
-	hpbar.position = Vector2(SPAWN_X - sz, ey - sz/2 - 7)
+	hpbar.size = Vector2(hp_bar_width, 5)
+	hpbar.position = Vector2(SPAWN_X - sz/2, ey) - Vector2(hp_bar_width / 2.0, visual_sz / 2.0 + 16.0)
 	field_node.add_child(hpbar)
 
 	enemies.append({
 		"pos": Vector2(SPAWN_X - sz/2, ey),
 		"hp": max_hp, "max_hp": max_hp,
 		"attack": atk, "speed": spd,
-		"sz": sz, "is_boss": is_boss,
+		"sz": sz, "visual_sz": visual_sz, "is_boss": is_boss,
 		"enemy_type": "BOSS" if is_boss else archetype,
 		"attack_t": 1.5,
 		"buff_t": BUFFER_BUFF_INTERVAL,

@@ -1,5 +1,7 @@
 extends Control
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # Gear Shop Screen — sell or salvage unwanted gear, and spend salvage
 # to upgrade gear you're keeping. Confirmation popups before
@@ -23,6 +25,7 @@ var upgrade_scroll: ScrollContainer = null
 var tab_buttons: Array = []   # [Sell, Salvage, Upgrade, Buyback] Button nodes — tutorial highlight targets
 var tab_panels: Array = []    # matching content panels, shown/hidden by _switch_tab()
 var current_tab: int = 0
+var tutorial_mgmt_btn: Button = null
 
 func _ready() -> void:
 	_build_ui()
@@ -32,6 +35,8 @@ func get_tutorial_target(target_id: String) -> Control:
 	var result: Control = null
 	var relevant_scroll: ScrollContainer = null
 	match target_id:
+		"mgmt_button":
+			result = tutorial_mgmt_btn
 		"sell_item_button":
 			_switch_tab(0)
 			result = tutorial_sell_item_btn
@@ -84,9 +89,12 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
+	var header_buttons = SharedHeader.add_fixed(self, SharedHeader.SCREEN_GEAR_SHOP)
+	tutorial_mgmt_btn = header_buttons.get(SharedHeader.SCREEN_MANAGEMENT, null)
+
 	var margin = MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_top", 60)
 	margin.add_theme_constant_override("margin_bottom", 20)
 	margin.add_theme_constant_override("margin_left", 20)
 	margin.add_theme_constant_override("margin_right", 20)
@@ -157,14 +165,6 @@ func _build_ui() -> void:
 		tab_buttons.append(tbtn)
 
 	_switch_tab(0)
-
-	# --- FIXED FOOTER — Back button, always reachable regardless of tab ---
-	var back_btn = Button.new()
-	back_btn.text = "Back to Management"
-	back_btn.custom_minimum_size = Vector2(220, 44)
-	back_btn.pressed.connect(func():
-		get_tree().change_scene_to_file("res://scenes/management_screen.tscn"))
-	outer.add_child(back_btn)
 
 # Pure visual tab switch — no tutorial side effects, since this also
 # gets called programmatically (initial setup, auto-switching for an

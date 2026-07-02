@@ -64,7 +64,6 @@ var unit_type: int = UnitType.ENEMY_BASIC
 var base_color: Color = Color.WHITE
 var unit_size: float = 28.0
 
-var _bob_t: float = 0.0
 var _attack_t: float = 0.0
 var _attacking: bool = false
 var _facing: float = 1.0   # 1 = facing right, -1 = facing left
@@ -356,7 +355,6 @@ func set_color(p_color: Color) -> void:
 	queue_redraw()
 
 func _process(delta: float) -> void:
-	_bob_t += delta * 4.0
 	if _attacking:
 		_attack_t += delta * 10.0
 		if _attack_t >= 1.0:
@@ -368,17 +366,10 @@ func _process(delta: float) -> void:
 	else:
 		queue_redraw()
 
-# Applies the same bob/lunge/facing motion to the real animated sprite
-# that the procedural shapes already use, so swapping in art doesn't
-# lose the existing animation feel — the walk/attack frame art handles
-# the actual pose, this just adds a little physical punch on top.
+# Keeps real animated art anchored to the same box center as the
+# procedural fallback. The source sprite frames provide the motion.
 func _update_sprite_animation() -> void:
-	var bob_offset = sin(_bob_t) * (unit_size * 0.06)
-	var lunge_offset = 0.0
-	if _attacking:
-		lunge_offset = sin(_attack_t * PI) * unit_size * 0.35 * _facing
-
-	_anim_sprite.position = Vector2(unit_size / 2, unit_size / 2) + Vector2(lunge_offset, bob_offset)
+	_anim_sprite.position = Vector2(unit_size / 2, unit_size / 2)
 	_anim_sprite.flip_h = _facing < 0
 
 # Called when "attack" finishes playing — returns to walk or idle
@@ -411,18 +402,12 @@ func _draw() -> void:
 	if _anim_sprite:
 		return   # real animated art is handling visuals via _update_sprite_animation
 
-	var bob_offset = sin(_bob_t) * (unit_size * 0.06)
-	var lunge_offset = 0.0
-	if _attacking:
-		# Quick forward lunge then return, like a simple attack swing
-		lunge_offset = sin(_attack_t * PI) * unit_size * 0.35 * _facing
-
 	var s = unit_size
 	# Anchor like a top-left-positioned ColorRect of size (s, s), so existing
 	# call sites that do `position = pos - Vector2(sz/2, sz/2)` keep working
 	# unchanged when swapped from ColorRect to UnitSprite.
 	var anchor_center = Vector2(s/2, s/2)
-	var center = anchor_center + Vector2(lunge_offset, bob_offset)
+	var center = anchor_center
 	var dark = base_color.darkened(0.35)
 	var light = base_color.lightened(0.25)
 

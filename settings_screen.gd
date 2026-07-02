@@ -23,12 +23,20 @@ var confirm_dispose_check: CheckBox
 var damage_numbers_check: CheckBox
 var status_label: Label
 var return_target: String = "res://scenes/world_map.tscn"
+var close_as_overlay: bool = false
 var _ui_updating: bool = false   # guard against recursive checkbox signals
 
 func _ready() -> void:
+	set_anchors_preset(Control.PRESET_FULL_RECT)
+	offset_left = 0
+	offset_top = 0
+	offset_right = 0
+	offset_bottom = 0
+	mouse_filter = Control.MOUSE_FILTER_STOP
+
 	# Remember which screen to return to, so Settings can be opened from
 	# anywhere without hardcoding a single "back" destination.
-	if PlayerInventory.settings_return_scene != "":
+	if not close_as_overlay and PlayerInventory.settings_return_scene != "":
 		return_target = PlayerInventory.settings_return_scene
 
 	_build_ui()
@@ -36,15 +44,48 @@ func _ready() -> void:
 
 func _build_ui() -> void:
 	var bg = ColorRect.new()
-	bg.color = Color(0.07, 0.08, 0.10)
+	bg.color = Color(0, 0, 0, 0.62) if close_as_overlay else Color(0.07, 0.08, 0.10)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(bg)
 
+	var center = CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(center)
+
+	var panel = PanelContainer.new()
+	center.add_child(panel)
+
+	var panel_style = StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.10, 0.11, 0.14, 0.98)
+	panel_style.border_color = Color(0.32, 0.35, 0.42)
+	panel_style.set_border_width_all(1)
+	panel_style.set_corner_radius_all(8)
+	panel.add_theme_stylebox_override("panel", panel_style)
+
+	var margin = MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 18)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_right", 18)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+
+	var available_size = get_viewport_rect().size
+	var popup_width = min(560.0, max(360.0, available_size.x - 48.0))
+	var popup_height = min(720.0, max(280.0, available_size.y - 80.0))
+
+	var scroll = ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(popup_width, popup_height)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_ALWAYS
+	scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	margin.add_child(scroll)
+
 	var outer = VBoxContainer.new()
-	outer.set_anchors_preset(Control.PRESET_CENTER)
-	outer.custom_minimum_size = Vector2(420, 0)
+	outer.custom_minimum_size = Vector2(max(300.0, popup_width - 38.0), 0)
 	outer.add_theme_constant_override("separation", 14)
-	add_child(outer)
+	scroll.add_child(outer)
 
 	var title = Label.new()
 	title.text = "Settings"
@@ -230,7 +271,7 @@ func _build_ui() -> void:
 	outer.add_child(status_label)
 
 	var back_btn = Button.new()
-	back_btn.text = "Back"
+	back_btn.text = "Close" if close_as_overlay else "Back"
 	back_btn.custom_minimum_size = Vector2(0, 36)
 	back_btn.pressed.connect(_on_back_pressed)
 	outer.add_child(back_btn)
@@ -341,4 +382,7 @@ func _set_status(msg: String) -> void:
 		status_label.text = msg
 
 func _on_back_pressed() -> void:
+	if close_as_overlay:
+		queue_free()
+		return
 	get_tree().change_scene_to_file(return_target)

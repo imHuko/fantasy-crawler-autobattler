@@ -1,10 +1,13 @@
 extends Control
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # Management Screen — fully code-built, no scene tree needed
 # -------------------------------------------------------
 
 var tutorial_recruit_btn: Button = null
+var tutorial_map_btn: Button = null
 var tutorial_dungeon_btn: Button = null
 var tutorial_talent_btn: Button = null
 var tutorial_gear_shop_btn: Button = null
@@ -93,6 +96,7 @@ func _ensure_tutorial_heal_food() -> void:
 
 func get_tutorial_target(target_id: String) -> Control:
 	match target_id:
+		"map_button": return tutorial_map_btn
 		"recruit_button": return tutorial_recruit_btn
 		"dungeon_button": return tutorial_dungeon_btn
 		"talents_button": return tutorial_talent_btn
@@ -181,9 +185,17 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
+	var header_buttons = SharedHeader.add_fixed(self, SharedHeader.SCREEN_MANAGEMENT)
+	tutorial_map_btn = header_buttons.get(SharedHeader.SCREEN_WORLD_MAP, null)
+	tutorial_recruit_btn = header_buttons.get(SharedHeader.SCREEN_RECRUIT, null)
+	tutorial_gear_shop_btn = header_buttons.get(SharedHeader.SCREEN_GEAR_SHOP, null)
+	tutorial_talent_btn = header_buttons.get(SharedHeader.SCREEN_TALENTS, null)
+	tutorial_dungeon_btn = header_buttons.get(SharedHeader.SCREEN_DUNGEON, null)
+
 	# Outer VBox fills screen
 	var outer = VBoxContainer.new()
 	outer.set_anchors_preset(Control.PRESET_FULL_RECT)
+	outer.offset_top = 48
 	outer.add_theme_constant_override("separation", 6)
 	add_child(outer)
 
@@ -268,100 +280,6 @@ func _build_ui() -> void:
 	gear_list.add_theme_constant_override("separation", 4)
 	right_scroll.add_child(gear_list)
 
-	# --- WORLD MAP / SHOP BUTTONS ---
-	var top_nav_hbox = HBoxContainer.new()
-	top_nav_hbox.add_theme_constant_override("separation", 10)
-	outer.add_child(top_nav_hbox)
-
-	var map_btn = Button.new()
-	map_btn.text = "🗺 World Map"
-	map_btn.custom_minimum_size = Vector2(200, 48)
-	map_btn.add_theme_font_size_override("font_size", 17)
-	map_btn.add_theme_color_override("font_color", Color(0.4, 0.9, 0.6))
-	map_btn.pressed.connect(func():
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/world_map.tscn"))
-	top_nav_hbox.add_child(map_btn)
-
-	var recruit_btn = Button.new()
-	recruit_btn.text = "🪖 Recruit  (🪙%d)" % PlayerInventory.resources.get("gold", 0)
-	recruit_btn.custom_minimum_size = Vector2(200, 48)
-	recruit_btn.add_theme_font_size_override("font_size", 15)
-	recruit_btn.add_theme_color_override("font_color", Color(0.9, 0.8, 0.4))
-	recruit_btn.tooltip_text = "Spend Gold on recruiting new units"
-	recruit_btn.pressed.connect(func():
-		if PlayerInventory.tutorial_active:
-			TutorialRouter.advance_step("recruit_intro")
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/recruit_screen.tscn"))
-	top_nav_hbox.add_child(recruit_btn)
-	tutorial_recruit_btn = recruit_btn
-
-	var gear_shop_btn = Button.new()
-	gear_shop_btn.text = "🛒 Gear Shop"
-	gear_shop_btn.custom_minimum_size = Vector2(160, 48)
-	gear_shop_btn.add_theme_font_size_override("font_size", 15)
-	gear_shop_btn.add_theme_color_override("font_color", Color(0.7, 0.85, 0.9))
-	gear_shop_btn.tooltip_text = "Sell gear for Gold"
-	gear_shop_btn.pressed.connect(func():
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/gear_shop_screen.tscn"))
-	top_nav_hbox.add_child(gear_shop_btn)
-	tutorial_gear_shop_btn = gear_shop_btn
-
-	var talent_btn = Button.new()
-	talent_btn.text = "🌳 Talents"
-	talent_btn.custom_minimum_size = Vector2(160, 48)
-	talent_btn.add_theme_font_size_override("font_size", 15)
-	talent_btn.add_theme_color_override("font_color", Color(0.6, 0.9, 0.7))
-	talent_btn.tooltip_text = "Spend resources to unlock permanent upgrades"
-	talent_btn.pressed.connect(func():
-		if PlayerInventory.tutorial_active:
-			TutorialRouter.advance_step("talents_intro")
-		SaveManager.save_game()
-		get_tree().change_scene_to_file("res://scenes/talent_tree_screen.tscn"))
-	top_nav_hbox.add_child(talent_btn)
-	tutorial_talent_btn = talent_btn
-
-	var admin_btn = Button.new()
-	admin_btn.text = "⚙ Admin"
-	admin_btn.custom_minimum_size = Vector2(100, 48)
-	admin_btn.add_theme_font_size_override("font_size", 15)
-	admin_btn.add_theme_color_override("font_color", Color(1, 0.7, 0.2))
-	admin_btn.tooltip_text = "Testing tools — resources, stage, talents, troop healing, jump to combat"
-	admin_btn.pressed.connect(func(): AdminPanel._toggle_panel())
-	top_nav_hbox.add_child(admin_btn)
-
-	# --- DUNGEON BUTTON ---
-	var dungeon_hbox = HBoxContainer.new()
-	dungeon_hbox.add_theme_constant_override("separation", 10)
-	outer.add_child(dungeon_hbox)
-
-	var action_btn = Button.new()
-	action_btn.text = "⚔ Dungeon  >"
-	action_btn.custom_minimum_size = Vector2(200, 44)
-	action_btn.add_theme_font_size_override("font_size", 15)
-	action_btn.add_theme_color_override("font_color", Color(1, 0.85, 0.4))
-	action_btn.tooltip_text = "Top-down WASD action dungeon"
-	action_btn.pressed.connect(func():
-		if PlayerInventory.tutorial_active:
-			# The tutorial dungeon is a short, fixed-length scripted
-			# clear, not an open-ended survival run — skip the duration
-			# picker entirely and go straight there, so a tutorial
-			# player is never accidentally routed into the real
-			# survival arena instead.
-			TutorialRouter.advance_step("dungeon_send")
-			SaveManager.save_game()
-			get_tree().change_scene_to_file("res://scenes/tutorial_dungeon.tscn")
-			return
-		PlayerInventory.current_dungeon_zone_id = -1
-		PlayerInventory.current_dungeon_zone_type = "dungeon"
-		SaveManager.save_game()
-		PlayerInventory.set_meta("dungeon_picker_destination", "res://scenes/action_dungeon.tscn")
-		get_tree().change_scene_to_file("res://scenes/dungeon_picker_screen.tscn"))
-	dungeon_hbox.add_child(action_btn)
-	tutorial_dungeon_btn = action_btn
-
 	# --- STATUS BAR ---
 	var status_panel = PanelContainer.new()
 	outer.add_child(status_panel)
@@ -379,7 +297,8 @@ func _populate_troops() -> void:
 	cmdr_slot_buttons.clear()
 	tutorial_heal_buttons.clear()
 
-	troop_list.add_child(_make_commander_card())
+	if PlayerInventory.is_commander_fielded():
+		troop_list.add_child(_make_commander_card())
 
 	var map_label = Label.new()
 	map_label.text = "🗺 TROOPS  (stationed on the world map, fight in defense battles)"
@@ -509,6 +428,9 @@ func _refresh_cmdr_slot(btn: Button, slot_key: String) -> void:
 		btn.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 
 func _on_cmdr_slot_pressed(btn: Button, slot_key: String) -> void:
+	if not PlayerInventory.is_commander_fielded():
+		_update_status("Unlock Field Commander before equipping the Commander.")
+		return
 	if selected_slot_button == btn:
 		_clear_selection()
 		_update_status("Selection cleared.")
@@ -528,6 +450,9 @@ func _on_cmdr_slot_pressed(btn: Button, slot_key: String) -> void:
 	_populate_gear()
 
 func _equip_gear_to_commander(gear: GearItem, _troop, slot_key: String, slot_btn: Button) -> void:
+	if not PlayerInventory.is_commander_fielded():
+		_update_status("Unlock Field Commander before equipping the Commander.")
+		return
 	var old_gear: GearItem = PlayerInventory.commander_gear.get(slot_key)
 	if old_gear:
 		PlayerInventory.add_gear(old_gear)
@@ -918,6 +843,10 @@ func _on_gear_selected(gear: GearItem, btn: Button) -> void:
 
 	# If a Commander slot was already selected first, equip to Commander
 	if selected_troop == null and selected_slot != "":
+		if not PlayerInventory.is_commander_fielded():
+			_clear_selection()
+			_update_status("Unlock Field Commander before equipping the Commander.")
+			return
 		if gear.get_slot_name() != selected_slot:
 			_update_status("Wrong slot! That's a %s piece — Commander's %s slot selected." % [gear.get_slot_name(), selected_slot])
 			return

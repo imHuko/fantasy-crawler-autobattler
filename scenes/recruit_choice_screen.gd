@@ -1,5 +1,7 @@
 extends Control
 
+const SharedHeader := preload("res://scenes/shared_header.gd")
+
 # -------------------------------------------------------
 # Recruit Choice Screen — shown when the tutorial is skipped.
 # No dungeon crawl, just a direct pick between 2 random units
@@ -17,8 +19,11 @@ func _build_ui() -> void:
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 
+	SharedHeader.add_fixed(self, SharedHeader.SCREEN_RECRUIT)
+
 	var center = VBoxContainer.new()
 	center.set_anchors_preset(Control.PRESET_CENTER)
+	center.offset_top = 48
 	center.add_theme_constant_override("separation", 16)
 	center.position -= Vector2(220, 140)
 	center.custom_minimum_size = Vector2(440, 0)
